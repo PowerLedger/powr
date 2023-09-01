@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://powerledger.io">
-    <img alt="pl-solana" src="https://github.com/PowerLedger/pl-solana/raw/master/logo.png" width="250" />
+    <img alt="powr" src="https://github.com/PowerLedger/powr/raw/master/logo.png" width="250" />
   </a>
 </p>
 
@@ -17,7 +17,7 @@ Blockchain you agree to the Terms and Conditions set out in the Terms and Condit
 All software is Copyright © 2023 Power Ledger Pty Ltd unless indicated otherwise.  Unauthorised use
 prohibited. All Rights Reserved.
 
-## PL-SOLANA validator node configuration
+## powr validator node configuration
 
 ### Min Requirements for mainnet validator
 
@@ -34,25 +34,25 @@ prohibited. All Rights Reserved.
 ### Download the project
 
 ```bash
-# Git pull pl-solana and pl-solana-program-library repositories
+# Git pull powr and powr-program-library repositories
 # Both repos need to be downloaded in the same location
-git clone https://github.com/powerledger/pl-solana
-git clone https://github.com/powerledger/pl-solana-program-library
+git clone https://github.com/powerledger/powr
+git clone https://github.com/powerledger/powr-program-library
 ```
 
 ## Compile the code
 
 ```bash
-cd pl-solana
+cd powr
 cargo clean
 cd scripts
-./cargo-install-all.sh /home/validator-admin/.local/share/pl-solana
+./cargo-install-all.sh /home/validator-admin/.local/share/powr
 ```
 
 ## Append to .bashrc
 
 ```bash
-echo -e "\nexport PATH=\$PATH:/home/validator-admin/.local/share/pl-solana/bin" >> ~/.bashrc
+echo -e "\nexport PATH=\$PATH:/home/validator-admin/.local/share/powr/bin" >> ~/.bashrc
 cd
 . .bashrc
 ```
@@ -156,7 +156,7 @@ exec <PATH TO>/solana-validator \
 ```bash
 #!/usr/bin/env bash
 
-exec <PATH TO pl-solana/target/release>/solana-validator \
+exec <PATH TO powr/target/release>/solana-validator \
 --ledger <PATH TO>/ledger \
 --accounts <PATH TO>/accounts \
 --full-rpc-api \
