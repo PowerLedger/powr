@@ -55,9 +55,6 @@ while [[ -n $1 ]]; do
     elif [[ $1 = --enable-cpi-and-log-storage ]]; then
       args+=("$1")
       shift
-    elif [[ $1 = --enable-extended-tx-metadata-storage ]]; then
-      args+=("$1")
-      shift
     elif [[ $1 = --enable-rpc-bigtable-ledger-storage ]]; then
       args+=("$1")
       shift
@@ -97,15 +94,15 @@ while [[ -n $1 ]]; do
     elif [[ $1 == --no-snapshot-fetch ]]; then
       args+=("$1")
       shift
+    elif [[ $1 == --allow-private-addr ]]; then
+      args+=("$1")
+      shift
     elif [[ $1 == --accounts-db-skip-shrink ]]; then
       args+=("$1")
       shift
     elif [[ $1 == --skip-require-tower ]]; then
       maybeRequireTower=false
       shift
-    elif [[ $1 = --log-messages-bytes-limit ]]; then
-      args+=("$1" "$2")
-      shift 2
     else
       echo "Unknown argument: $1"
       $program --help
@@ -146,7 +143,6 @@ args+=(
   --no-os-network-limits-test
   --no-wait-for-vote-to-start-leader
   --full-rpc-api
-  --allow-private-addr
 )
 default_arg --gossip-port 8001
 default_arg --log -

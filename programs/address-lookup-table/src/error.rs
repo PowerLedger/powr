@@ -1,4 +1,4 @@
-#[cfg(not(target_os = "solana"))]
+#[cfg(not(target_arch = "bpf"))]
 use solana_program::message::AddressLoaderError;
 use thiserror::Error;
 
@@ -21,7 +21,7 @@ pub enum AddressLookupError {
     InvalidLookupIndex,
 }
 
-#[cfg(not(target_os = "solana"))]
+#[cfg(not(target_arch = "bpf"))]
 impl From<AddressLookupError> for AddressLoaderError {
     fn from(err: AddressLookupError) -> Self {
         match err {

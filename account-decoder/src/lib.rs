@@ -5,9 +5,7 @@ extern crate lazy_static;
 extern crate serde_derive;
 
 pub mod parse_account_data;
-pub mod parse_address_lookup_table;
 pub mod parse_bpf_loader;
-#[allow(deprecated)]
 pub mod parse_config;
 pub mod parse_nonce;
 pub mod parse_stake;
@@ -19,7 +17,6 @@ pub mod validator_info;
 
 use {
     crate::parse_account_data::{parse_account_data, AccountAdditionalData, ParsedAccount},
-    base64::{prelude::BASE64_STANDARD, Engine},
     solana_sdk::{
         account::{ReadableAccount, WritableAccount},
         clock::Epoch,
@@ -37,7 +34,7 @@ pub type StringDecimals = String;
 pub const MAX_BASE58_BYTES: usize = 128;
 
 /// A duplicate representation of an Account for pretty JSON serialization
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UiAccount {
     pub lamports: u64,
@@ -45,10 +42,9 @@ pub struct UiAccount {
     pub owner: String,
     pub executable: bool,
     pub rent_epoch: Epoch,
-    pub space: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", untagged)]
 pub enum UiAccountData {
     LegacyBinary(String), // Legacy. Retained for RPC backwards compatibility
@@ -86,7 +82,6 @@ impl UiAccount {
         additional_data: Option<AccountAdditionalData>,
         data_slice_config: Option<UiDataSliceConfig>,
     ) -> Self {
-        let space = account.data().len();
         let data = match encoding {
             UiAccountEncoding::Binary => {
                 let data = Self::encode_bs58(account, data_slice_config);
@@ -97,7 +92,7 @@ impl UiAccount {
                 UiAccountData::Binary(data, encoding)
             }
             UiAccountEncoding::Base64 => UiAccountData::Binary(
-                BASE64_STANDARD.encode(slice_data(account.data(), data_slice_config)),
+                base64::encode(slice_data(account.data(), data_slice_config)),
                 encoding,
             ),
             UiAccountEncoding::Base64Zstd => {
@@ -106,11 +101,9 @@ impl UiAccount {
                     .write_all(slice_data(account.data(), data_slice_config))
                     .and_then(|()| encoder.finish())
                 {
-                    Ok(zstd_data) => {
-                        UiAccountData::Binary(BASE64_STANDARD.encode(zstd_data), encoding)
-                    }
+                    Ok(zstd_data) => UiAccountData::Binary(base64::encode(zstd_data), encoding),
                     Err(_) => UiAccountData::Binary(
-                        BASE64_STANDARD.encode(slice_data(account.data(), data_slice_config)),
+                        base64::encode(slice_data(account.data(), data_slice_config)),
                         UiAccountEncoding::Base64,
                     ),
                 }
@@ -122,7 +115,7 @@ impl UiAccount {
                     UiAccountData::Json(parsed_data)
                 } else {
                     UiAccountData::Binary(
-                        BASE64_STANDARD.encode(slice_data(account.data(), data_slice_config)),
+                        base64::encode(&account.data()),
                         UiAccountEncoding::Base64,
                     )
                 }
@@ -134,7 +127,6 @@ impl UiAccount {
             owner: account.owner().to_string(),
             executable: account.executable(),
             rent_epoch: account.rent_epoch(),
-            space: Some(space as u64),
         }
     }
 
@@ -144,16 +136,14 @@ impl UiAccount {
             UiAccountData::LegacyBinary(blob) => bs58::decode(blob).into_vec().ok(),
             UiAccountData::Binary(blob, encoding) => match encoding {
                 UiAccountEncoding::Base58 => bs58::decode(blob).into_vec().ok(),
-                UiAccountEncoding::Base64 => BASE64_STANDARD.decode(blob).ok(),
-                UiAccountEncoding::Base64Zstd => {
-                    BASE64_STANDARD.decode(blob).ok().and_then(|zstd_data| {
-                        let mut data = vec![];
-                        zstd::stream::read::Decoder::new(zstd_data.as_slice())
-                            .and_then(|mut reader| reader.read_to_end(&mut data))
-                            .map(|_| data)
-                            .ok()
-                    })
-                }
+                UiAccountEncoding::Base64 => base64::decode(blob).ok(),
+                UiAccountEncoding::Base64Zstd => base64::decode(blob).ok().and_then(|zstd_data| {
+                    let mut data = vec![];
+                    zstd::stream::read::Decoder::new(zstd_data.as_slice())
+                        .and_then(|mut reader| reader.read_to_end(&mut data))
+                        .map(|_| data)
+                        .ok()
+                }),
                 UiAccountEncoding::Binary | UiAccountEncoding::JsonParsed => None,
             },
         }?;
@@ -167,7 +157,7 @@ impl UiAccount {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UiFeeCalculator {
     pub lamports_per_signature: StringAmount,
@@ -214,7 +204,6 @@ fn slice_data(data: &[u8], data_slice_config: Option<UiDataSliceConfig>) -> &[u8
 mod test {
     use {
         super::*,
-        assert_matches::assert_matches,
         solana_sdk::account::{Account, AccountSharedData},
     };
 
@@ -258,10 +247,10 @@ mod test {
             None,
             None,
         );
-        assert_matches!(
+        assert!(matches!(
             encoded_account.data,
             UiAccountData::Binary(_, UiAccountEncoding::Base64Zstd)
-        );
+        ));
 
         let decoded_account = encoded_account.decode::<Account>().unwrap();
         assert_eq!(decoded_account.data(), &vec![0; 1024]);

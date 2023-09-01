@@ -1,5 +1,3 @@
-//! Defines the [`LamportsError`] type.
-
 use {crate::instruction::InstructionError, thiserror::Error};
 
 #[derive(Debug, Error)]

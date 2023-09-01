@@ -23,12 +23,12 @@ pub struct SampleStats {
 }
 
 pub fn sample_txs<T>(
-    exit_signal: Arc<AtomicBool>,
+    exit_signal: &Arc<AtomicBool>,
     sample_stats: &Arc<RwLock<Vec<(String, SampleStats)>>>,
     sample_period: u64,
     client: &Arc<T>,
 ) where
-    T: BenchTpsClient + ?Sized,
+    T: BenchTpsClient,
 {
     let mut max_tps = 0.0;
     let mut total_elapsed;

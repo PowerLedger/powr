@@ -8,9 +8,7 @@ use {
     solana_config_program::{get_config_data, ConfigKeys},
     solana_sdk::{
         pubkey::Pubkey,
-        stake::config::{
-            Config as StakeConfig, {self as stake_config},
-        },
+        stake::config::{self as stake_config, Config as StakeConfig},
     },
 };
 
@@ -61,17 +59,13 @@ pub enum ConfigAccountType {
     ValidatorInfo(UiConfig<Value>),
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UiConfigKey {
     pub pubkey: String,
     pub signer: bool,
 }
 
-#[deprecated(
-    since = "1.16.7",
-    note = "Please use `solana_sdk::stake::state::warmup_cooldown_rate()` instead"
-)]
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UiStakeConfig {
@@ -88,7 +82,7 @@ impl From<StakeConfig> for UiStakeConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UiConfig<T> {
     pub keys: Vec<UiConfigKey>,
@@ -105,14 +99,14 @@ mod test {
     #[test]
     fn test_parse_config() {
         let stake_config = StakeConfig {
-            warmup_cooldown_rate: 0.25,
+            warmup_cooldown_rate: 800.0,
             slash_penalty: 50,
         };
         let stake_config_account = create_config_account(vec![], &stake_config, 10);
         assert_eq!(
             parse_config(stake_config_account.data(), &stake_config::id()).unwrap(),
             ConfigAccountType::StakeConfig(UiStakeConfig {
-                warmup_cooldown_rate: 0.25,
+                warmup_cooldown_rate: 800.0,
                 slash_penalty: 50,
             }),
         );

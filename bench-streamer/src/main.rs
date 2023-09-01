@@ -1,7 +1,7 @@
 #![allow(clippy::integer_arithmetic)]
 
 use {
-    clap::{crate_description, crate_name, Arg, Command},
+    clap::{crate_description, crate_name, value_t, App, Arg},
     crossbeam_channel::unbounded,
     solana_streamer::{
         packet::{Packet, PacketBatch, PacketBatchRecycler, PACKET_DATA_SIZE},
@@ -25,8 +25,8 @@ fn producer(addr: &SocketAddr, exit: Arc<AtomicBool>) -> JoinHandle<()> {
     let mut packet_batch = PacketBatch::with_capacity(batch_size);
     packet_batch.resize(batch_size, Packet::default());
     for w in packet_batch.iter_mut() {
-        w.meta_mut().size = PACKET_DATA_SIZE;
-        w.meta_mut().set_socket_addr(addr);
+        w.meta.size = PACKET_DATA_SIZE;
+        w.meta.set_socket_addr(addr);
     }
     let packet_batch = Arc::new(packet_batch);
     spawn(move || loop {
@@ -35,10 +35,10 @@ fn producer(addr: &SocketAddr, exit: Arc<AtomicBool>) -> JoinHandle<()> {
         }
         let mut num = 0;
         for p in packet_batch.iter() {
-            let a = p.meta().socket_addr();
-            assert!(p.meta().size <= PACKET_DATA_SIZE);
+            let a = p.meta.socket_addr();
+            assert!(p.meta.size <= PACKET_DATA_SIZE);
             let data = p.data(..).unwrap_or_default();
-            send.send_to(data, a).unwrap();
+            send.send_to(data, &a).unwrap();
             num += 1;
         }
         assert_eq!(num, 10);
@@ -60,18 +60,18 @@ fn sink(exit: Arc<AtomicBool>, rvs: Arc<AtomicUsize>, r: PacketBatchReceiver) ->
 fn main() -> Result<()> {
     let mut num_sockets = 1usize;
 
-    let matches = Command::new(crate_name!())
+    let matches = App::new(crate_name!())
         .about(crate_description!())
         .version(solana_version::version!())
         .arg(
-            Arg::new("num-recv-sockets")
+            Arg::with_name("num-recv-sockets")
                 .long("num-recv-sockets")
                 .value_name("NUM")
                 .takes_value(true)
                 .help("Use NUM receive sockets"),
         )
         .arg(
-            Arg::new("num-producers")
+            Arg::with_name("num-producers")
                 .long("num-producers")
                 .value_name("NUM")
                 .takes_value(true)
@@ -83,10 +83,10 @@ fn main() -> Result<()> {
         num_sockets = max(num_sockets, n.to_string().parse().expect("integer"));
     }
 
-    let num_producers: u64 = matches.value_of_t("num_producers").unwrap_or(4);
+    let num_producers = value_t!(matches, "num_producers", u64).unwrap_or(4);
 
     let port = 0;
-    let ip_addr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+    let ip_addr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
     let mut addr = SocketAddr::new(ip_addr, 0);
 
     let exit = Arc::new(AtomicBool::new(false));
@@ -113,13 +113,14 @@ fn main() -> Result<()> {
             s_reader,
             recycler.clone(),
             stats.clone(),
-            Duration::from_millis(1), // coalesce
+            1,
             true,
             None,
         ));
     }
 
     let producer_threads: Vec<_> = (0..num_producers)
+        .into_iter()
         .map(|_| producer(&addr, exit.clone()))
         .collect();
 

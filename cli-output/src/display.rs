@@ -1,7 +1,6 @@
 use {
     crate::cli_output::CliSignatureVerificationStatus,
-    base64::{prelude::BASE64_STANDARD, Engine},
-    chrono::{Local, NaiveDateTime, SecondsFormat, TimeZone, Utc},
+    chrono::{DateTime, Local, NaiveDateTime, SecondsFormat, TimeZone, Utc},
     console::style,
     indicatif::{ProgressBar, ProgressStyle},
     solana_cli_config::SettingType,
@@ -17,11 +16,9 @@ use {
         stake,
         transaction::{TransactionError, TransactionVersion, VersionedTransaction},
     },
-    solana_transaction_status::{
-        Rewards, UiReturnDataEncoding, UiTransactionReturnData, UiTransactionStatusMeta,
-    },
+    solana_transaction_status::{Rewards, UiTransactionStatusMeta},
     spl_memo::{id as spl_memo_id, v1::id as spl_memo_v1_id},
-    std::{collections::HashMap, fmt, io, time::Duration},
+    std::{collections::HashMap, fmt, io},
 };
 
 #[derive(Clone, Debug)]
@@ -54,7 +51,7 @@ pub fn build_balance_message_with_config(
         lamports.to_string()
     } else {
         let sol = lamports_to_sol(lamports);
-        let sol_str = format!("{sol:.9}");
+        let sol_str = format!("{:.9}", sol);
         if config.trim_trailing_zeros {
             sol_str
                 .trim_end_matches('0')
@@ -67,14 +64,14 @@ pub fn build_balance_message_with_config(
     let unit = if config.show_unit {
         if config.use_lamports_unit {
             let ess = if lamports == 1 { "" } else { "s" };
-            format!(" lamport{ess}")
+            format!(" lamport{}", ess)
         } else {
             " SOL".to_string()
         }
     } else {
         "".to_string()
     };
-    format!("{value}{unit}")
+    format!("{}{}", value, unit)
 }
 
 pub fn build_balance_message(lamports: u64, use_lamports_unit: bool, show_unit: bool) -> String {
@@ -142,18 +139,18 @@ pub fn println_signers(
     bad_sig: &[String],
 ) {
     println!();
-    println!("Blockhash: {blockhash}");
+    println!("Blockhash: {}", blockhash);
     if !signers.is_empty() {
         println!("Signers (Pubkey=Signature):");
-        signers.iter().for_each(|signer| println!("  {signer}"))
+        signers.iter().for_each(|signer| println!("  {}", signer))
     }
     if !absent.is_empty() {
         println!("Absent Signers (Pubkey):");
-        absent.iter().for_each(|pubkey| println!("  {pubkey}"))
+        absent.iter().for_each(|pubkey| println!("  {}", pubkey))
     }
     if !bad_sig.is_empty() {
         println!("Bad Signatures (Pubkey):");
-        bad_sig.iter().for_each(|pubkey| println!("  {pubkey}"))
+        bad_sig.iter().for_each(|pubkey| println!("  {}", pubkey))
     }
     println!();
 }
@@ -264,16 +261,10 @@ fn write_transaction<W: io::Write>(
         write_status(w, &transaction_status.status, prefix)?;
         write_fees(w, transaction_status.fee, prefix)?;
         write_balances(w, transaction_status, prefix)?;
-        write_compute_units_consumed(
-            w,
-            transaction_status.compute_units_consumed.clone().into(),
-            prefix,
-        )?;
         write_log_messages(w, transaction_status.log_messages.as_ref().into(), prefix)?;
-        write_return_data(w, transaction_status.return_data.as_ref().into(), prefix)?;
         write_rewards(w, transaction_status.rewards.as_ref().into(), prefix)?;
     } else {
-        writeln!(w, "{prefix}Status: Unavailable")?;
+        writeln!(w, "{}Status: Unavailable", prefix)?;
     }
 
     Ok(())
@@ -323,10 +314,10 @@ fn write_block_time<W: io::Write>(
 ) -> io::Result<()> {
     if let Some(block_time) = block_time {
         let block_time_output = match timezone {
-            CliTimezone::Local => format!("{:?}", Local.timestamp_opt(block_time, 0).unwrap()),
-            CliTimezone::Utc => format!("{:?}", Utc.timestamp_opt(block_time, 0).unwrap()),
+            CliTimezone::Local => format!("{:?}", Local.timestamp(block_time, 0)),
+            CliTimezone::Utc => format!("{:?}", Utc.timestamp(block_time, 0)),
         };
-        writeln!(w, "{prefix}Block Time: {block_time_output}",)?;
+        writeln!(w, "{}Block Time: {}", prefix, block_time_output,)?;
     }
     Ok(())
 }
@@ -340,7 +331,7 @@ fn write_version<W: io::Write>(
         TransactionVersion::Legacy(_) => "legacy".to_string(),
         TransactionVersion::Number(number) => number.to_string(),
     };
-    writeln!(w, "{prefix}Version: {version}")
+    writeln!(w, "{}Version: {}", prefix, version)
 }
 
 fn write_recent_blockhash<W: io::Write>(
@@ -348,7 +339,7 @@ fn write_recent_blockhash<W: io::Write>(
     recent_blockhash: &Hash,
     prefix: &str,
 ) -> io::Result<()> {
-    writeln!(w, "{prefix}Recent Blockhash: {recent_blockhash:?}")
+    writeln!(w, "{}Recent Blockhash: {:?}", prefix, recent_blockhash)
 }
 
 fn write_signatures<W: io::Write>(
@@ -358,7 +349,10 @@ fn write_signatures<W: io::Write>(
     prefix: &str,
 ) -> io::Result<()> {
     let sigverify_statuses = if let Some(sigverify_status) = sigverify_status {
-        sigverify_status.iter().map(|s| format!(" ({s})")).collect()
+        sigverify_status
+            .iter()
+            .map(|s| format!(" ({})", s))
+            .collect()
     } else {
         vec!["".to_string(); signatures.len()]
     };
@@ -367,13 +361,14 @@ fn write_signatures<W: io::Write>(
     {
         writeln!(
             w,
-            "{prefix}Signature {signature_index}: {signature:?}{sigverify_status}",
+            "{}Signature {}: {:?}{}",
+            prefix, signature_index, signature, sigverify_status,
         )?;
     }
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum AccountKeyType<'a> {
     Known(&'a Pubkey),
     Unknown {
@@ -385,14 +380,15 @@ enum AccountKeyType<'a> {
 impl fmt::Display for AccountKeyType<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Known(address) => write!(f, "{address}"),
+            Self::Known(address) => write!(f, "{}", address),
             Self::Unknown {
                 lookup_index,
                 table_index,
             } => {
                 write!(
                     f,
-                    "Unknown Address (uses lookup {lookup_index} and index {table_index})"
+                    "Unknown Address (uses lookup {} and index {})",
+                    lookup_index, table_index
                 )
             }
         }
@@ -426,7 +422,7 @@ fn write_instruction<'a, W: io::Write>(
     instruction_accounts: impl Iterator<Item = (AccountKeyType<'a>, u8)>,
     prefix: &str,
 ) -> io::Result<()> {
-    writeln!(w, "{prefix}Instruction {instruction_index}")?;
+    writeln!(w, "{}Instruction {}", prefix, instruction_index)?;
     writeln!(
         w,
         "{}  Program:   {} ({})",
@@ -435,7 +431,8 @@ fn write_instruction<'a, W: io::Write>(
     for (index, (account_address, account_index)) in instruction_accounts.enumerate() {
         writeln!(
             w,
-            "{prefix}  Account {index}: {account_address} ({account_index})"
+            "{}  Account {}: {} ({})",
+            prefix, index, account_address, account_index
         )?;
     }
 
@@ -446,14 +443,14 @@ fn write_instruction<'a, W: io::Write>(
                 solana_vote_program::vote_instruction::VoteInstruction,
             >(&instruction.data)
             {
-                writeln!(w, "{prefix}  {vote_instruction:?}")?;
+                writeln!(w, "{}  {:?}", prefix, vote_instruction)?;
                 raw = false;
             }
         } else if program_pubkey == &stake::program::id() {
             if let Ok(stake_instruction) =
                 limited_deserialize::<stake::instruction::StakeInstruction>(&instruction.data)
             {
-                writeln!(w, "{prefix}  {stake_instruction:?}")?;
+                writeln!(w, "{}  {:?}", prefix, stake_instruction)?;
                 raw = false;
             }
         } else if program_pubkey == &solana_sdk::system_program::id() {
@@ -461,12 +458,12 @@ fn write_instruction<'a, W: io::Write>(
                 solana_sdk::system_instruction::SystemInstruction,
             >(&instruction.data)
             {
-                writeln!(w, "{prefix}  {system_instruction:?}")?;
+                writeln!(w, "{}  {:?}", prefix, system_instruction)?;
                 raw = false;
             }
         } else if is_memo_program(program_pubkey) {
             if let Ok(s) = std::str::from_utf8(&instruction.data) {
-                writeln!(w, "{prefix}  Data: \"{s}\"")?;
+                writeln!(w, "{}  Data: \"{}\"", prefix, s)?;
                 raw = false;
             }
         }
@@ -485,7 +482,7 @@ fn write_address_table_lookups<W: io::Write>(
     prefix: &str,
 ) -> io::Result<()> {
     for (lookup_index, lookup) in address_table_lookups.iter().enumerate() {
-        writeln!(w, "{prefix}Address Table Lookup {lookup_index}",)?;
+        writeln!(w, "{}Address Table Lookup {}", prefix, lookup_index,)?;
         writeln!(w, "{}  Table Account: {}", prefix, lookup.account_key,)?;
         writeln!(
             w,
@@ -510,7 +507,7 @@ fn write_rewards<W: io::Write>(
 ) -> io::Result<()> {
     if let Some(rewards) = rewards {
         if !rewards.is_empty() {
-            writeln!(w, "{prefix}Rewards:",)?;
+            writeln!(w, "{}Rewards:", prefix,)?;
             writeln!(
                 w,
                 "{}  {:<44}  {:^15}  {:<16}  {:<20}",
@@ -524,12 +521,12 @@ fn write_rewards<W: io::Write>(
                     prefix,
                     reward.pubkey,
                     if let Some(reward_type) = reward.reward_type {
-                        format!("{reward_type}")
+                        format!("{}", reward_type)
                     } else {
                         "-".to_string()
                     },
                     sign,
-                    lamports_to_sol(reward.lamports.unsigned_abs()),
+                    lamports_to_sol(reward.lamports.abs() as u64),
                     lamports_to_sol(reward.post_balance)
                 )?;
             }
@@ -595,45 +592,6 @@ fn write_balances<W: io::Write>(
     Ok(())
 }
 
-fn write_return_data<W: io::Write>(
-    w: &mut W,
-    return_data: Option<&UiTransactionReturnData>,
-    prefix: &str,
-) -> io::Result<()> {
-    if let Some(return_data) = return_data {
-        let (data, encoding) = &return_data.data;
-        let raw_return_data = match encoding {
-            UiReturnDataEncoding::Base64 => BASE64_STANDARD.decode(data).map_err(|err| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("could not parse data as {encoding:?}: {err:?}"),
-                )
-            })?,
-        };
-        if !raw_return_data.is_empty() {
-            use pretty_hex::*;
-            writeln!(
-                w,
-                "{}Return Data from Program {}:",
-                prefix, return_data.program_id
-            )?;
-            writeln!(w, "{}  {:?}", prefix, raw_return_data.hex_dump())?;
-        }
-    }
-    Ok(())
-}
-
-fn write_compute_units_consumed<W: io::Write>(
-    w: &mut W,
-    compute_units_consumed: Option<u64>,
-    prefix: &str,
-) -> io::Result<()> {
-    if let Some(cus) = compute_units_consumed {
-        writeln!(w, "{prefix}Compute Units Consumed: {cus}")?;
-    }
-    Ok(())
-}
-
 fn write_log_messages<W: io::Write>(
     w: &mut W,
     log_messages: Option<&Vec<String>>,
@@ -641,9 +599,9 @@ fn write_log_messages<W: io::Write>(
 ) -> io::Result<()> {
     if let Some(log_messages) = log_messages {
         if !log_messages.is_empty() {
-            writeln!(w, "{prefix}Log Messages:",)?;
+            writeln!(w, "{}Log Messages:", prefix,)?;
             for log_message in log_messages {
-                writeln!(w, "{prefix}  {log_message}")?;
+                writeln!(w, "{}  {}", prefix, log_message)?;
             }
         }
     }
@@ -670,7 +628,7 @@ pub fn println_transaction(
     .is_ok()
     {
         if let Ok(s) = String::from_utf8(w) {
-            print!("{s}");
+            print!("{}", s);
         }
     }
 }
@@ -696,7 +654,7 @@ pub fn writeln_transaction(
 
     if write_result.is_ok() {
         if let Ok(s) = String::from_utf8(w) {
-            write!(f, "{s}")?;
+            write!(f, "{}", s)?;
         }
     }
     Ok(())
@@ -705,21 +663,16 @@ pub fn writeln_transaction(
 /// Creates a new process bar for processing that will take an unknown amount of time
 pub fn new_spinner_progress_bar() -> ProgressBar {
     let progress_bar = ProgressBar::new(42);
-    progress_bar.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {wide_msg}")
-            .expect("ProgresStyle::template direct input to be correct"),
-    );
-    progress_bar.enable_steady_tick(Duration::from_millis(100));
+    progress_bar
+        .set_style(ProgressStyle::default_spinner().template("{spinner:.green} {wide_msg}"));
+    progress_bar.enable_steady_tick(100);
     progress_bar
 }
 
 pub fn unix_timestamp_to_string(unix_timestamp: UnixTimestamp) -> String {
     match NaiveDateTime::from_timestamp_opt(unix_timestamp, 0) {
-        Some(ndt) => Utc
-            .from_utc_datetime(&ndt)
-            .to_rfc3339_opts(SecondsFormat::Secs, true),
-        None => format!("UnixTimestamp {unix_timestamp}"),
+        Some(ndt) => DateTime::<Utc>::from_utc(ndt, Utc).to_rfc3339_opts(SecondsFormat::Secs, true),
+        None => format!("UnixTimestamp {}", unix_timestamp),
     }
 }
 
@@ -735,7 +688,6 @@ mod test {
             pubkey::Pubkey,
             signature::{Keypair, Signer},
             transaction::Transaction,
-            transaction_context::TransactionReturnData,
         },
         solana_transaction_status::{Reward, RewardType, TransactionStatusMeta},
         std::io::BufWriter,
@@ -814,11 +766,6 @@ mod test {
                 commission: None,
             }]),
             loaded_addresses: LoadedAddresses::default(),
-            return_data: Some(TransactionReturnData {
-                program_id: Pubkey::new_from_array([2u8; 32]),
-                data: vec![1, 2, 3],
-            }),
-            compute_units_consumed: Some(1234u64),
         };
 
         let output = {
@@ -839,7 +786,7 @@ mod test {
 
         assert_eq!(
             output,
-            r"Block Time: 2021-08-10T22:16:31Z
+            r#"Block Time: 2021-08-10T22:16:31Z
 Version: legacy
 Recent Blockhash: 11111111111111111111111111111111
 Signature 0: 5pkjrE4VBa3Bu9CMKXgh1U345cT1gGo8QBVRTzHAo6gHeiPae5BTbShP15g6NgqRMNqu8Qrhph1ATmrfC1Ley3rx (pass)
@@ -853,16 +800,12 @@ Status: Ok
   Fee: ◎0.000005
   Account 0 balance: ◎0.000005 -> ◎0
   Account 1 balance: ◎0.00001 -> ◎0.0000099
-Compute Units Consumed: 1234
 Log Messages:
   Test message
-Return Data from Program 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR:
-  Length: 3 (0x3) bytes
-0000:   01 02 03                                             ...
 Rewards:
   Address                                            Type        Amount            New Balance         \0
   4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi        rent        -◎0.000000100     ◎0.000009900       \0
-".replace("\\0", "") // replace marker used to subvert trailing whitespace linter on CI
+"#.replace("\\0", "") // replace marker used to subvert trailing whitespace linter on CI
         );
     }
 
@@ -893,11 +836,6 @@ Rewards:
                 commission: None,
             }]),
             loaded_addresses,
-            return_data: Some(TransactionReturnData {
-                program_id: Pubkey::new_from_array([2u8; 32]),
-                data: vec![1, 2, 3],
-            }),
-            compute_units_consumed: Some(2345u64),
         };
 
         let output = {
@@ -918,7 +856,7 @@ Rewards:
 
         assert_eq!(
             output,
-            r"Block Time: 2021-08-10T22:16:31Z
+            r#"Block Time: 2021-08-10T22:16:31Z
 Version: 0
 Recent Blockhash: 11111111111111111111111111111111
 Signature 0: 5iEy3TT3ZhTA1NkuCY8GrQGNVY8d5m1bpjdh5FT3Ca4Py81fMipAZjafDuKJKrkw5q5UAAd8oPcgZ4nyXpHt4Fp7 (pass)
@@ -941,16 +879,12 @@ Status: Ok
   Account 1 balance: ◎0.00001
   Account 2 balance: ◎0.000015 -> ◎0.0000149
   Account 3 balance: ◎0.00002
-Compute Units Consumed: 2345
 Log Messages:
   Test message
-Return Data from Program 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR:
-  Length: 3 (0x3) bytes
-0000:   01 02 03                                             ...
 Rewards:
   Address                                            Type        Amount            New Balance         \0
   CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8        rent        -◎0.000000100     ◎0.000014900       \0
-".replace("\\0", "") // replace marker used to subvert trailing whitespace linter on CI
+"#.replace("\\0", "") // replace marker used to subvert trailing whitespace linter on CI
         );
     }
 

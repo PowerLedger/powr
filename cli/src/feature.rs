@@ -3,41 +3,44 @@ use {
         cli::{CliCommand, CliCommandInfo, CliConfig, CliError, ProcessResult},
         spend_utils::{resolve_spend_tx_and_check_account_balance, SpendAmount},
     },
-    clap::{value_t_or_exit, App, AppSettings, Arg, ArgMatches, SubCommand},
+    clap::{App, AppSettings, Arg, ArgMatches, SubCommand},
     console::style,
-    serde::{Deserialize, Serialize},
-    solana_clap_utils::{
-        fee_payer::*, hidden_unless_forced, input_parsers::*, input_validators::*, keypair::*,
+    serde::{Deserialize, Deserializer, Serialize, Serializer},
+    solana_clap_utils::{input_parsers::*, input_validators::*, keypair::*},
+    solana_cli_output::{QuietDisplay, VerboseDisplay},
+    solana_client::{
+        client_error::ClientError, rpc_client::RpcClient, rpc_request::MAX_MULTIPLE_ACCOUNTS,
     },
-    solana_cli_output::{cli_version::CliVersion, QuietDisplay, VerboseDisplay},
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
-    solana_rpc_client::rpc_client::RpcClient,
-    solana_rpc_client_api::{client_error::Error as ClientError, request::MAX_MULTIPLE_ACCOUNTS},
     solana_sdk::{
         account::Account,
         clock::Slot,
         epoch_schedule::EpochSchedule,
         feature::{self, Feature},
         feature_set::FEATURE_NAMES,
-        genesis_config::ClusterType,
         message::Message,
         pubkey::Pubkey,
-        stake_history::Epoch,
         transaction::Transaction,
     },
-    std::{cmp::Ordering, collections::HashMap, fmt, rc::Rc, str::FromStr},
+    std::{
+        cmp::Ordering,
+        collections::{HashMap, HashSet},
+        fmt,
+        str::FromStr,
+        sync::Arc,
+    },
 };
 
 const DEFAULT_MAX_ACTIVE_DISPLAY_AGE_SLOTS: Slot = 15_000_000; // ~90days
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ForceActivation {
     No,
     Almost,
     Yes,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum FeatureCliCommand {
     Status {
         features: Vec<Pubkey>,
@@ -45,9 +48,7 @@ pub enum FeatureCliCommand {
     },
     Activate {
         feature: Pubkey,
-        cluster: ClusterType,
         force: ForceActivation,
-        fee_payer: SignerIndex,
     },
 }
 
@@ -98,7 +99,10 @@ impl PartialOrd for CliFeature {
 
 impl Ord for CliFeature {
     fn cmp(&self, other: &Self) -> Ordering {
-        (&self.status, &self.id).cmp(&(&other.status, &other.id))
+        match self.status.cmp(&other.status) {
+            Ordering::Equal => self.id.cmp(&other.id),
+            ordering => ordering,
+        }
     }
 }
 
@@ -113,8 +117,6 @@ pub struct CliFeatures {
     pub feature_activation_allowed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster_feature_sets: Option<CliClusterFeatureSets>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cluster_software_versions: Option<CliClusterSoftwareVersions>,
     #[serde(skip)]
     pub inactive: bool,
 }
@@ -145,7 +147,7 @@ impl fmt::Display for CliFeatures {
                     }
                     CliFeatureStatus::Active(activation_slot) => {
                         let activation_epoch = self.epoch_schedule.get_epoch(activation_slot);
-                        style(format!("active since epoch {activation_epoch}")).green()
+                        style(format!("active since epoch {}", activation_epoch)).green()
                     }
                 },
                 match feature.status {
@@ -156,12 +158,8 @@ impl fmt::Display for CliFeatures {
             )?;
         }
 
-        if let Some(software_versions) = &self.cluster_software_versions {
-            write!(f, "{software_versions}")?;
-        }
-
         if let Some(feature_sets) = &self.cluster_feature_sets {
-            write!(f, "{feature_sets}")?;
+            write!(f, "{}", feature_sets)?;
         }
 
         if self.inactive && !self.feature_activation_allowed {
@@ -184,78 +182,11 @@ impl VerboseDisplay for CliFeatures {}
 #[serde(rename_all = "camelCase")]
 pub struct CliClusterFeatureSets {
     pub tool_feature_set: u32,
-    pub feature_sets: Vec<CliFeatureSetStats>,
+    pub feature_sets: Vec<CliFeatureSet>,
     #[serde(skip)]
     pub stake_allowed: bool,
     #[serde(skip)]
     pub rpc_allowed: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CliClusterSoftwareVersions {
-    tool_software_version: CliVersion,
-    software_versions: Vec<CliSoftwareVersionStats>,
-}
-
-impl fmt::Display for CliClusterSoftwareVersions {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let software_version_title = "Software Version";
-        let stake_percent_title = "Stake";
-        let rpc_percent_title = "RPC";
-        let mut max_software_version_len = software_version_title.len();
-        let mut max_stake_percent_len = stake_percent_title.len();
-        let mut max_rpc_percent_len = rpc_percent_title.len();
-
-        let software_versions: Vec<_> = self
-            .software_versions
-            .iter()
-            .map(|software_version_stats| {
-                let stake_percent = format!("{:.2}%", software_version_stats.stake_percent);
-                let rpc_percent = format!("{:.2}%", software_version_stats.rpc_percent);
-                let software_version = software_version_stats.software_version.to_string();
-
-                max_software_version_len = max_software_version_len.max(software_version.len());
-                max_stake_percent_len = max_stake_percent_len.max(stake_percent.len());
-                max_rpc_percent_len = max_rpc_percent_len.max(rpc_percent.len());
-
-                (software_version, stake_percent, rpc_percent)
-            })
-            .collect();
-
-        writeln!(
-            f,
-            "\n\n{}",
-            style(format!(
-                "Tool Software Version: {}",
-                self.tool_software_version
-            ))
-            .bold()
-        )?;
-        writeln!(
-            f,
-            "{}",
-            style(format!(
-                "{software_version_title:<max_software_version_len$}  {stake_percent_title:>max_stake_percent_len$}  {rpc_percent_title:>max_rpc_percent_len$}",
-            ))
-            .bold(),
-        )?;
-        for (software_version, stake_percent, rpc_percent) in software_versions {
-            let me = self.tool_software_version.to_string() == software_version;
-            writeln!(
-                f,
-                "{1:<0$}  {3:>2$}  {5:>4$}  {6}",
-                max_software_version_len,
-                software_version,
-                max_stake_percent_len,
-                stake_percent,
-                max_rpc_percent_len,
-                rpc_percent,
-                if me { "<-- me" } else { "" },
-            )?;
-        }
-        writeln!(f)
-    }
 }
 
 impl fmt::Display for CliClusterFeatureSets {
@@ -345,14 +276,22 @@ impl fmt::Display for CliClusterFeatureSets {
             f,
             "{}",
             style(format!(
-                "{software_versions_title:<max_software_versions_len$}  {feature_set_title:<max_feature_set_len$}  {stake_percent_title:>max_stake_percent_len$}  {rpc_percent_title:>max_rpc_percent_len$}",
+                "{1:<0$}  {3:<2$}  {5:<4$}  {7:<6$}",
+                max_software_versions_len,
+                software_versions_title,
+                max_feature_set_len,
+                feature_set_title,
+                max_stake_percent_len,
+                stake_percent_title,
+                max_rpc_percent_len,
+                rpc_percent_title,
             ))
             .bold(),
         )?;
         for (software_versions, feature_set, stake_percent, rpc_percent, me) in feature_sets {
             writeln!(
                 f,
-                "{1:<0$}  {3:>2$}  {5:>4$}  {7:>6$}  {8}",
+                "{1:<0$}  {3:>2$}  {5:>4$} {7:>6$}  {8}",
                 max_software_versions_len,
                 software_versions,
                 max_feature_set_len,
@@ -373,38 +312,55 @@ impl VerboseDisplay for CliClusterFeatureSets {}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CliFeatureSetStats {
+pub struct CliFeatureSet {
     software_versions: Vec<CliVersion>,
     feature_set: u32,
     stake_percent: f64,
     rpc_percent: f32,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CliSoftwareVersionStats {
-    software_version: CliVersion,
-    stake_percent: f64,
-    rpc_percent: f32,
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
+struct CliVersion(Option<semver::Version>);
+
+impl fmt::Display for CliVersion {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match &self.0 {
+            None => "unknown".to_string(),
+            Some(version) => version.to_string(),
+        };
+        write!(f, "{}", s)
+    }
 }
 
-/// Check an RPC's reported genesis hash against the ClusterType's known genesis hash
-fn check_rpc_genesis_hash(
-    cluster_type: &ClusterType,
-    rpc_client: &RpcClient,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(genesis_hash) = cluster_type.get_genesis_hash() {
-        let rpc_genesis_hash = rpc_client.get_genesis_hash()?;
-        if rpc_genesis_hash != genesis_hash {
-            return Err(format!(
-                "The genesis hash for the specified cluster {cluster_type:?} does not match the \
-                genesis hash reported by the specified RPC. Cluster genesis hash: {genesis_hash}, \
-                RPC reported genesis hash: {rpc_genesis_hash}"
-            )
-            .into());
-        }
+impl FromStr for CliVersion {
+    type Err = semver::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let version_option = if s == "unknown" {
+            None
+        } else {
+            Some(semver::Version::from_str(s)?)
+        };
+        Ok(CliVersion(version_option))
     }
-    Ok(())
+}
+
+impl Serialize for CliVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for CliVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s: &str = Deserialize::deserialize(deserializer)?;
+        CliVersion::from_str(s).map_err(serde::de::Error::custom)
+    }
 }
 
 pub trait FeatureSubCommands {
@@ -446,20 +402,12 @@ impl FeatureSubCommands for App<'_, '_> {
                                 .help("The signer for the feature to activate"),
                         )
                         .arg(
-                            Arg::with_name("cluster")
-                                .value_name("CLUSTER")
-                                .possible_values(&ClusterType::STRINGS)
-                                .required(true)
-                                .help("The cluster to activate the feature on"),
-                        )
-                        .arg(
                             Arg::with_name("force")
                                 .long("yolo")
-                                .hidden(hidden_unless_forced())
+                                .hidden(true)
                                 .multiple(true)
                                 .help("Override activation sanity checks. Don't use this flag"),
-                        )
-                        .arg(fee_payer_arg()),
+                        ),
                 ),
         )
     }
@@ -470,7 +418,8 @@ fn known_feature(feature: &Pubkey) -> Result<(), CliError> {
         Ok(())
     } else {
         Err(CliError::BadParameter(format!(
-            "Unknown feature: {feature}"
+            "Unknown feature: {}",
+            feature
         )))
     }
 }
@@ -478,14 +427,12 @@ fn known_feature(feature: &Pubkey) -> Result<(), CliError> {
 pub fn parse_feature_subcommand(
     matches: &ArgMatches<'_>,
     default_signer: &DefaultSigner,
-    wallet_manager: &mut Option<Rc<RemoteWalletManager>>,
+    wallet_manager: &mut Option<Arc<RemoteWalletManager>>,
 ) -> Result<CliCommandInfo, CliError> {
     let response = match matches.subcommand() {
         ("activate", Some(matches)) => {
-            let cluster = value_t_or_exit!(matches, "cluster", ClusterType);
             let (feature_signer, feature) = signer_of(matches, "feature", wallet_manager)?;
-            let (fee_payer, fee_payer_pubkey) =
-                signer_of(matches, FEE_PAYER_ARG.name, wallet_manager)?;
+            let mut signers = vec![default_signer.signer_from_path(matches, wallet_manager)?];
 
             let force = match matches.occurrences_of("force") {
                 2 => ForceActivation::Yes,
@@ -493,24 +440,14 @@ pub fn parse_feature_subcommand(
                 _ => ForceActivation::No,
             };
 
-            let signer_info = default_signer.generate_unique_signers(
-                vec![fee_payer, feature_signer],
-                matches,
-                wallet_manager,
-            )?;
-
+            signers.push(feature_signer.unwrap());
             let feature = feature.unwrap();
 
             known_feature(&feature)?;
 
             CliCommandInfo {
-                command: CliCommand::Feature(FeatureCliCommand::Activate {
-                    feature,
-                    cluster,
-                    force,
-                    fee_payer: signer_info.index_of(fee_payer_pubkey).unwrap(),
-                }),
-                signers: signer_info.signers,
+                command: CliCommand::Feature(FeatureCliCommand::Activate { feature, force }),
+                signers,
             }
         }
         ("status", Some(matches)) => {
@@ -548,70 +485,31 @@ pub fn process_feature_subcommand(
             features,
             display_all,
         } => process_status(rpc_client, config, features, *display_all),
-        FeatureCliCommand::Activate {
-            feature,
-            cluster,
-            force,
-            fee_payer,
-        } => process_activate(rpc_client, config, *feature, *cluster, *force, *fee_payer),
+        FeatureCliCommand::Activate { feature, force } => {
+            process_activate(rpc_client, config, *feature, *force)
+        }
     }
 }
+
+#[derive(Debug, Default)]
+struct WorkingFeatureSetStatsEntry {
+    stake: u64,
+    rpc_nodes_count: u32,
+    software_versions: HashSet<Option<semver::Version>>,
+}
+type WorkingFeatureSetStats = HashMap<u32, WorkingFeatureSetStatsEntry>;
 
 #[derive(Debug, Default)]
 struct FeatureSetStatsEntry {
     stake_percent: f64,
     rpc_nodes_percent: f32,
-    software_versions: Vec<CliVersion>,
+    software_versions: Vec<Option<semver::Version>>,
 }
+type FeatureSetStats = HashMap<u32, FeatureSetStatsEntry>;
 
-#[derive(Debug, Default, Clone, Copy)]
-struct ClusterInfoStatsEntry {
-    stake_percent: f64,
-    rpc_percent: f32,
-}
-
-struct ClusterInfoStats {
-    stats_map: HashMap<(u32, CliVersion), ClusterInfoStatsEntry>,
-}
-
-impl ClusterInfoStats {
-    fn aggregate_by_feature_set(&self) -> HashMap<u32, FeatureSetStatsEntry> {
-        let mut feature_set_map = HashMap::<u32, FeatureSetStatsEntry>::new();
-        for ((feature_set, software_version), stats_entry) in &self.stats_map {
-            let map_entry = feature_set_map.entry(*feature_set).or_default();
-            map_entry.rpc_nodes_percent += stats_entry.rpc_percent;
-            map_entry.stake_percent += stats_entry.stake_percent;
-            map_entry.software_versions.push(software_version.clone());
-        }
-        for stats_entry in feature_set_map.values_mut() {
-            stats_entry
-                .software_versions
-                .sort_by(|l, r| l.cmp(r).reverse());
-        }
-        feature_set_map
-    }
-
-    fn aggregate_by_software_version(&self) -> HashMap<CliVersion, ClusterInfoStatsEntry> {
-        let mut software_version_map = HashMap::<CliVersion, ClusterInfoStatsEntry>::new();
-        for ((_feature_set, software_version), stats_entry) in &self.stats_map {
-            let map_entry = software_version_map
-                .entry(software_version.clone())
-                .or_default();
-            map_entry.rpc_percent += stats_entry.rpc_percent;
-            map_entry.stake_percent += stats_entry.stake_percent;
-        }
-        software_version_map
-    }
-}
-
-fn cluster_info_stats(rpc_client: &RpcClient) -> Result<ClusterInfoStats, ClientError> {
-    #[derive(Default)]
-    struct StatsEntry {
-        stake_lamports: u64,
-        rpc_nodes_count: u32,
-    }
-
-    let cluster_info_list = rpc_client
+fn feature_set_stats(rpc_client: &RpcClient) -> Result<FeatureSetStats, ClientError> {
+    // Validator identity -> feature set
+    let feature_sets = rpc_client
         .get_cluster_nodes()?
         .into_iter()
         .map(|contact_info| {
@@ -621,8 +519,7 @@ fn cluster_info_stats(rpc_client: &RpcClient) -> Result<ClusterInfoStats, Client
                 contact_info.rpc.is_some(),
                 contact_info
                     .version
-                    .and_then(|v| CliVersion::from_str(&v).ok())
-                    .unwrap_or_else(CliVersion::unknown_version),
+                    .and_then(|v| semver::Version::parse(&v).ok()),
             )
         })
         .collect::<Vec<_>>();
@@ -644,78 +541,67 @@ fn cluster_info_stats(rpc_client: &RpcClient) -> Result<ClusterInfoStats, Client
         })
         .collect::<HashMap<_, _>>();
 
-    let mut cluster_info_stats: HashMap<(u32, CliVersion), StatsEntry> = HashMap::new();
+    let mut feature_set_stats: WorkingFeatureSetStats = HashMap::new();
     let mut total_rpc_nodes = 0;
-    for (node_id, feature_set, is_rpc, version) in cluster_info_list {
+    for (node_id, feature_set, is_rpc, version) in feature_sets {
         let feature_set = feature_set.unwrap_or(0);
-        let stats_entry = cluster_info_stats
-            .entry((feature_set, version))
-            .or_default();
+        let feature_set_entry = feature_set_stats.entry(feature_set).or_default();
+
+        feature_set_entry.software_versions.insert(version);
 
         if let Some(vote_stake) = vote_stakes.get(&node_id) {
-            stats_entry.stake_lamports += *vote_stake;
+            feature_set_entry.stake += *vote_stake;
         }
 
         if is_rpc {
-            stats_entry.rpc_nodes_count += 1;
+            feature_set_entry.rpc_nodes_count += 1;
             total_rpc_nodes += 1;
         }
     }
 
-    Ok(ClusterInfoStats {
-        stats_map: cluster_info_stats
-            .into_iter()
-            .filter_map(
-                |(
-                    cluster_config,
-                    StatsEntry {
-                        stake_lamports,
-                        rpc_nodes_count,
-                    },
-                )| {
-                    let stake_percent = (stake_lamports as f64 / total_active_stake as f64) * 100.;
-                    let rpc_percent = (rpc_nodes_count as f32 / total_rpc_nodes as f32) * 100.;
-                    if stake_percent >= 0.001 || rpc_percent >= 0.001 {
-                        Some((
-                            cluster_config,
-                            ClusterInfoStatsEntry {
-                                stake_percent,
-                                rpc_percent,
-                            },
-                        ))
-                    } else {
-                        None
-                    }
+    Ok(feature_set_stats
+        .into_iter()
+        .filter_map(
+            |(
+                feature_set,
+                WorkingFeatureSetStatsEntry {
+                    stake,
+                    rpc_nodes_count,
+                    software_versions,
                 },
-            )
-            .collect(),
-    })
+            )| {
+                let stake_percent = (stake as f64 / total_active_stake as f64) * 100.;
+                let rpc_nodes_percent = (rpc_nodes_count as f32 / total_rpc_nodes as f32) * 100.;
+                let mut software_versions = software_versions.into_iter().collect::<Vec<_>>();
+                software_versions.sort();
+                if stake_percent >= 0.001 || rpc_nodes_percent >= 0.001 {
+                    Some((
+                        feature_set,
+                        FeatureSetStatsEntry {
+                            stake_percent,
+                            rpc_nodes_percent,
+                            software_versions,
+                        },
+                    ))
+                } else {
+                    None
+                }
+            },
+        )
+        .collect())
 }
 
 // Feature activation is only allowed when 95% of the active stake is on the current feature set
 fn feature_activation_allowed(
     rpc_client: &RpcClient,
     quiet: bool,
-) -> Result<
-    (
-        bool,
-        Option<CliClusterFeatureSets>,
-        Option<CliClusterSoftwareVersions>,
-    ),
-    ClientError,
-> {
-    let cluster_info_stats = cluster_info_stats(rpc_client)?;
-    let feature_set_stats = cluster_info_stats.aggregate_by_feature_set();
+) -> Result<(bool, Option<CliClusterFeatureSets>), ClientError> {
+    let my_feature_set = solana_version::Version::default().feature_set;
 
-    let tool_version = solana_version::Version::default();
-    let tool_feature_set = tool_version.feature_set;
-    let tool_software_version = CliVersion::from(semver::Version::new(
-        tool_version.major as u64,
-        tool_version.minor as u64,
-        tool_version.patch as u64,
-    ));
+    let feature_set_stats = feature_set_stats(rpc_client)?;
+
     let (stake_allowed, rpc_allowed) = feature_set_stats
-        .get(&tool_feature_set)
+        .get(&my_feature_set)
         .map(
             |FeatureSetStatsEntry {
                  stake_percent,
@@ -723,40 +609,31 @@ fn feature_activation_allowed(
                  ..
              }| (*stake_percent >= 95., *rpc_nodes_percent >= 95.),
         )
-        .unwrap_or_default();
-
-    let cluster_software_versions = if quiet {
-        None
-    } else {
-        let mut software_versions: Vec<_> = cluster_info_stats
-            .aggregate_by_software_version()
-            .into_iter()
-            .map(|(software_version, stats)| CliSoftwareVersionStats {
-                software_version,
-                stake_percent: stats.stake_percent,
-                rpc_percent: stats.rpc_percent,
-            })
-            .collect();
-        software_versions.sort_by(|l, r| l.software_version.cmp(&r.software_version).reverse());
-        Some(CliClusterSoftwareVersions {
-            software_versions,
-            tool_software_version,
-        })
-    };
+        .unwrap_or((false, false));
 
     let cluster_feature_sets = if quiet {
         None
     } else {
-        let mut feature_sets: Vec<_> = feature_set_stats
+        let mut feature_sets = feature_set_stats
             .into_iter()
-            .map(|(feature_set, stats_entry)| CliFeatureSetStats {
-                feature_set,
-                software_versions: stats_entry.software_versions,
-                rpc_percent: stats_entry.rpc_nodes_percent,
-                stake_percent: stats_entry.stake_percent,
-            })
-            .collect();
-
+            .map(
+                |(
+                    feature_set,
+                    FeatureSetStatsEntry {
+                        stake_percent,
+                        rpc_nodes_percent: rpc_percent,
+                        software_versions,
+                    },
+                )| {
+                    CliFeatureSet {
+                        software_versions: software_versions.into_iter().map(CliVersion).collect(),
+                        feature_set,
+                        stake_percent,
+                        rpc_percent,
+                    }
+                },
+            )
+            .collect::<Vec<_>>();
         feature_sets.sort_by(|l, r| {
             match l.software_versions[0]
                 .cmp(&r.software_versions[0])
@@ -779,18 +656,14 @@ fn feature_activation_allowed(
             }
         });
         Some(CliClusterFeatureSets {
-            tool_feature_set,
+            tool_feature_set: my_feature_set,
             feature_sets,
             stake_allowed,
             rpc_allowed,
         })
     };
 
-    Ok((
-        stake_allowed && rpc_allowed,
-        cluster_feature_sets,
-        cluster_software_versions,
-    ))
+    Ok((stake_allowed && rpc_allowed, cluster_feature_sets))
 }
 
 fn status_from_account(account: Account) -> Option<CliFeatureStatus> {
@@ -816,22 +689,6 @@ pub fn get_feature_is_active(
 ) -> Result<bool, Box<dyn std::error::Error>> {
     get_feature_status(rpc_client, feature_id)
         .map(|status| matches!(status, Some(CliFeatureStatus::Active(_))))
-}
-
-pub fn get_feature_activation_epoch(
-    rpc_client: &RpcClient,
-    feature_id: &Pubkey,
-) -> Result<Option<Epoch>, ClientError> {
-    rpc_client
-        .get_feature_activation_slot(feature_id)
-        .and_then(|activation_slot: Option<Slot>| {
-            rpc_client
-                .get_epoch_schedule()
-                .map(|epoch_schedule| (activation_slot, epoch_schedule))
-        })
-        .map(|(activation_slot, epoch_schedule)| {
-            activation_slot.map(|slot| epoch_schedule.get_epoch(slot))
-        })
 }
 
 fn process_status(
@@ -884,7 +741,7 @@ fn process_status(
 
     features.sort_unstable();
 
-    let (feature_activation_allowed, cluster_feature_sets, cluster_software_versions) =
+    let (feature_activation_allowed, cluster_feature_sets) =
         feature_activation_allowed(rpc_client, features.len() <= 1)?;
     let epoch_schedule = rpc_client.get_epoch_schedule()?;
     let feature_set = CliFeatures {
@@ -893,7 +750,6 @@ fn process_status(
         epoch_schedule,
         feature_activation_allowed,
         cluster_feature_sets,
-        cluster_software_versions,
         inactive,
     };
     Ok(config.output_format.formatted_string(&feature_set))
@@ -903,13 +759,8 @@ fn process_activate(
     rpc_client: &RpcClient,
     config: &CliConfig,
     feature_id: Pubkey,
-    cluster: ClusterType,
     force: ForceActivation,
-    fee_payer: SignerIndex,
 ) -> ProcessResult {
-    check_rpc_genesis_hash(&cluster, rpc_client)?;
-
-    let fee_payer = config.signers[fee_payer];
     let account = rpc_client
         .get_multiple_accounts(&[feature_id])?
         .into_iter()
@@ -918,7 +769,7 @@ fn process_activate(
 
     if let Some(account) = account {
         if feature::from_account(&account).is_some() {
-            return Err(format!("{feature_id} has already been activated").into());
+            return Err(format!("{} has already been activated", feature_id).into());
         }
     }
 
@@ -940,11 +791,15 @@ fn process_activate(
         false,
         SpendAmount::Some(rent),
         &blockhash,
-        &fee_payer.pubkey(),
+        &config.signers[0].pubkey(),
         |lamports| {
             Message::new(
-                &feature::activate_with_lamports(&feature_id, &fee_payer.pubkey(), lamports),
-                Some(&fee_payer.pubkey()),
+                &feature::activate_with_lamports(
+                    &feature_id,
+                    &config.signers[0].pubkey(),
+                    lamports,
+                ),
+                Some(&config.signers[0].pubkey()),
             )
         },
         config.commitment,

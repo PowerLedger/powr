@@ -1,6 +1,6 @@
 use solana_sdk::clock::Slot;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, AbiExample, AbiEnumVisitor)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, AbiExample, AbiEnumVisitor)]
 enum CompressionType {
     Uncompressed,
     GZip,
@@ -13,7 +13,7 @@ impl Default for CompressionType {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, AbiExample)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, AbiExample)]
 pub(crate) struct EpochIncompleteSlots {
     first: Slot,
     compression: CompressionType,

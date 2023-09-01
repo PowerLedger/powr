@@ -3,7 +3,7 @@ title: TPU
 ---
 
 TPU (Transaction Processing Unit) is the logic of the validator
-responsible for block production.
+repsonsible for block production.
 
 ![TPU Block Diagram](/img/tpu.svg)
 

@@ -30,7 +30,7 @@
 //! more account keys into a transaction than the legacy format. The
 //! [`VersionedMessage`] type is a thin wrapper around either message version.
 //!
-//! [future message format]: https://docs.solana.com/proposals/versioned-transactions
+//! [future message format]: https://docs.solana.com/proposals/transactions-v2
 //!
 //! Despite living in the `solana-program` crate, there is no way to access the
 //! runtime's messages from within a Solana program, and only the legacy message
@@ -40,7 +40,7 @@
 mod compiled_keys;
 pub mod legacy;
 
-#[cfg(not(target_os = "solana"))]
+#[cfg(not(target_arch = "bpf"))]
 #[path = ""]
 mod non_bpf_modules {
     mod account_keys;
@@ -51,9 +51,10 @@ mod non_bpf_modules {
     pub use {account_keys::*, address_loader::*, sanitized::*, versions::*};
 }
 
-#[cfg(not(target_os = "solana"))]
+use compiled_keys::*;
+pub use legacy::Message;
+#[cfg(not(target_arch = "bpf"))]
 pub use non_bpf_modules::*;
-pub use {compiled_keys::CompileError, legacy::Message};
 
 /// The length of a message header in bytes.
 pub const MESSAGE_HEADER_LENGTH: usize = 3;

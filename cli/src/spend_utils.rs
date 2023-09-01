@@ -5,14 +5,14 @@ use {
     },
     clap::ArgMatches,
     solana_clap_utils::{input_parsers::lamports_of_sol, offline::SIGN_ONLY_ARG},
-    solana_rpc_client::rpc_client::RpcClient,
+    solana_client::rpc_client::RpcClient,
     solana_sdk::{
         commitment_config::CommitmentConfig, hash::Hash, message::Message,
         native_token::lamports_to_sol, pubkey::Pubkey,
     },
 };
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SpendAmount {
     All,
     Some(u64),

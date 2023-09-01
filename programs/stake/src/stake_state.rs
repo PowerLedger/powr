@@ -12,28 +12,23 @@ use {
     solana_program_runtime::{ic_msg, invoke_context::InvokeContext},
     solana_sdk::{
         account::{AccountSharedData, ReadableAccount, WritableAccount},
-        account_utils::StateMut,
+        account_utils::{State, StateMut},
         clock::{Clock, Epoch},
-        feature_set::{
-            self, reduce_stake_warmup_cooldown::NewWarmupCooldownRateEpoch,
-            stake_merge_with_unmatched_credits_observed, FeatureSet,
-        },
+        feature_set::stake_merge_with_unmatched_credits_observed,
         instruction::{checked_add, InstructionError},
+        keyed_account::KeyedAccount,
         pubkey::Pubkey,
-        rent::Rent,
+        rent::{Rent, ACCOUNT_STORAGE_OVERHEAD},
         stake::{
+            config::Config,
             instruction::{LockupArgs, StakeError},
             program::id,
-            stake_flags::StakeFlags,
-            tools::{acceptable_reference_epoch_credits, eligible_for_deactivate_delinquent},
+            MINIMUM_STAKE_DELEGATION,
         },
         stake_history::{StakeHistory, StakeHistoryEntry},
-        transaction_context::{
-            BorrowedAccount, IndexOfAccount, InstructionContext, TransactionContext,
-        },
     },
-    solana_vote_program::vote_state::{self, VoteState, VoteStateVersions},
-    std::{cmp::Ordering, collections::HashSet, convert::TryFrom},
+    solana_vote_program::vote_state::{VoteState, VoteStateVersions},
+    std::{collections::HashSet, convert::TryFrom},
 };
 
 #[derive(Debug)]
@@ -46,7 +41,6 @@ pub enum SkippedReason {
     ZeroReward,
     ZeroCreditsAndReturnZero,
     ZeroCreditsAndReturnCurrent,
-    ZeroCreditsAndReturnRewinded,
 }
 
 impl From<SkippedReason> for InflationPointCalculationEvent {
@@ -72,71 +66,46 @@ pub(crate) fn null_tracer() -> Option<impl Fn(&InflationPointCalculationEvent)> 
 }
 
 // utility function, used by Stakes, tests
-pub fn from<T: ReadableAccount + StateMut<StakeStateV2>>(account: &T) -> Option<StakeStateV2> {
+pub fn from<T: ReadableAccount + StateMut<StakeState>>(account: &T) -> Option<StakeState> {
     account.state().ok()
 }
 
-pub fn stake_from<T: ReadableAccount + StateMut<StakeStateV2>>(account: &T) -> Option<Stake> {
-    from(account).and_then(|state: StakeStateV2| state.stake())
+pub fn stake_from<T: ReadableAccount + StateMut<StakeState>>(account: &T) -> Option<Stake> {
+    from(account).and_then(|state: StakeState| state.stake())
 }
 
 pub fn delegation_from(account: &AccountSharedData) -> Option<Delegation> {
-    from(account).and_then(|state: StakeStateV2| state.delegation())
+    from(account).and_then(|state: StakeState| state.delegation())
 }
 
 pub fn authorized_from(account: &AccountSharedData) -> Option<Authorized> {
-    from(account).and_then(|state: StakeStateV2| state.authorized())
+    from(account).and_then(|state: StakeState| state.authorized())
 }
 
-pub fn lockup_from<T: ReadableAccount + StateMut<StakeStateV2>>(account: &T) -> Option<Lockup> {
-    from(account).and_then(|state: StakeStateV2| state.lockup())
+pub fn lockup_from<T: ReadableAccount + StateMut<StakeState>>(account: &T) -> Option<Lockup> {
+    from(account).and_then(|state: StakeState| state.lockup())
 }
 
 pub fn meta_from(account: &AccountSharedData) -> Option<Meta> {
-    from(account).and_then(|state: StakeStateV2| state.meta())
+    from(account).and_then(|state: StakeState| state.meta())
 }
 
-pub(crate) fn new_warmup_cooldown_rate_epoch(invoke_context: &InvokeContext) -> Option<Epoch> {
-    let epoch_schedule = invoke_context
-        .get_sysvar_cache()
-        .get_epoch_schedule()
-        .unwrap();
-    invoke_context
-        .feature_set
-        .new_warmup_cooldown_rate_epoch(epoch_schedule.as_ref())
-}
-
-fn redelegate_stake(
-    invoke_context: &InvokeContext,
+fn redelegate(
     stake: &mut Stake,
     stake_lamports: u64,
     voter_pubkey: &Pubkey,
     vote_state: &VoteState,
     clock: &Clock,
     stake_history: &StakeHistory,
+    config: &Config,
 ) -> Result<(), StakeError> {
-    let new_rate_activation_epoch = new_warmup_cooldown_rate_epoch(invoke_context);
     // If stake is currently active:
-    if stake.stake(clock.epoch, Some(stake_history), new_rate_activation_epoch) != 0 {
-        let stake_lamports_ok = if invoke_context
-            .feature_set
-            .is_active(&feature_set::stake_redelegate_instruction::id())
-        {
-            // When a stake account is redelegated, the delegated lamports from the source stake
-            // account are transferred to a new stake account. Do not permit the deactivation of
-            // the source stake account to be rescinded, by more generally requiring the delegation
-            // be configured with the expected amount of stake lamports before rescinding.
-            stake_lamports >= stake.delegation.stake
-        } else {
-            true
-        };
-
+    if stake.stake(clock.epoch, Some(stake_history)) != 0 {
         // If pubkey of new voter is the same as current,
         // and we are scheduled to start deactivating this epoch,
         // we rescind deactivation
         if stake.delegation.voter_pubkey == *voter_pubkey
             && clock.epoch == stake.delegation.deactivation_epoch
-            && stake_lamports_ok
         {
             stake.delegation.deactivation_epoch = std::u64::MAX;
             return Ok(());
@@ -153,18 +122,25 @@ fn redelegate_stake(
     stake.delegation.activation_epoch = clock.epoch;
     stake.delegation.deactivation_epoch = std::u64::MAX;
     stake.delegation.voter_pubkey = *voter_pubkey;
+    stake.delegation.warmup_cooldown_rate = config.warmup_cooldown_rate;
     stake.credits_observed = vote_state.credits();
     Ok(())
 }
 
-pub(crate) fn new_stake(
+fn new_stake(
     stake: u64,
     voter_pubkey: &Pubkey,
     vote_state: &VoteState,
     activation_epoch: Epoch,
+    config: &Config,
 ) -> Stake {
     Stake {
-        delegation: Delegation::new(voter_pubkey, stake, activation_epoch),
+        delegation: Delegation::new(
+            voter_pubkey,
+            stake,
+            activation_epoch,
+            config.warmup_cooldown_rate,
+        ),
         credits_observed: vote_state.credits(),
     }
 }
@@ -173,7 +149,7 @@ pub(crate) fn new_stake(
 ///  and the total points over which those lamports
 ///  are to be distributed
 //  basically read as rewards/points, but in integers instead of as an f64
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PointValue {
     pub rewards: u64, // lamports to split
     pub points: u128, // over these points
@@ -186,7 +162,7 @@ fn redeem_stake_rewards(
     vote_state: &VoteState,
     stake_history: Option<&StakeHistory>,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
-    new_rate_activation_epoch: Option<Epoch>,
+    fix_activating_credits_observed: bool,
 ) -> Option<(u64, u64)> {
     if let Some(inflation_point_calc_tracer) = inflation_point_calc_tracer.as_ref() {
         inflation_point_calc_tracer(&InflationPointCalculationEvent::CreditsObserved(
@@ -201,21 +177,18 @@ fn redeem_stake_rewards(
         vote_state,
         stake_history,
         inflation_point_calc_tracer.as_ref(),
-        new_rate_activation_epoch,
+        fix_activating_credits_observed,
     )
-    .map(|calculated_stake_rewards| {
+    .map(|(stakers_reward, voters_reward, credits_observed)| {
         if let Some(inflation_point_calc_tracer) = inflation_point_calc_tracer {
             inflation_point_calc_tracer(&InflationPointCalculationEvent::CreditsObserved(
                 stake.credits_observed,
-                Some(calculated_stake_rewards.new_credits_observed),
+                Some(credits_observed),
             ));
         }
-        stake.credits_observed = calculated_stake_rewards.new_credits_observed;
-        stake.delegation.stake += calculated_stake_rewards.staker_rewards;
-        (
-            calculated_stake_rewards.staker_rewards,
-            calculated_stake_rewards.voter_rewards,
-        )
+        stake.credits_observed = credits_observed;
+        stake.delegation.stake += stakers_reward;
+        (stakers_reward, voters_reward)
     })
 }
 
@@ -224,23 +197,14 @@ fn calculate_stake_points(
     vote_state: &VoteState,
     stake_history: Option<&StakeHistory>,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
-    new_rate_activation_epoch: Option<Epoch>,
 ) -> u128 {
     calculate_stake_points_and_credits(
         stake,
         vote_state,
         stake_history,
         inflation_point_calc_tracer,
-        new_rate_activation_epoch,
     )
-    .points
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct CalculatedStakePoints {
-    points: u128,
-    new_credits_observed: u64,
-    force_credits_update_with_skipped_reward: bool,
+    .0
 }
 
 /// for a given stake and vote_state, calculate how many
@@ -251,52 +215,15 @@ fn calculate_stake_points_and_credits(
     new_vote_state: &VoteState,
     stake_history: Option<&StakeHistory>,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
-    new_rate_activation_epoch: Option<Epoch>,
-) -> CalculatedStakePoints {
+) -> (u128, u64) {
     let credits_in_stake = stake.credits_observed;
     let credits_in_vote = new_vote_state.credits();
     // if there is no newer credits since observed, return no point
-    match credits_in_vote.cmp(&credits_in_stake) {
-        Ordering::Less => {
-            if let Some(inflation_point_calc_tracer) = inflation_point_calc_tracer.as_ref() {
-                inflation_point_calc_tracer(&SkippedReason::ZeroCreditsAndReturnRewinded.into());
-            }
-            // Don't adjust stake.activation_epoch for simplicity:
-            //  - generally fast-forwarding stake.activation_epoch forcibly (for
-            //    artificial re-activation with re-warm-up) skews the stake
-            //    history sysvar. And properly handling all the cases
-            //    regarding deactivation epoch/warm-up/cool-down without
-            //    introducing incentive skew is hard.
-            //  - Conceptually, it should be acceptable for the staked SOLs at
-            //    the recreated vote to receive rewards again immediately after
-            //    rewind even if it looks like instant activation. That's
-            //    because it must have passed the required warmed-up at least
-            //    once in the past already
-            //  - Also such a stake account remains to be a part of overall
-            //    effective stake calculation even while the vote account is
-            //    missing for (indefinite) time or remains to be pre-remove
-            //    credits score. It should be treated equally to staking with
-            //    delinquent validator with no differentiation.
-
-            // hint with true to indicate some exceptional credits handling is needed
-            return CalculatedStakePoints {
-                points: 0,
-                new_credits_observed: credits_in_vote,
-                force_credits_update_with_skipped_reward: true,
-            };
+    if credits_in_vote <= credits_in_stake {
+        if let Some(inflation_point_calc_tracer) = inflation_point_calc_tracer.as_ref() {
+            inflation_point_calc_tracer(&SkippedReason::ZeroCreditsAndReturnCurrent.into());
         }
-        Ordering::Equal => {
-            if let Some(inflation_point_calc_tracer) = inflation_point_calc_tracer.as_ref() {
-                inflation_point_calc_tracer(&SkippedReason::ZeroCreditsAndReturnCurrent.into());
-            }
-            // don't hint caller and return current value if credits remain unchanged (= delinquent)
-            return CalculatedStakePoints {
-                points: 0,
-                new_credits_observed: credits_in_stake,
-                force_credits_update_with_skipped_reward: false,
-            };
-        }
-        Ordering::Greater => {}
+        return (0, credits_in_stake);
     }
 
     let mut points = 0;
@@ -305,11 +232,7 @@ fn calculate_stake_points_and_credits(
     for (epoch, final_epoch_credits, initial_epoch_credits) in
         new_vote_state.epoch_credits().iter().copied()
     {
-        let stake_amount = u128::from(stake.delegation.stake(
-            epoch,
-            stake_history,
-            new_rate_activation_epoch,
-        ));
+        let stake_amount = u128::from(stake.delegation.stake(epoch, stake_history));
 
         // figure out how much this stake has seen that
         //   for which the vote account has a record
@@ -343,18 +266,7 @@ fn calculate_stake_points_and_credits(
         }
     }
 
-    CalculatedStakePoints {
-        points,
-        new_credits_observed,
-        force_credits_update_with_skipped_reward: false,
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct CalculatedStakeRewards {
-    staker_rewards: u64,
-    voter_rewards: u64,
-    new_credits_observed: u64,
+    (points, new_credits_observed)
 }
 
 /// for a given stake and vote_state, calculate what distributions and what updates should be made
@@ -370,19 +282,16 @@ fn calculate_stake_rewards(
     vote_state: &VoteState,
     stake_history: Option<&StakeHistory>,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
-    new_rate_activation_epoch: Option<Epoch>,
-) -> Option<CalculatedStakeRewards> {
+    _fix_activating_credits_observed: bool, // this unused flag will soon be justified by an upcoming feature pr
+) -> Option<(u64, u64, u64)> {
     // ensure to run to trigger (optional) inflation_point_calc_tracer
-    let CalculatedStakePoints {
-        points,
-        new_credits_observed,
-        mut force_credits_update_with_skipped_reward,
-    } = calculate_stake_points_and_credits(
+    // this awkward flag variable will soon be justified by an upcoming feature pr
+    let mut forced_credits_update_with_skipped_reward = false;
+    let (points, credits_observed) = calculate_stake_points_and_credits(
         stake,
         vote_state,
         stake_history,
         inflation_point_calc_tracer.as_ref(),
-        new_rate_activation_epoch,
     );
 
     // Drive credits_observed forward unconditionally when rewards are disabled
@@ -391,21 +300,17 @@ fn calculate_stake_rewards(
         if let Some(inflation_point_calc_tracer) = inflation_point_calc_tracer.as_ref() {
             inflation_point_calc_tracer(&SkippedReason::DisabledInflation.into());
         }
-        force_credits_update_with_skipped_reward = true;
+        forced_credits_update_with_skipped_reward = true;
     } else if stake.delegation.activation_epoch == rewarded_epoch {
         // not assert!()-ed; but points should be zero
         if let Some(inflation_point_calc_tracer) = inflation_point_calc_tracer.as_ref() {
             inflation_point_calc_tracer(&SkippedReason::JustActivated.into());
         }
-        force_credits_update_with_skipped_reward = true;
+        forced_credits_update_with_skipped_reward = true;
     }
 
-    if force_credits_update_with_skipped_reward {
-        return Some(CalculatedStakeRewards {
-            staker_rewards: 0,
-            voter_rewards: 0,
-            new_credits_observed,
-        });
+    if forced_credits_update_with_skipped_reward {
+        return Some((0, 0, credits_observed));
     }
 
     if points == 0 {
@@ -456,696 +361,468 @@ fn calculate_stake_rewards(
         return None;
     }
 
-    Some(CalculatedStakeRewards {
-        staker_rewards,
-        voter_rewards,
-        new_credits_observed,
-    })
+    Some((staker_rewards, voter_rewards, credits_observed))
 }
 
-pub fn initialize(
-    stake_account: &mut BorrowedAccount,
-    authorized: &Authorized,
-    lockup: &Lockup,
-    rent: &Rent,
-) -> Result<(), InstructionError> {
-    if stake_account.get_data().len() != StakeStateV2::size_of() {
-        return Err(InstructionError::InvalidAccountData);
-    }
-    if let StakeStateV2::Uninitialized = stake_account.get_state()? {
-        let rent_exempt_reserve = rent.minimum_balance(stake_account.get_data().len());
-        if stake_account.get_lamports() >= rent_exempt_reserve {
-            stake_account.set_state(&StakeStateV2::Initialized(Meta {
-                rent_exempt_reserve,
-                authorized: *authorized,
-                lockup: *lockup,
-            }))
+pub trait StakeAccount {
+    fn initialize(
+        &self,
+        authorized: &Authorized,
+        lockup: &Lockup,
+        rent: &Rent,
+    ) -> Result<(), InstructionError>;
+    fn authorize(
+        &self,
+        signers: &HashSet<Pubkey>,
+        new_authority: &Pubkey,
+        stake_authorize: StakeAuthorize,
+        require_custodian_for_locked_stake_authorize: bool,
+        clock: &Clock,
+        custodian: Option<&Pubkey>,
+    ) -> Result<(), InstructionError>;
+    fn authorize_with_seed(
+        &self,
+        authority_base: &KeyedAccount,
+        authority_seed: &str,
+        authority_owner: &Pubkey,
+        new_authority: &Pubkey,
+        stake_authorize: StakeAuthorize,
+        require_custodian_for_locked_stake_authorize: bool,
+        clock: &Clock,
+        custodian: Option<&Pubkey>,
+    ) -> Result<(), InstructionError>;
+    fn delegate(
+        &self,
+        vote_account: &KeyedAccount,
+        clock: &Clock,
+        stake_history: &StakeHistory,
+        config: &Config,
+        signers: &HashSet<Pubkey>,
+    ) -> Result<(), InstructionError>;
+    fn deactivate(&self, clock: &Clock, signers: &HashSet<Pubkey>) -> Result<(), InstructionError>;
+    fn set_lockup(
+        &self,
+        lockup: &LockupArgs,
+        signers: &HashSet<Pubkey>,
+        clock: &Clock,
+    ) -> Result<(), InstructionError>;
+    fn split(
+        &self,
+        lamports: u64,
+        split_stake: &KeyedAccount,
+        signers: &HashSet<Pubkey>,
+    ) -> Result<(), InstructionError>;
+    fn merge(
+        &self,
+        invoke_context: &InvokeContext,
+        source_stake: &KeyedAccount,
+        clock: &Clock,
+        stake_history: &StakeHistory,
+        signers: &HashSet<Pubkey>,
+    ) -> Result<(), InstructionError>;
+    fn withdraw(
+        &self,
+        lamports: u64,
+        to: &KeyedAccount,
+        clock: &Clock,
+        stake_history: &StakeHistory,
+        withdraw_authority: &KeyedAccount,
+        custodian: Option<&KeyedAccount>,
+    ) -> Result<(), InstructionError>;
+}
+
+impl<'a> StakeAccount for KeyedAccount<'a> {
+    fn initialize(
+        &self,
+        authorized: &Authorized,
+        lockup: &Lockup,
+        rent: &Rent,
+    ) -> Result<(), InstructionError> {
+        if self.data_len()? != std::mem::size_of::<StakeState>() {
+            return Err(InstructionError::InvalidAccountData);
+        }
+        if let StakeState::Uninitialized = self.state()? {
+            let rent_exempt_reserve = rent.minimum_balance(self.data_len()?);
+            let minimum_balance = rent_exempt_reserve + MINIMUM_STAKE_DELEGATION;
+
+            if self.lamports()? >= minimum_balance {
+                self.set_state(&StakeState::Initialized(Meta {
+                    rent_exempt_reserve,
+                    authorized: *authorized,
+                    lockup: *lockup,
+                }))
+            } else {
+                Err(InstructionError::InsufficientFunds)
+            }
         } else {
-            Err(InstructionError::InsufficientFunds)
+            Err(InstructionError::InvalidAccountData)
         }
-    } else {
-        Err(InstructionError::InvalidAccountData)
     }
-}
 
-/// Authorize the given pubkey to manage stake (deactivate, withdraw). This may be called
-/// multiple times, but will implicitly withdraw authorization from the previously authorized
-/// staker. The default staker is the owner of the stake account's pubkey.
-pub fn authorize(
-    stake_account: &mut BorrowedAccount,
-    signers: &HashSet<Pubkey>,
-    new_authority: &Pubkey,
-    stake_authorize: StakeAuthorize,
-    require_custodian_for_locked_stake_authorize: bool,
-    clock: &Clock,
-    custodian: Option<&Pubkey>,
-) -> Result<(), InstructionError> {
-    match stake_account.get_state()? {
-        StakeStateV2::Stake(mut meta, stake, stake_flags) => {
-            meta.authorized.authorize(
-                signers,
-                new_authority,
-                stake_authorize,
-                if require_custodian_for_locked_stake_authorize {
-                    Some((&meta.lockup, clock, custodian))
-                } else {
-                    None
-                },
-            )?;
-            stake_account.set_state(&StakeStateV2::Stake(meta, stake, stake_flags))
+    /// Authorize the given pubkey to manage stake (deactivate, withdraw). This may be called
+    /// multiple times, but will implicitly withdraw authorization from the previously authorized
+    /// staker. The default staker is the owner of the stake account's pubkey.
+    fn authorize(
+        &self,
+        signers: &HashSet<Pubkey>,
+        new_authority: &Pubkey,
+        stake_authorize: StakeAuthorize,
+        require_custodian_for_locked_stake_authorize: bool,
+        clock: &Clock,
+        custodian: Option<&Pubkey>,
+    ) -> Result<(), InstructionError> {
+        match self.state()? {
+            StakeState::Stake(mut meta, stake) => {
+                meta.authorized.authorize(
+                    signers,
+                    new_authority,
+                    stake_authorize,
+                    if require_custodian_for_locked_stake_authorize {
+                        Some((&meta.lockup, clock, custodian))
+                    } else {
+                        None
+                    },
+                )?;
+                self.set_state(&StakeState::Stake(meta, stake))
+            }
+            StakeState::Initialized(mut meta) => {
+                meta.authorized.authorize(
+                    signers,
+                    new_authority,
+                    stake_authorize,
+                    if require_custodian_for_locked_stake_authorize {
+                        Some((&meta.lockup, clock, custodian))
+                    } else {
+                        None
+                    },
+                )?;
+                self.set_state(&StakeState::Initialized(meta))
+            }
+            _ => Err(InstructionError::InvalidAccountData),
         }
-        StakeStateV2::Initialized(mut meta) => {
-            meta.authorized.authorize(
-                signers,
-                new_authority,
-                stake_authorize,
-                if require_custodian_for_locked_stake_authorize {
-                    Some((&meta.lockup, clock, custodian))
-                } else {
-                    None
-                },
-            )?;
-            stake_account.set_state(&StakeStateV2::Initialized(meta))
+    }
+    fn authorize_with_seed(
+        &self,
+        authority_base: &KeyedAccount,
+        authority_seed: &str,
+        authority_owner: &Pubkey,
+        new_authority: &Pubkey,
+        stake_authorize: StakeAuthorize,
+        require_custodian_for_locked_stake_authorize: bool,
+        clock: &Clock,
+        custodian: Option<&Pubkey>,
+    ) -> Result<(), InstructionError> {
+        let mut signers = HashSet::default();
+        if let Some(base_pubkey) = authority_base.signer_key() {
+            signers.insert(Pubkey::create_with_seed(
+                base_pubkey,
+                authority_seed,
+                authority_owner,
+            )?);
         }
-        _ => Err(InstructionError::InvalidAccountData),
+        self.authorize(
+            &signers,
+            new_authority,
+            stake_authorize,
+            require_custodian_for_locked_stake_authorize,
+            clock,
+            custodian,
+        )
     }
-}
+    fn delegate(
+        &self,
+        vote_account: &KeyedAccount,
+        clock: &Clock,
+        stake_history: &StakeHistory,
+        config: &Config,
+        signers: &HashSet<Pubkey>,
+    ) -> Result<(), InstructionError> {
+        if vote_account.owner()? != solana_vote_program::id() {
+            return Err(InstructionError::IncorrectProgramId);
+        }
 
-#[allow(clippy::too_many_arguments)]
-pub fn authorize_with_seed(
-    transaction_context: &TransactionContext,
-    instruction_context: &InstructionContext,
-    stake_account: &mut BorrowedAccount,
-    authority_base_index: IndexOfAccount,
-    authority_seed: &str,
-    authority_owner: &Pubkey,
-    new_authority: &Pubkey,
-    stake_authorize: StakeAuthorize,
-    require_custodian_for_locked_stake_authorize: bool,
-    clock: &Clock,
-    custodian: Option<&Pubkey>,
-) -> Result<(), InstructionError> {
-    let mut signers = HashSet::default();
-    if instruction_context.is_instruction_account_signer(authority_base_index)? {
-        let base_pubkey = transaction_context.get_key_of_account_at_index(
-            instruction_context
-                .get_index_of_instruction_account_in_transaction(authority_base_index)?,
-        )?;
-        signers.insert(Pubkey::create_with_seed(
-            base_pubkey,
-            authority_seed,
-            authority_owner,
-        )?);
+        match self.state()? {
+            StakeState::Initialized(meta) => {
+                meta.authorized.check(signers, StakeAuthorize::Staker)?;
+                let ValidatedDelegatedInfo { stake_amount } =
+                    validate_delegated_amount(self, &meta)?;
+                let stake = new_stake(
+                    stake_amount,
+                    vote_account.unsigned_key(),
+                    &State::<VoteStateVersions>::state(vote_account)?.convert_to_current(),
+                    clock.epoch,
+                    config,
+                );
+                self.set_state(&StakeState::Stake(meta, stake))
+            }
+            StakeState::Stake(meta, mut stake) => {
+                meta.authorized.check(signers, StakeAuthorize::Staker)?;
+                let ValidatedDelegatedInfo { stake_amount } =
+                    validate_delegated_amount(self, &meta)?;
+                redelegate(
+                    &mut stake,
+                    stake_amount,
+                    vote_account.unsigned_key(),
+                    &State::<VoteStateVersions>::state(vote_account)?.convert_to_current(),
+                    clock,
+                    stake_history,
+                    config,
+                )?;
+                self.set_state(&StakeState::Stake(meta, stake))
+            }
+            _ => Err(InstructionError::InvalidAccountData),
+        }
     }
-    authorize(
-        stake_account,
-        &signers,
-        new_authority,
-        stake_authorize,
-        require_custodian_for_locked_stake_authorize,
-        clock,
-        custodian,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn delegate(
-    invoke_context: &InvokeContext,
-    transaction_context: &TransactionContext,
-    instruction_context: &InstructionContext,
-    stake_account_index: IndexOfAccount,
-    vote_account_index: IndexOfAccount,
-    clock: &Clock,
-    stake_history: &StakeHistory,
-    signers: &HashSet<Pubkey>,
-    feature_set: &FeatureSet,
-) -> Result<(), InstructionError> {
-    let vote_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, vote_account_index)?;
-    if *vote_account.get_owner() != solana_vote_program::id() {
-        return Err(InstructionError::IncorrectProgramId);
-    }
-    let vote_pubkey = *vote_account.get_key();
-    let vote_state = vote_account.get_state::<VoteStateVersions>();
-    drop(vote_account);
-
-    let mut stake_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, stake_account_index)?;
-    match stake_account.get_state()? {
-        StakeStateV2::Initialized(meta) => {
+    fn deactivate(&self, clock: &Clock, signers: &HashSet<Pubkey>) -> Result<(), InstructionError> {
+        if let StakeState::Stake(meta, mut stake) = self.state()? {
             meta.authorized.check(signers, StakeAuthorize::Staker)?;
-            let ValidatedDelegatedInfo { stake_amount } =
-                validate_delegated_amount(&stake_account, &meta, feature_set)?;
-            let stake = new_stake(
-                stake_amount,
-                &vote_pubkey,
-                &vote_state?.convert_to_current(),
-                clock.epoch,
-            );
-            stake_account.set_state(&StakeStateV2::Stake(meta, stake, StakeFlags::empty()))
-        }
-        StakeStateV2::Stake(meta, mut stake, stake_flags) => {
-            meta.authorized.check(signers, StakeAuthorize::Staker)?;
-            let ValidatedDelegatedInfo { stake_amount } =
-                validate_delegated_amount(&stake_account, &meta, feature_set)?;
-            redelegate_stake(
-                invoke_context,
-                &mut stake,
-                stake_amount,
-                &vote_pubkey,
-                &vote_state?.convert_to_current(),
-                clock,
-                stake_history,
-            )?;
-            stake_account.set_state(&StakeStateV2::Stake(meta, stake, stake_flags))
-        }
-        _ => Err(InstructionError::InvalidAccountData),
-    }
-}
+            stake.deactivate(clock.epoch)?;
 
-pub fn deactivate(
-    stake_account: &mut BorrowedAccount,
-    clock: &Clock,
-    signers: &HashSet<Pubkey>,
-) -> Result<(), InstructionError> {
-    if let StakeStateV2::Stake(meta, mut stake, stake_flags) = stake_account.get_state()? {
+            self.set_state(&StakeState::Stake(meta, stake))
+        } else {
+            Err(InstructionError::InvalidAccountData)
+        }
+    }
+    fn set_lockup(
+        &self,
+        lockup: &LockupArgs,
+        signers: &HashSet<Pubkey>,
+        clock: &Clock,
+    ) -> Result<(), InstructionError> {
+        match self.state()? {
+            StakeState::Initialized(mut meta) => {
+                meta.set_lockup(lockup, signers, clock)?;
+                self.set_state(&StakeState::Initialized(meta))
+            }
+            StakeState::Stake(mut meta, stake) => {
+                meta.set_lockup(lockup, signers, clock)?;
+                self.set_state(&StakeState::Stake(meta, stake))
+            }
+            _ => Err(InstructionError::InvalidAccountData),
+        }
+    }
+
+    fn split(
+        &self,
+        lamports: u64,
+        split: &KeyedAccount,
+        signers: &HashSet<Pubkey>,
+    ) -> Result<(), InstructionError> {
+        if split.owner()? != id() {
+            return Err(InstructionError::IncorrectProgramId);
+        }
+        if split.data_len()? != std::mem::size_of::<StakeState>() {
+            return Err(InstructionError::InvalidAccountData);
+        }
+        if !matches!(split.state()?, StakeState::Uninitialized) {
+            return Err(InstructionError::InvalidAccountData);
+        }
+        if lamports > self.lamports()? {
+            return Err(InstructionError::InsufficientFunds);
+        }
+
+        match self.state()? {
+            StakeState::Stake(meta, mut stake) => {
+                meta.authorized.check(signers, StakeAuthorize::Staker)?;
+                let validated_split_info =
+                    validate_split_amount(self, split, lamports, &meta, Some(&stake))?;
+
+                // split the stake, subtract rent_exempt_balance unless
+                // the destination account already has those lamports
+                // in place.
+                // this means that the new stake account will have a stake equivalent to
+                // lamports minus rent_exempt_reserve if it starts out with a zero balance
+                let (remaining_stake_delta, split_stake_amount) =
+                    if validated_split_info.source_remaining_balance == 0 {
+                        // If split amount equals the full source stake (as implied by 0
+                        // source_remaining_balance), the new split stake must equal the same
+                        // amount, regardless of any current lamport balance in the split account.
+                        // Since split accounts retain the state of their source account, this
+                        // prevents any magic activation of stake by prefunding the split account.
+                        //
+                        // The new split stake also needs to ignore any positive delta between the
+                        // original rent_exempt_reserve and the split_rent_exempt_reserve, in order
+                        // to prevent magic activation of stake by splitting between accounts of
+                        // different sizes.
+                        let remaining_stake_delta =
+                            lamports.saturating_sub(meta.rent_exempt_reserve);
+                        (remaining_stake_delta, remaining_stake_delta)
+                    } else {
+                        // Otherwise, the new split stake should reflect the entire split
+                        // requested, less any lamports needed to cover the split_rent_exempt_reserve.
+                        (
+                            lamports,
+                            lamports.saturating_sub(
+                                validated_split_info
+                                    .destination_rent_exempt_reserve
+                                    .saturating_sub(split.lamports()?),
+                            ),
+                        )
+                    };
+                let split_stake = stake.split(remaining_stake_delta, split_stake_amount)?;
+                let mut split_meta = meta;
+                split_meta.rent_exempt_reserve =
+                    validated_split_info.destination_rent_exempt_reserve;
+
+                self.set_state(&StakeState::Stake(meta, stake))?;
+                split.set_state(&StakeState::Stake(split_meta, split_stake))?;
+            }
+            StakeState::Initialized(meta) => {
+                meta.authorized.check(signers, StakeAuthorize::Staker)?;
+                let validated_split_info =
+                    validate_split_amount(self, split, lamports, &meta, None)?;
+                let mut split_meta = meta;
+                split_meta.rent_exempt_reserve =
+                    validated_split_info.destination_rent_exempt_reserve;
+                split.set_state(&StakeState::Initialized(split_meta))?;
+            }
+            StakeState::Uninitialized => {
+                if !signers.contains(self.unsigned_key()) {
+                    return Err(InstructionError::MissingRequiredSignature);
+                }
+            }
+            _ => return Err(InstructionError::InvalidAccountData),
+        }
+
+        // Deinitialize state upon zero balance
+        if lamports == self.lamports()? {
+            self.set_state(&StakeState::Uninitialized)?;
+        }
+
+        split
+            .try_account_ref_mut()?
+            .checked_add_lamports(lamports)?;
+        self.try_account_ref_mut()?.checked_sub_lamports(lamports)?;
+        Ok(())
+    }
+
+    fn merge(
+        &self,
+        invoke_context: &InvokeContext,
+        source_account: &KeyedAccount,
+        clock: &Clock,
+        stake_history: &StakeHistory,
+        signers: &HashSet<Pubkey>,
+    ) -> Result<(), InstructionError> {
+        // Ensure source isn't spoofed
+        if source_account.owner()? != id() {
+            return Err(InstructionError::IncorrectProgramId);
+        }
+        // Close the self-reference loophole
+        if source_account.unsigned_key() == self.unsigned_key() {
+            return Err(InstructionError::InvalidArgument);
+        }
+
+        ic_msg!(invoke_context, "Checking if destination stake is mergeable");
+        let stake_merge_kind =
+            MergeKind::get_if_mergeable(invoke_context, self, clock, stake_history)?;
+        let meta = stake_merge_kind.meta();
+
+        // Authorized staker is allowed to split/merge accounts
         meta.authorized.check(signers, StakeAuthorize::Staker)?;
-        stake.deactivate(clock.epoch)?;
 
-        stake_account.set_state(&StakeStateV2::Stake(meta, stake, stake_flags))
-    } else {
-        Err(InstructionError::InvalidAccountData)
-    }
-}
+        ic_msg!(invoke_context, "Checking if source stake is mergeable");
+        let source_merge_kind =
+            MergeKind::get_if_mergeable(invoke_context, source_account, clock, stake_history)?;
 
-pub fn set_lockup(
-    stake_account: &mut BorrowedAccount,
-    lockup: &LockupArgs,
-    signers: &HashSet<Pubkey>,
-    clock: &Clock,
-) -> Result<(), InstructionError> {
-    match stake_account.get_state()? {
-        StakeStateV2::Initialized(mut meta) => {
-            meta.set_lockup(lockup, signers, clock)?;
-            stake_account.set_state(&StakeStateV2::Initialized(meta))
+        ic_msg!(invoke_context, "Merging stake accounts");
+        if let Some(merged_state) =
+            stake_merge_kind.merge(invoke_context, source_merge_kind, clock)?
+        {
+            self.set_state(&merged_state)?;
         }
-        StakeStateV2::Stake(mut meta, stake, stake_flags) => {
-            meta.set_lockup(lockup, signers, clock)?;
-            stake_account.set_state(&StakeStateV2::Stake(meta, stake, stake_flags))
-        }
-        _ => Err(InstructionError::InvalidAccountData),
-    }
-}
 
-pub fn split(
-    invoke_context: &InvokeContext,
-    transaction_context: &TransactionContext,
-    instruction_context: &InstructionContext,
-    stake_account_index: IndexOfAccount,
-    lamports: u64,
-    split_index: IndexOfAccount,
-    signers: &HashSet<Pubkey>,
-) -> Result<(), InstructionError> {
-    let split =
-        instruction_context.try_borrow_instruction_account(transaction_context, split_index)?;
-    if *split.get_owner() != id() {
-        return Err(InstructionError::IncorrectProgramId);
-    }
-    if split.get_data().len() != StakeStateV2::size_of() {
-        return Err(InstructionError::InvalidAccountData);
-    }
-    if !matches!(split.get_state()?, StakeStateV2::Uninitialized) {
-        return Err(InstructionError::InvalidAccountData);
-    }
-    let split_lamport_balance = split.get_lamports();
-    drop(split);
-    let stake_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, stake_account_index)?;
-    if lamports > stake_account.get_lamports() {
-        return Err(InstructionError::InsufficientFunds);
-    }
-    let stake_state = stake_account.get_state()?;
-    drop(stake_account);
+        // Source is about to be drained, deinitialize its state
+        source_account.set_state(&StakeState::Uninitialized)?;
 
-    match stake_state {
-        StakeStateV2::Stake(meta, mut stake, stake_flags) => {
-            meta.authorized.check(signers, StakeAuthorize::Staker)?;
-            let minimum_delegation = crate::get_minimum_delegation(&invoke_context.feature_set);
-            let validated_split_info = validate_split_amount(
-                invoke_context,
-                transaction_context,
-                instruction_context,
-                stake_account_index,
-                split_index,
-                lamports,
-                &meta,
-                minimum_delegation,
-            )?;
+        // Drain the source stake account
+        let lamports = source_account.lamports()?;
+        source_account
+            .try_account_ref_mut()?
+            .checked_sub_lamports(lamports)?;
+        self.try_account_ref_mut()?.checked_add_lamports(lamports)?;
+        Ok(())
+    }
 
-            // split the stake, subtract rent_exempt_balance unless
-            // the destination account already has those lamports
-            // in place.
-            // this means that the new stake account will have a stake equivalent to
-            // lamports minus rent_exempt_reserve if it starts out with a zero balance
-            let (remaining_stake_delta, split_stake_amount) =
-                if validated_split_info.source_remaining_balance == 0 {
-                    // If split amount equals the full source stake (as implied by 0
-                    // source_remaining_balance), the new split stake must equal the same
-                    // amount, regardless of any current lamport balance in the split account.
-                    // Since split accounts retain the state of their source account, this
-                    // prevents any magic activation of stake by prefunding the split account.
-                    //
-                    // The new split stake also needs to ignore any positive delta between the
-                    // original rent_exempt_reserve and the split_rent_exempt_reserve, in order
-                    // to prevent magic activation of stake by splitting between accounts of
-                    // different sizes.
-                    let remaining_stake_delta = lamports.saturating_sub(meta.rent_exempt_reserve);
-                    (remaining_stake_delta, remaining_stake_delta)
+    fn withdraw(
+        &self,
+        lamports: u64,
+        to: &KeyedAccount,
+        clock: &Clock,
+        stake_history: &StakeHistory,
+        withdraw_authority: &KeyedAccount,
+        custodian: Option<&KeyedAccount>,
+    ) -> Result<(), InstructionError> {
+        let mut signers = HashSet::new();
+        let withdraw_authority_pubkey = withdraw_authority
+            .signer_key()
+            .ok_or(InstructionError::MissingRequiredSignature)?;
+        signers.insert(*withdraw_authority_pubkey);
+
+        let (lockup, reserve, is_staked) = match self.state()? {
+            StakeState::Stake(meta, stake) => {
+                meta.authorized
+                    .check(&signers, StakeAuthorize::Withdrawer)?;
+                // if we have a deactivation epoch and we're in cooldown
+                let staked = if clock.epoch >= stake.delegation.deactivation_epoch {
+                    stake.delegation.stake(clock.epoch, Some(stake_history))
                 } else {
-                    // Otherwise, the new split stake should reflect the entire split
-                    // requested, less any lamports needed to cover the split_rent_exempt_reserve.
-
-                    if stake.delegation.stake.saturating_sub(lamports) < minimum_delegation {
-                        return Err(StakeError::InsufficientDelegation.into());
-                    }
-
-                    (
-                        lamports,
-                        lamports.saturating_sub(
-                            validated_split_info
-                                .destination_rent_exempt_reserve
-                                .saturating_sub(split_lamport_balance),
-                        ),
-                    )
+                    // Assume full stake if the stake account hasn't been
+                    //  de-activated, because in the future the exposed stake
+                    //  might be higher than stake.stake() due to warmup
+                    stake.delegation.stake
                 };
 
-            if split_stake_amount < minimum_delegation {
-                return Err(StakeError::InsufficientDelegation.into());
+                let staked_and_reserve = checked_add(staked, meta.rent_exempt_reserve)?;
+                (meta.lockup, staked_and_reserve, staked != 0)
             }
+            StakeState::Initialized(meta) => {
+                meta.authorized
+                    .check(&signers, StakeAuthorize::Withdrawer)?;
+                // stake accounts must have a balance >= rent_exempt_reserve + minimum_stake_delegation
+                let reserve = checked_add(meta.rent_exempt_reserve, MINIMUM_STAKE_DELEGATION)?;
 
-            let split_stake = stake.split(remaining_stake_delta, split_stake_amount)?;
-            let mut split_meta = meta;
-            split_meta.rent_exempt_reserve = validated_split_info.destination_rent_exempt_reserve;
-
-            let mut stake_account = instruction_context
-                .try_borrow_instruction_account(transaction_context, stake_account_index)?;
-            stake_account.set_state(&StakeStateV2::Stake(meta, stake, stake_flags))?;
-            drop(stake_account);
-            let mut split = instruction_context
-                .try_borrow_instruction_account(transaction_context, split_index)?;
-            split.set_state(&StakeStateV2::Stake(split_meta, split_stake, stake_flags))?;
-        }
-        StakeStateV2::Initialized(meta) => {
-            meta.authorized.check(signers, StakeAuthorize::Staker)?;
-            let validated_split_info = validate_split_amount(
-                invoke_context,
-                transaction_context,
-                instruction_context,
-                stake_account_index,
-                split_index,
-                lamports,
-                &meta,
-                0, // additional_required_lamports
-            )?;
-            let mut split_meta = meta;
-            split_meta.rent_exempt_reserve = validated_split_info.destination_rent_exempt_reserve;
-            let mut split = instruction_context
-                .try_borrow_instruction_account(transaction_context, split_index)?;
-            split.set_state(&StakeStateV2::Initialized(split_meta))?;
-        }
-        StakeStateV2::Uninitialized => {
-            let stake_pubkey = transaction_context.get_key_of_account_at_index(
-                instruction_context
-                    .get_index_of_instruction_account_in_transaction(stake_account_index)?,
-            )?;
-            if !signers.contains(stake_pubkey) {
-                return Err(InstructionError::MissingRequiredSignature);
+                (meta.lockup, reserve, false)
             }
-        }
-        _ => return Err(InstructionError::InvalidAccountData),
-    }
-
-    // Deinitialize state upon zero balance
-    let mut stake_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, stake_account_index)?;
-    if lamports == stake_account.get_lamports() {
-        stake_account.set_state(&StakeStateV2::Uninitialized)?;
-    }
-    drop(stake_account);
-
-    let mut split =
-        instruction_context.try_borrow_instruction_account(transaction_context, split_index)?;
-    split.checked_add_lamports(lamports)?;
-    drop(split);
-    let mut stake_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, stake_account_index)?;
-    stake_account.checked_sub_lamports(lamports)?;
-    Ok(())
-}
-
-pub fn merge(
-    invoke_context: &InvokeContext,
-    transaction_context: &TransactionContext,
-    instruction_context: &InstructionContext,
-    stake_account_index: IndexOfAccount,
-    source_account_index: IndexOfAccount,
-    clock: &Clock,
-    stake_history: &StakeHistory,
-    signers: &HashSet<Pubkey>,
-) -> Result<(), InstructionError> {
-    let mut source_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, source_account_index)?;
-    // Ensure source isn't spoofed
-    if *source_account.get_owner() != id() {
-        return Err(InstructionError::IncorrectProgramId);
-    }
-    // Close the stake_account-reference loophole
-    if instruction_context.get_index_of_instruction_account_in_transaction(stake_account_index)?
-        == instruction_context
-            .get_index_of_instruction_account_in_transaction(source_account_index)?
-    {
-        return Err(InstructionError::InvalidArgument);
-    }
-    let mut stake_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, stake_account_index)?;
-
-    ic_msg!(invoke_context, "Checking if destination stake is mergeable");
-    let stake_merge_kind = MergeKind::get_if_mergeable(
-        invoke_context,
-        &stake_account.get_state()?,
-        stake_account.get_lamports(),
-        clock,
-        stake_history,
-    )?;
-
-    // Authorized staker is allowed to split/merge accounts
-    stake_merge_kind
-        .meta()
-        .authorized
-        .check(signers, StakeAuthorize::Staker)?;
-
-    ic_msg!(invoke_context, "Checking if source stake is mergeable");
-    let source_merge_kind = MergeKind::get_if_mergeable(
-        invoke_context,
-        &source_account.get_state()?,
-        source_account.get_lamports(),
-        clock,
-        stake_history,
-    )?;
-
-    ic_msg!(invoke_context, "Merging stake accounts");
-    if let Some(merged_state) = stake_merge_kind.merge(invoke_context, source_merge_kind, clock)? {
-        stake_account.set_state(&merged_state)?;
-    }
-
-    // Source is about to be drained, deinitialize its state
-    source_account.set_state(&StakeStateV2::Uninitialized)?;
-
-    // Drain the source stake account
-    let lamports = source_account.get_lamports();
-    source_account.checked_sub_lamports(lamports)?;
-    stake_account.checked_add_lamports(lamports)?;
-    Ok(())
-}
-
-pub fn redelegate(
-    invoke_context: &InvokeContext,
-    transaction_context: &TransactionContext,
-    instruction_context: &InstructionContext,
-    stake_account: &mut BorrowedAccount,
-    uninitialized_stake_account_index: IndexOfAccount,
-    vote_account_index: IndexOfAccount,
-    signers: &HashSet<Pubkey>,
-) -> Result<(), InstructionError> {
-    let clock = invoke_context.get_sysvar_cache().get_clock()?;
-
-    // ensure `uninitialized_stake_account_index` is in the uninitialized state
-    let mut uninitialized_stake_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, uninitialized_stake_account_index)?;
-    if *uninitialized_stake_account.get_owner() != id() {
-        ic_msg!(
-            invoke_context,
-            "expected uninitialized stake account owner to be {}, not {}",
-            id(),
-            *uninitialized_stake_account.get_owner()
-        );
-        return Err(InstructionError::IncorrectProgramId);
-    }
-    if uninitialized_stake_account.get_data().len() != StakeStateV2::size_of() {
-        ic_msg!(
-            invoke_context,
-            "expected uninitialized stake account data len to be {}, not {}",
-            StakeStateV2::size_of(),
-            uninitialized_stake_account.get_data().len()
-        );
-        return Err(InstructionError::InvalidAccountData);
-    }
-    if !matches!(
-        uninitialized_stake_account.get_state()?,
-        StakeStateV2::Uninitialized
-    ) {
-        ic_msg!(
-            invoke_context,
-            "expected uninitialized stake account to be uninitialized",
-        );
-        return Err(InstructionError::AccountAlreadyInitialized);
-    }
-
-    // validate the provided vote account
-    let vote_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, vote_account_index)?;
-    if *vote_account.get_owner() != solana_vote_program::id() {
-        ic_msg!(
-            invoke_context,
-            "expected vote account owner to be {}, not {}",
-            solana_vote_program::id(),
-            *vote_account.get_owner()
-        );
-        return Err(InstructionError::IncorrectProgramId);
-    }
-    let vote_pubkey = *vote_account.get_key();
-    let vote_state = vote_account.get_state::<VoteStateVersions>()?;
-
-    let (stake_meta, effective_stake) =
-        if let StakeStateV2::Stake(meta, stake, _stake_flags) = stake_account.get_state()? {
-            let stake_history = invoke_context.get_sysvar_cache().get_stake_history()?;
-            let status = stake.delegation.stake_activating_and_deactivating(
-                clock.epoch,
-                Some(&stake_history),
-                new_warmup_cooldown_rate_epoch(invoke_context),
-            );
-            if status.effective == 0 || status.activating != 0 || status.deactivating != 0 {
-                ic_msg!(invoke_context, "stake is not active");
-                return Err(StakeError::RedelegateTransientOrInactiveStake.into());
+            StakeState::Uninitialized => {
+                if !signers.contains(self.unsigned_key()) {
+                    return Err(InstructionError::MissingRequiredSignature);
+                }
+                (Lockup::default(), 0, false) // no lockup, no restrictions
             }
-
-            // Deny redelegating to the same vote account. This is nonsensical and could be used to
-            // grief the global stake warm-up/cool-down rate
-            if stake.delegation.voter_pubkey == vote_pubkey {
-                ic_msg!(
-                    invoke_context,
-                    "redelegating to the same vote account not permitted"
-                );
-                return Err(StakeError::RedelegateToSameVoteAccount.into());
-            }
-
-            (meta, status.effective)
-        } else {
-            ic_msg!(invoke_context, "invalid stake account data",);
-            return Err(InstructionError::InvalidAccountData);
+            _ => return Err(InstructionError::InvalidAccountData),
         };
 
-    // deactivate `stake_account`
-    //
-    // Note: This function also ensures `signers` contains the `StakeAuthorize::Staker`
-    deactivate(stake_account, &clock, signers)?;
-
-    // transfer the effective stake to the uninitialized stake account
-    stake_account.checked_sub_lamports(effective_stake)?;
-    uninitialized_stake_account.checked_add_lamports(effective_stake)?;
-
-    // initialize and schedule `uninitialized_stake_account` for activation
-    let sysvar_cache = invoke_context.get_sysvar_cache();
-    let rent = sysvar_cache.get_rent()?;
-    let mut uninitialized_stake_meta = stake_meta;
-    uninitialized_stake_meta.rent_exempt_reserve =
-        rent.minimum_balance(uninitialized_stake_account.get_data().len());
-
-    let ValidatedDelegatedInfo { stake_amount } = validate_delegated_amount(
-        &uninitialized_stake_account,
-        &uninitialized_stake_meta,
-        &invoke_context.feature_set,
-    )?;
-    uninitialized_stake_account.set_state(&StakeStateV2::Stake(
-        uninitialized_stake_meta,
-        new_stake(
-            stake_amount,
-            &vote_pubkey,
-            &vote_state.convert_to_current(),
-            clock.epoch,
-        ),
-        StakeFlags::empty(),
-    ))?;
-
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn withdraw(
-    transaction_context: &TransactionContext,
-    instruction_context: &InstructionContext,
-    stake_account_index: IndexOfAccount,
-    lamports: u64,
-    to_index: IndexOfAccount,
-    clock: &Clock,
-    stake_history: &StakeHistory,
-    withdraw_authority_index: IndexOfAccount,
-    custodian_index: Option<IndexOfAccount>,
-    new_rate_activation_epoch: Option<Epoch>,
-) -> Result<(), InstructionError> {
-    let withdraw_authority_pubkey = transaction_context.get_key_of_account_at_index(
-        instruction_context
-            .get_index_of_instruction_account_in_transaction(withdraw_authority_index)?,
-    )?;
-    if !instruction_context.is_instruction_account_signer(withdraw_authority_index)? {
-        return Err(InstructionError::MissingRequiredSignature);
-    }
-    let mut signers = HashSet::new();
-    signers.insert(*withdraw_authority_pubkey);
-
-    let mut stake_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, stake_account_index)?;
-    let (lockup, reserve, is_staked) = match stake_account.get_state()? {
-        StakeStateV2::Stake(meta, stake, _stake_flag) => {
-            meta.authorized
-                .check(&signers, StakeAuthorize::Withdrawer)?;
-            // if we have a deactivation epoch and we're in cooldown
-            let staked = if clock.epoch >= stake.delegation.deactivation_epoch {
-                stake
-                    .delegation
-                    .stake(clock.epoch, Some(stake_history), new_rate_activation_epoch)
-            } else {
-                // Assume full stake if the stake account hasn't been
-                //  de-activated, because in the future the exposed stake
-                //  might be higher than stake.stake() due to warmup
-                stake.delegation.stake
-            };
-
-            let staked_and_reserve = checked_add(staked, meta.rent_exempt_reserve)?;
-            (meta.lockup, staked_and_reserve, staked != 0)
-        }
-        StakeStateV2::Initialized(meta) => {
-            meta.authorized
-                .check(&signers, StakeAuthorize::Withdrawer)?;
-            // stake accounts must have a balance >= rent_exempt_reserve
-            (meta.lockup, meta.rent_exempt_reserve, false)
-        }
-        StakeStateV2::Uninitialized => {
-            if !signers.contains(stake_account.get_key()) {
-                return Err(InstructionError::MissingRequiredSignature);
-            }
-            (Lockup::default(), 0, false) // no lockup, no restrictions
-        }
-        _ => return Err(InstructionError::InvalidAccountData),
-    };
-
-    // verify that lockup has expired or that the withdrawal is signed by
-    //   the custodian, both epoch and unix_timestamp must have passed
-    let custodian_pubkey = if let Some(custodian_index) = custodian_index {
-        if instruction_context.is_instruction_account_signer(custodian_index)? {
-            Some(
-                transaction_context.get_key_of_account_at_index(
-                    instruction_context
-                        .get_index_of_instruction_account_in_transaction(custodian_index)?,
-                )?,
-            )
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    if lockup.is_in_force(clock, custodian_pubkey) {
-        return Err(StakeError::LockupInForce.into());
-    }
-
-    let lamports_and_reserve = checked_add(lamports, reserve)?;
-    // if the stake is active, we mustn't allow the account to go away
-    if is_staked // line coverage for branch coverage
-            && lamports_and_reserve > stake_account.get_lamports()
-    {
-        return Err(InstructionError::InsufficientFunds);
-    }
-
-    if lamports != stake_account.get_lamports() // not a full withdrawal
-            && lamports_and_reserve > stake_account.get_lamports()
-    {
-        assert!(!is_staked);
-        return Err(InstructionError::InsufficientFunds);
-    }
-
-    // Deinitialize state upon zero balance
-    if lamports == stake_account.get_lamports() {
-        stake_account.set_state(&StakeStateV2::Uninitialized)?;
-    }
-
-    stake_account.checked_sub_lamports(lamports)?;
-    drop(stake_account);
-    let mut to =
-        instruction_context.try_borrow_instruction_account(transaction_context, to_index)?;
-    to.checked_add_lamports(lamports)?;
-    Ok(())
-}
-
-pub(crate) fn deactivate_delinquent(
-    transaction_context: &TransactionContext,
-    instruction_context: &InstructionContext,
-    stake_account: &mut BorrowedAccount,
-    delinquent_vote_account_index: IndexOfAccount,
-    reference_vote_account_index: IndexOfAccount,
-    current_epoch: Epoch,
-) -> Result<(), InstructionError> {
-    let delinquent_vote_account_pubkey = transaction_context.get_key_of_account_at_index(
-        instruction_context
-            .get_index_of_instruction_account_in_transaction(delinquent_vote_account_index)?,
-    )?;
-    let delinquent_vote_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, delinquent_vote_account_index)?;
-    if *delinquent_vote_account.get_owner() != solana_vote_program::id() {
-        return Err(InstructionError::IncorrectProgramId);
-    }
-    let delinquent_vote_state = delinquent_vote_account
-        .get_state::<VoteStateVersions>()?
-        .convert_to_current();
-
-    let reference_vote_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, reference_vote_account_index)?;
-    if *reference_vote_account.get_owner() != solana_vote_program::id() {
-        return Err(InstructionError::IncorrectProgramId);
-    }
-    let reference_vote_state = reference_vote_account
-        .get_state::<VoteStateVersions>()?
-        .convert_to_current();
-
-    if !acceptable_reference_epoch_credits(&reference_vote_state.epoch_credits, current_epoch) {
-        return Err(StakeError::InsufficientReferenceVotes.into());
-    }
-
-    if let StakeStateV2::Stake(meta, mut stake, stake_flags) = stake_account.get_state()? {
-        if stake.delegation.voter_pubkey != *delinquent_vote_account_pubkey {
-            return Err(StakeError::VoteAddressMismatch.into());
+        // verify that lockup has expired or that the withdrawal is signed by
+        //   the custodian, both epoch and unix_timestamp must have passed
+        let custodian_pubkey = custodian.and_then(|keyed_account| keyed_account.signer_key());
+        if lockup.is_in_force(clock, custodian_pubkey) {
+            return Err(StakeError::LockupInForce.into());
         }
 
-        // Deactivate the stake account if its delegated vote account has never voted or has not
-        // voted in the last `MINIMUM_DELINQUENT_EPOCHS_FOR_DEACTIVATION`
-        if eligible_for_deactivate_delinquent(&delinquent_vote_state.epoch_credits, current_epoch) {
-            stake.deactivate(current_epoch)?;
-            stake_account.set_state(&StakeStateV2::Stake(meta, stake, stake_flags))
-        } else {
-            Err(StakeError::MinimumDelinquentEpochsForDeactivationNotMet.into())
+        let lamports_and_reserve = checked_add(lamports, reserve)?;
+        // if the stake is active, we mustn't allow the account to go away
+        if is_staked // line coverage for branch coverage
+            && lamports_and_reserve > self.lamports()?
+        {
+            return Err(InstructionError::InsufficientFunds);
         }
-    } else {
-        Err(InstructionError::InvalidAccountData)
+
+        if lamports != self.lamports()? // not a full withdrawal
+            && lamports_and_reserve > self.lamports()?
+        {
+            assert!(!is_staked);
+            return Err(InstructionError::InsufficientFunds);
+        }
+
+        // Deinitialize state upon zero balance
+        if lamports == self.lamports()? {
+            self.set_state(&StakeState::Uninitialized)?;
+        }
+
+        self.try_account_ref_mut()?.checked_sub_lamports(lamports)?;
+        to.try_account_ref_mut()?.checked_add_lamports(lamports)?;
+        Ok(())
     }
 }
 
@@ -1158,19 +835,10 @@ struct ValidatedDelegatedInfo {
 /// Ensure the stake delegation amount is valid.  This checks that the account meets the minimum
 /// balance requirements of delegated stake.  If not, return an error.
 fn validate_delegated_amount(
-    account: &BorrowedAccount,
+    account: &KeyedAccount,
     meta: &Meta,
-    feature_set: &FeatureSet,
 ) -> Result<ValidatedDelegatedInfo, InstructionError> {
-    let stake_amount = account
-        .get_lamports()
-        .saturating_sub(meta.rent_exempt_reserve); // can't stake the rent
-
-    // Stake accounts may be initialized with a stake amount below the minimum delegation so check
-    // that the minimum is met before delegation.
-    if stake_amount < crate::get_minimum_delegation(feature_set) {
-        return Err(StakeError::InsufficientDelegation.into());
-    }
+    let stake_amount = account.lamports()?.saturating_sub(meta.rent_exempt_reserve); // can't stake the rent
     Ok(ValidatedDelegatedInfo { stake_amount })
 }
 
@@ -1187,24 +855,14 @@ struct ValidatedSplitInfo {
 /// delegation, and that the source account has enough lamports for the request split amount.  If
 /// not, return an error.
 fn validate_split_amount(
-    invoke_context: &InvokeContext,
-    transaction_context: &TransactionContext,
-    instruction_context: &InstructionContext,
-    source_account_index: IndexOfAccount,
-    destination_account_index: IndexOfAccount,
+    source_account: &KeyedAccount,
+    destination_account: &KeyedAccount,
     lamports: u64,
     source_meta: &Meta,
-    additional_required_lamports: u64,
+    source_stake: Option<&Stake>,
 ) -> Result<ValidatedSplitInfo, InstructionError> {
-    let source_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, source_account_index)?;
-    let source_lamports = source_account.get_lamports();
-    drop(source_account);
-    let destination_account = instruction_context
-        .try_borrow_instruction_account(transaction_context, destination_account_index)?;
-    let destination_lamports = destination_account.get_lamports();
-    let destination_data_len = destination_account.get_data().len();
-    drop(destination_account);
+    let source_lamports = source_account.lamports()?;
+    let destination_lamports = destination_account.lamports()?;
 
     // Split amount has to be something
     if lamports == 0 {
@@ -1222,7 +880,7 @@ fn validate_split_amount(
     // account will be closed)
     let source_minimum_balance = source_meta
         .rent_exempt_reserve
-        .saturating_add(additional_required_lamports);
+        .saturating_add(MINIMUM_STAKE_DELEGATION);
     let source_remaining_balance = source_lamports.saturating_sub(lamports);
     if source_remaining_balance == 0 {
         // full amount is a withdrawal
@@ -1239,13 +897,30 @@ fn validate_split_amount(
     // This must handle:
     // 1. The destination account having a different rent exempt reserve due to data size changes
     // 2. The destination account being prefunded, which would lower the minimum split amount
-    let rent = invoke_context.get_sysvar_cache().get_rent()?;
-    let destination_rent_exempt_reserve = rent.minimum_balance(destination_data_len);
+    let destination_rent_exempt_reserve = calculate_split_rent_exempt_reserve(
+        source_meta.rent_exempt_reserve,
+        source_account.data_len()? as u64,
+        destination_account.data_len()? as u64,
+    );
     let destination_minimum_balance =
-        destination_rent_exempt_reserve.saturating_add(additional_required_lamports);
+        destination_rent_exempt_reserve.saturating_add(MINIMUM_STAKE_DELEGATION);
     let destination_balance_deficit =
         destination_minimum_balance.saturating_sub(destination_lamports);
     if lamports < destination_balance_deficit {
+        return Err(InstructionError::InsufficientFunds);
+    }
+
+    // If the source account is already staked, the destination will end up staked as well.  Verify
+    // the destination account's delegation amount is at least MINIMUM_STAKE_DELEGATION.
+    //
+    // The *delegation* requirements are different than the *balance* requirements.  If the
+    // destination account is prefunded with a balance of `rent exempt reserve + minimum stake
+    // delegation - 1`, the minimum split amount to satisfy the *balance* requirements is 1
+    // lamport.  And since *only* the split amount is immediately staked in the destination
+    // account, the split amount must be at least the minimum stake delegation.  So if the minimum
+    // stake delegation was 10 lamports, then a split amount of 1 lamport would not meet the
+    // *delegation* requirements.
+    if source_stake.is_some() && lamports < MINIMUM_STAKE_DELEGATION {
         return Err(InstructionError::InsufficientFunds);
     }
 
@@ -1257,49 +932,46 @@ fn validate_split_amount(
 
 #[derive(Clone, Debug, PartialEq)]
 enum MergeKind {
-    Inactive(Meta, u64, StakeFlags),
-    ActivationEpoch(Meta, Stake, StakeFlags),
+    Inactive(Meta, u64),
+    ActivationEpoch(Meta, Stake),
     FullyActive(Meta, Stake),
 }
 
 impl MergeKind {
     fn meta(&self) -> &Meta {
         match self {
-            Self::Inactive(meta, _, _) => meta,
-            Self::ActivationEpoch(meta, _, _) => meta,
+            Self::Inactive(meta, _) => meta,
+            Self::ActivationEpoch(meta, _) => meta,
             Self::FullyActive(meta, _) => meta,
         }
     }
 
     fn active_stake(&self) -> Option<&Stake> {
         match self {
-            Self::Inactive(_, _, _) => None,
-            Self::ActivationEpoch(_, stake, _) => Some(stake),
+            Self::Inactive(_, _) => None,
+            Self::ActivationEpoch(_, stake) => Some(stake),
             Self::FullyActive(_, stake) => Some(stake),
         }
     }
 
     fn get_if_mergeable(
         invoke_context: &InvokeContext,
-        stake_state: &StakeStateV2,
-        stake_lamports: u64,
+        stake_keyed_account: &KeyedAccount,
         clock: &Clock,
         stake_history: &StakeHistory,
     ) -> Result<Self, InstructionError> {
-        match stake_state {
-            StakeStateV2::Stake(meta, stake, stake_flags) => {
+        match stake_keyed_account.state()? {
+            StakeState::Stake(meta, stake) => {
                 // stake must not be in a transient state. Transient here meaning
                 // activating or deactivating with non-zero effective stake.
-                let status = stake.delegation.stake_activating_and_deactivating(
-                    clock.epoch,
-                    Some(stake_history),
-                    new_warmup_cooldown_rate_epoch(invoke_context),
-                );
+                let status = stake
+                    .delegation
+                    .stake_activating_and_deactivating(clock.epoch, Some(stake_history));
 
                 match (status.effective, status.activating, status.deactivating) {
-                    (0, 0, 0) => Ok(Self::Inactive(*meta, stake_lamports, *stake_flags)),
-                    (0, _, _) => Ok(Self::ActivationEpoch(*meta, *stake, *stake_flags)),
-                    (_, 0, 0) => Ok(Self::FullyActive(*meta, *stake)),
+                    (0, 0, 0) => Ok(Self::Inactive(meta, stake_keyed_account.lamports()?)),
+                    (0, _, _) => Ok(Self::ActivationEpoch(meta, stake)),
+                    (_, 0, 0) => Ok(Self::FullyActive(meta, stake)),
                     _ => {
                         let err = StakeError::MergeTransientStake;
                         ic_msg!(invoke_context, "{}", err);
@@ -1307,8 +979,8 @@ impl MergeKind {
                     }
                 }
             }
-            StakeStateV2::Initialized(meta) => {
-                Ok(Self::Inactive(*meta, stake_lamports, StakeFlags::empty()))
+            StakeState::Initialized(meta) => {
+                Ok(Self::Inactive(meta, stake_keyed_account.lamports()?))
             }
             _ => Err(InstructionError::InvalidAccountData),
         }
@@ -1344,7 +1016,9 @@ impl MergeKind {
         if stake.voter_pubkey != source.voter_pubkey {
             ic_msg!(invoke_context, "Unable to merge due to voter mismatch");
             Err(StakeError::MergeMismatch.into())
-        } else if stake.deactivation_epoch == Epoch::MAX && source.deactivation_epoch == Epoch::MAX
+        } else if (stake.warmup_cooldown_rate - source.warmup_cooldown_rate).abs() < f64::EPSILON
+            && stake.deactivation_epoch == Epoch::MAX
+            && source.deactivation_epoch == Epoch::MAX
         {
             Ok(())
         } else {
@@ -1381,7 +1055,7 @@ impl MergeKind {
         invoke_context: &InvokeContext,
         source: Self,
         clock: &Clock,
-    ) -> Result<Option<StakeStateV2>, InstructionError> {
+    ) -> Result<Option<StakeState>, InstructionError> {
         Self::metas_can_merge(invoke_context, self.meta(), source.meta(), clock)?;
         self.active_stake()
             .zip(source.active_stake())
@@ -1401,22 +1075,15 @@ impl MergeKind {
             })
             .unwrap_or(Ok(()))?;
         let merged_state = match (self, source) {
-            (Self::Inactive(_, _, _), Self::Inactive(_, _, _)) => None,
-            (Self::Inactive(_, _, _), Self::ActivationEpoch(_, _, _)) => None,
-            (
-                Self::ActivationEpoch(meta, mut stake, stake_flags),
-                Self::Inactive(_, source_lamports, source_stake_flags),
-            ) => {
+            (Self::Inactive(_, _), Self::Inactive(_, _)) => None,
+            (Self::Inactive(_, _), Self::ActivationEpoch(_, _)) => None,
+            (Self::ActivationEpoch(meta, mut stake), Self::Inactive(_, source_lamports)) => {
                 stake.delegation.stake = checked_add(stake.delegation.stake, source_lamports)?;
-                Some(StakeStateV2::Stake(
-                    meta,
-                    stake,
-                    stake_flags.union(source_stake_flags),
-                ))
+                Some(StakeState::Stake(meta, stake))
             }
             (
-                Self::ActivationEpoch(meta, mut stake, stake_flags),
-                Self::ActivationEpoch(source_meta, source_stake, source_stake_flags),
+                Self::ActivationEpoch(meta, mut stake),
+                Self::ActivationEpoch(source_meta, source_stake),
             ) => {
                 let source_lamports = checked_add(
                     source_meta.rent_exempt_reserve,
@@ -1428,11 +1095,7 @@ impl MergeKind {
                     source_lamports,
                     source_stake.credits_observed,
                 )?;
-                Some(StakeStateV2::Stake(
-                    meta,
-                    stake,
-                    stake_flags.union(source_stake_flags),
-                ))
+                Some(StakeState::Stake(meta, stake))
             }
             (Self::FullyActive(meta, mut stake), Self::FullyActive(_, source_stake)) => {
                 // Don't stake the source account's `rent_exempt_reserve` to
@@ -1445,7 +1108,7 @@ impl MergeKind {
                     source_stake.delegation.stake,
                     source_stake.credits_observed,
                 )?;
-                Some(StakeStateV2::Stake(meta, stake, StakeFlags::empty()))
+                Some(StakeState::Stake(meta, stake))
             }
             _ => return Err(StakeError::MergeMismatch.into()),
         };
@@ -1524,22 +1187,20 @@ fn stake_weighted_credits_observed(
 #[doc(hidden)]
 pub fn redeem_rewards(
     rewarded_epoch: Epoch,
-    stake_state: StakeStateV2,
+    stake_state: StakeState,
     stake_account: &mut AccountSharedData,
     vote_state: &VoteState,
     point_value: &PointValue,
     stake_history: Option<&StakeHistory>,
     inflation_point_calc_tracer: Option<impl Fn(&InflationPointCalculationEvent)>,
-    new_rate_activation_epoch: Option<Epoch>,
+    fix_activating_credits_observed: bool,
 ) -> Result<(u64, u64), InstructionError> {
-    if let StakeStateV2::Stake(meta, mut stake, stake_flags) = stake_state {
+    if let StakeState::Stake(meta, mut stake) = stake_state {
         if let Some(inflation_point_calc_tracer) = inflation_point_calc_tracer.as_ref() {
             inflation_point_calc_tracer(
-                &InflationPointCalculationEvent::EffectiveStakeAtRewardedEpoch(stake.stake(
-                    rewarded_epoch,
-                    stake_history,
-                    new_rate_activation_epoch,
-                )),
+                &InflationPointCalculationEvent::EffectiveStakeAtRewardedEpoch(
+                    stake.stake(rewarded_epoch, stake_history),
+                ),
             );
             inflation_point_calc_tracer(&InflationPointCalculationEvent::RentExemptReserve(
                 meta.rent_exempt_reserve,
@@ -1556,10 +1217,10 @@ pub fn redeem_rewards(
             vote_state,
             stake_history,
             inflation_point_calc_tracer,
-            new_rate_activation_epoch,
+            fix_activating_credits_observed,
         ) {
             stake_account.checked_add_lamports(stakers_reward)?;
-            stake_account.set_state(&StakeStateV2::Stake(meta, stake, stake_flags))?;
+            stake_account.set_state(&StakeState::Stake(meta, stake))?;
 
             Ok((stakers_reward, voters_reward))
         } else {
@@ -1573,22 +1234,33 @@ pub fn redeem_rewards(
 // utility function, used by runtime
 #[doc(hidden)]
 pub fn calculate_points(
-    stake_state: &StakeStateV2,
+    stake_state: &StakeState,
     vote_state: &VoteState,
     stake_history: Option<&StakeHistory>,
-    new_rate_activation_epoch: Option<Epoch>,
 ) -> Result<u128, InstructionError> {
-    if let StakeStateV2::Stake(_meta, stake, _stake_flags) = stake_state {
+    if let StakeState::Stake(_meta, stake) = stake_state {
         Ok(calculate_stake_points(
             stake,
             vote_state,
             stake_history,
             null_tracer(),
-            new_rate_activation_epoch,
         ))
     } else {
         Err(InstructionError::InvalidAccountData)
     }
+}
+
+// utility function, used by Split
+//This emulates current Rent math in order to preserve backward compatibility. In the future, and
+//to support variable rent, the Split instruction should pass in the Rent sysvar instead.
+fn calculate_split_rent_exempt_reserve(
+    source_rent_exempt_reserve: u64,
+    source_data_len: u64,
+    split_data_len: u64,
+) -> u64 {
+    let lamports_per_byte_year =
+        source_rent_exempt_reserve / (source_data_len + ACCOUNT_STORAGE_OVERHEAD);
+    lamports_per_byte_year * (split_data_len + ACCOUNT_STORAGE_OVERHEAD)
 }
 
 pub type RewriteStakeStatus = (&'static str, (u64, u64), (u64, u64));
@@ -1598,13 +1270,12 @@ pub fn new_stake_history_entry<'a, I>(
     epoch: Epoch,
     stakes: I,
     history: Option<&StakeHistory>,
-    new_rate_activation_epoch: Option<Epoch>,
 ) -> StakeHistoryEntry
 where
     I: Iterator<Item = &'a Delegation>,
 {
     stakes.fold(StakeHistoryEntry::default(), |sum, stake| {
-        sum + stake.stake_activating_and_deactivating(epoch, history, new_rate_activation_epoch)
+        sum + stake.stake_activating_and_deactivating(epoch, history)
     })
 }
 
@@ -1613,7 +1284,6 @@ pub fn create_stake_history_from_delegations(
     bootstrap: Option<u64>,
     epochs: std::ops::Range<Epoch>,
     delegations: &[Delegation],
-    new_rate_activation_epoch: Option<Epoch>,
 ) -> StakeHistory {
     let mut stake_history = StakeHistory::default();
 
@@ -1632,7 +1302,6 @@ pub fn create_stake_history_from_delegations(
             epoch,
             delegations.iter().chain(bootstrap_delegation.iter()),
             Some(&stake_history),
-            new_rate_activation_epoch,
         );
         stake_history.add(epoch, entry);
     }
@@ -1647,16 +1316,19 @@ pub fn create_lockup_stake_account(
     rent: &Rent,
     lamports: u64,
 ) -> AccountSharedData {
-    let mut stake_account = AccountSharedData::new(lamports, StakeStateV2::size_of(), &id());
+    let mut stake_account =
+        AccountSharedData::new(lamports, std::mem::size_of::<StakeState>(), &id());
 
     let rent_exempt_reserve = rent.minimum_balance(stake_account.data().len());
     assert!(
         lamports >= rent_exempt_reserve,
-        "lamports: {lamports} is less than rent_exempt_reserve {rent_exempt_reserve}"
+        "lamports: {} is less than rent_exempt_reserve {}",
+        lamports,
+        rent_exempt_reserve
     );
 
     stake_account
-        .set_state(&StakeStateV2::Initialized(Meta {
+        .set_state(&StakeState::Initialized(Meta {
             authorized: *authorized,
             lockup: *lockup,
             rent_exempt_reserve,
@@ -1711,14 +1383,15 @@ fn do_create_account(
     lamports: u64,
     activation_epoch: Epoch,
 ) -> AccountSharedData {
-    let mut stake_account = AccountSharedData::new(lamports, StakeStateV2::size_of(), &id());
+    let mut stake_account =
+        AccountSharedData::new(lamports, std::mem::size_of::<StakeState>(), &id());
 
-    let vote_state = vote_state::from(vote_account).expect("vote_state");
+    let vote_state = VoteState::from(vote_account).expect("vote_state");
 
     let rent_exempt_reserve = rent.minimum_balance(stake_account.data().len());
 
     stake_account
-        .set_state(&StakeStateV2::Stake(
+        .set_state(&StakeState::Stake(
             Meta {
                 authorized: Authorized::auto(authorized),
                 rent_exempt_reserve,
@@ -1729,8 +1402,8 @@ fn do_create_account(
                 voter_pubkey,
                 &vote_state,
                 activation_epoch,
+                &Config::default(),
             ),
-            StakeFlags::empty(),
         ))
         .expect("set_state");
 
@@ -1742,16 +1415,16 @@ mod tests {
     use {
         super::*,
         proptest::prelude::*,
-        solana_program_runtime::with_mock_invoke_context,
+        solana_program_runtime::invoke_context::InvokeContext,
         solana_sdk::{
-            account::{create_account_shared_data_for_test, AccountSharedData},
-            epoch_schedule::EpochSchedule,
+            account::{AccountSharedData, WritableAccount},
             native_token,
             pubkey::Pubkey,
-            stake::state::warmup_cooldown_rate,
-            sysvar::{epoch_schedule, SysvarId},
+            system_program,
+            transaction_context::TransactionContext,
         },
-        test_case::test_case,
+        solana_vote_program::vote_state,
+        std::{cell::RefCell, iter::FromIterator},
     };
 
     #[test]
@@ -1894,10 +1567,10 @@ mod tests {
 
     #[test]
     fn test_stake_state_stake_from_fail() {
-        let mut stake_account = AccountSharedData::new(0, StakeStateV2::size_of(), &id());
+        let mut stake_account = AccountSharedData::new(0, std::mem::size_of::<StakeState>(), &id());
 
         stake_account
-            .set_state(&StakeStateV2::default())
+            .set_state(&StakeState::default())
             .expect("set_state");
 
         assert_eq!(stake_from(&stake_account), None);
@@ -1927,31 +1600,24 @@ mod tests {
         };
 
         // save this off so stake.config.warmup_rate changes don't break this test
-        let increment = (1_000_f64 * warmup_cooldown_rate(0, None)) as u64;
+        let increment = (1_000_f64 * stake.warmup_cooldown_rate) as u64;
 
         let mut stake_history = StakeHistory::default();
         // assert that this stake follows step function if there's no history
         assert_eq!(
-            stake.stake_activating_and_deactivating(
-                stake.activation_epoch,
-                Some(&stake_history),
-                None
-            ),
+            stake.stake_activating_and_deactivating(stake.activation_epoch, Some(&stake_history),),
             StakeActivationStatus::with_effective_and_activating(0, stake.stake),
         );
         for epoch in stake.activation_epoch + 1..stake.deactivation_epoch {
             assert_eq!(
-                stake.stake_activating_and_deactivating(epoch, Some(&stake_history), None),
+                stake.stake_activating_and_deactivating(epoch, Some(&stake_history)),
                 StakeActivationStatus::with_effective(stake.stake),
             );
         }
         // assert that this stake is full deactivating
         assert_eq!(
-            stake.stake_activating_and_deactivating(
-                stake.deactivation_epoch,
-                Some(&stake_history),
-                None
-            ),
+            stake
+                .stake_activating_and_deactivating(stake.deactivation_epoch, Some(&stake_history),),
             StakeActivationStatus::with_deactivating(stake.stake),
         );
         // assert that this stake is fully deactivated if there's no history
@@ -1959,7 +1625,6 @@ mod tests {
             stake.stake_activating_and_deactivating(
                 stake.deactivation_epoch + 1,
                 Some(&stake_history),
-                None
             ),
             StakeActivationStatus::default(),
         );
@@ -1973,7 +1638,7 @@ mod tests {
         );
         // assert that this stake is broken, because above setup is broken
         assert_eq!(
-            stake.stake_activating_and_deactivating(1, Some(&stake_history), None),
+            stake.stake_activating_and_deactivating(1, Some(&stake_history)),
             StakeActivationStatus::with_effective_and_activating(0, stake.stake),
         );
 
@@ -1988,7 +1653,7 @@ mod tests {
         );
         // assert that this stake is broken, because above setup is broken
         assert_eq!(
-            stake.stake_activating_and_deactivating(2, Some(&stake_history), None),
+            stake.stake_activating_and_deactivating(2, Some(&stake_history)),
             StakeActivationStatus::with_effective_and_activating(
                 increment,
                 stake.stake - increment
@@ -2010,7 +1675,6 @@ mod tests {
             stake.stake_activating_and_deactivating(
                 stake.deactivation_epoch + 1,
                 Some(&stake_history),
-                None,
             ),
             StakeActivationStatus::with_deactivating(stake.stake),
         );
@@ -2029,7 +1693,6 @@ mod tests {
             stake.stake_activating_and_deactivating(
                 stake.deactivation_epoch + 2,
                 Some(&stake_history),
-                None,
             ),
             // hung, should be lower
             StakeActivationStatus::with_deactivating(stake.stake - increment),
@@ -2096,11 +1759,8 @@ mod tests {
             assert_eq!(
                 expected_stakes,
                 (0..expected_stakes.len())
-                    .map(|epoch| stake.stake_activating_and_deactivating(
-                        epoch as u64,
-                        Some(&stake_history),
-                        None,
-                    ))
+                    .map(|epoch| stake
+                        .stake_activating_and_deactivating(epoch as u64, Some(&stake_history),))
                     .collect::<Vec<_>>()
             );
         }
@@ -2227,11 +1887,7 @@ mod tests {
         let calculate_each_staking_status = |stake: &Delegation, epoch_count: usize| -> Vec<_> {
             (0..epoch_count)
                 .map(|epoch| {
-                    stake.stake_activating_and_deactivating(
-                        epoch as u64,
-                        Some(&stake_history),
-                        None,
-                    )
+                    stake.stake_activating_and_deactivating(epoch as u64, Some(&stake_history))
                 })
                 .collect::<Vec<_>>()
         };
@@ -2296,6 +1952,7 @@ mod tests {
 
     #[test]
     fn test_stop_activating_after_deactivation() {
+        solana_logger::setup();
         let stake = Delegation {
             stake: 1_000,
             activation_epoch: 0,
@@ -2330,7 +1987,7 @@ mod tests {
                 },
             );
 
-            let effective_rate_limited = (effective as f64 * warmup_cooldown_rate(0, None)) as u64;
+            let effective_rate_limited = (effective as f64 * stake.warmup_cooldown_rate) as u64;
             if epoch < stake.deactivation_epoch {
                 effective += effective_rate_limited.min(activating);
                 other_activations.push(0);
@@ -2351,7 +2008,7 @@ mod tests {
                 (0, history.deactivating)
             };
             assert_eq!(
-                stake.stake_activating_and_deactivating(epoch, Some(&stake_history), None),
+                stake.stake_activating_and_deactivating(epoch, Some(&stake_history)),
                 StakeActivationStatus {
                     effective: expected_stake,
                     activating: expected_activating,
@@ -2373,16 +2030,16 @@ mod tests {
         let epochs = 7;
         // make boostrap stake smaller than warmup so warmup/cooldownn
         //  increment is always smaller than 1
-        let bootstrap = (warmup_cooldown_rate(0, None) * 100.0 / 2.0) as u64;
+        let bootstrap = (delegations[0].warmup_cooldown_rate * 100.0 / 2.0) as u64;
         let stake_history =
-            create_stake_history_from_delegations(Some(bootstrap), 0..epochs, &delegations, None);
+            create_stake_history_from_delegations(Some(bootstrap), 0..epochs, &delegations);
         let mut max_stake = 0;
         let mut min_stake = 2;
 
         for epoch in 0..epochs {
             let stake = delegations
                 .iter()
-                .map(|delegation| delegation.stake(epoch, Some(&stake_history), None))
+                .map(|delegation| delegation.stake(epoch, Some(&stake_history)))
                 .sum::<u64>();
             max_stake = max_stake.max(stake);
             min_stake = min_stake.min(stake);
@@ -2391,13 +2048,8 @@ mod tests {
         assert_eq!(min_stake, 0);
     }
 
-    #[test_case(None ; "old rate")]
-    #[test_case(Some(1) ; "new rate activated in epoch 1")]
-    #[test_case(Some(10) ; "new rate activated in epoch 10")]
-    #[test_case(Some(30) ; "new rate activated in epoch 30")]
-    #[test_case(Some(50) ; "new rate activated in epoch 50")]
-    #[test_case(Some(60) ; "new rate activated in epoch 60")]
-    fn test_stake_warmup_cooldown(new_rate_activation_epoch: Option<Epoch>) {
+    #[test]
+    fn test_stake_warmup_cooldown() {
         let delegations = [
             Delegation {
                 // never deactivates
@@ -2440,18 +2092,13 @@ mod tests {
         //  warming up and cooling down
         //  a stake takes 2.0f64.log(1.0 + STAKE_WARMUP_RATE) epochs to warm up or cool down
         //  when all alone, but the above overlap a lot
-        let epochs = 60;
+        let epochs = 20;
 
-        let stake_history = create_stake_history_from_delegations(
-            None,
-            0..epochs,
-            &delegations,
-            new_rate_activation_epoch,
-        );
+        let stake_history = create_stake_history_from_delegations(None, 0..epochs, &delegations);
 
         let mut prev_total_effective_stake = delegations
             .iter()
-            .map(|delegation| delegation.stake(0, Some(&stake_history), new_rate_activation_epoch))
+            .map(|delegation| delegation.stake(0, Some(&stake_history)))
             .sum::<u64>();
 
         // uncomment and add ! for fun with graphing
@@ -2459,9 +2106,7 @@ mod tests {
         for epoch in 1..epochs {
             let total_effective_stake = delegations
                 .iter()
-                .map(|delegation| {
-                    delegation.stake(epoch, Some(&stake_history), new_rate_activation_epoch)
-                })
+                .map(|delegation| delegation.stake(epoch, Some(&stake_history)))
                 .sum::<u64>();
 
             let delta = if total_effective_stake > prev_total_effective_stake {
@@ -2471,15 +2116,13 @@ mod tests {
             };
 
             // uncomment and add ! for fun with graphing
-            // eprint("{:8} {:8} {:8} ", epoch, total_effective_stake, delta);
-            // (0..(total_effective_stake as usize / (delegations.len() * 5))).for_each(|_| eprint("#"));
-            // eprintln();
+            //eprint("{:8} {:8} {:8} ", epoch, total_effective_stake, delta);
+            //(0..(total_effective_stake as usize / (stakes.len() * 5))).for_each(|_| eprint("#"));
+            //eprintln();
 
             assert!(
                 delta
-                    <= ((prev_total_effective_stake as f64
-                        * warmup_cooldown_rate(epoch, new_rate_activation_epoch))
-                        as u64)
+                    <= ((prev_total_effective_stake as f64 * Config::default().warmup_cooldown_rate) as u64)
                         .max(1)
             );
 
@@ -2498,6 +2141,7 @@ mod tests {
             &Pubkey::default(),
             &vote_state,
             std::u64::MAX,
+            &Config::default(),
         );
 
         // this one can't collect now, credits_observed == vote_state.credits()
@@ -2513,13 +2157,13 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
         // put 2 credits in at epoch 0
-        vote_state.increment_credits(0, 1);
-        vote_state.increment_credits(0, 1);
+        vote_state.increment_credits(0);
+        vote_state.increment_credits(0);
 
         // this one should be able to collect exactly 2
         assert_eq!(
@@ -2534,7 +2178,7 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
@@ -2556,6 +2200,7 @@ mod tests {
             &Pubkey::default(),
             &vote_state,
             std::u64::MAX,
+            &Config::default(),
         );
 
         // this one can't collect now, credits_observed == vote_state.credits()
@@ -2571,7 +2216,7 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
@@ -2579,13 +2224,13 @@ mod tests {
         // put 193,536,000 credits in at epoch 0, typical for a 14-day epoch
         //  this loop takes a few seconds...
         for _ in 0..epoch_slots {
-            vote_state.increment_credits(0, 1);
+            vote_state.increment_credits(0);
         }
 
         // no overflow on points
         assert_eq!(
             u128::from(stake.delegation.stake) * epoch_slots,
-            calculate_stake_points(&stake, &vote_state, None, null_tracer(), None)
+            calculate_stake_points(&stake, &vote_state, None, null_tracer())
         );
     }
 
@@ -2594,7 +2239,13 @@ mod tests {
         let mut vote_state = VoteState::default();
         // assume stake.stake() is right
         // bootstrap means fully-vested stake at epoch 0
-        let mut stake = new_stake(1, &Pubkey::default(), &vote_state, std::u64::MAX);
+        let mut stake = new_stake(
+            1,
+            &Pubkey::default(),
+            &vote_state,
+            std::u64::MAX,
+            &Config::default(),
+        );
 
         // this one can't collect now, credits_observed == vote_state.credits()
         assert_eq!(
@@ -2609,21 +2260,17 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
         // put 2 credits in at epoch 0
-        vote_state.increment_credits(0, 1);
-        vote_state.increment_credits(0, 1);
+        vote_state.increment_credits(0);
+        vote_state.increment_credits(0);
 
         // this one should be able to collect exactly 2
         assert_eq!(
-            Some(CalculatedStakeRewards {
-                staker_rewards: stake.delegation.stake * 2,
-                voter_rewards: 0,
-                new_credits_observed: 2,
-            }),
+            Some((stake.delegation.stake * 2, 0, 2)),
             calculate_stake_rewards(
                 0,
                 &stake,
@@ -2634,18 +2281,14 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
         stake.credits_observed = 1;
         // this one should be able to collect exactly 1 (already observed one)
         assert_eq!(
-            Some(CalculatedStakeRewards {
-                staker_rewards: stake.delegation.stake,
-                voter_rewards: 0,
-                new_credits_observed: 2,
-            }),
+            Some((stake.delegation.stake, 0, 2)),
             calculate_stake_rewards(
                 0,
                 &stake,
@@ -2656,21 +2299,17 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
         // put 1 credit in epoch 1
-        vote_state.increment_credits(1, 1);
+        vote_state.increment_credits(1);
 
         stake.credits_observed = 2;
         // this one should be able to collect the one just added
         assert_eq!(
-            Some(CalculatedStakeRewards {
-                staker_rewards: stake.delegation.stake,
-                voter_rewards: 0,
-                new_credits_observed: 3,
-            }),
+            Some((stake.delegation.stake, 0, 3)),
             calculate_stake_rewards(
                 1,
                 &stake,
@@ -2681,19 +2320,15 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
         // put 1 credit in epoch 2
-        vote_state.increment_credits(2, 1);
+        vote_state.increment_credits(2);
         // this one should be able to collect 2 now
         assert_eq!(
-            Some(CalculatedStakeRewards {
-                staker_rewards: stake.delegation.stake * 2,
-                voter_rewards: 0,
-                new_credits_observed: 4,
-            }),
+            Some((stake.delegation.stake * 2, 0, 4)),
             calculate_stake_rewards(
                 2,
                 &stake,
@@ -2704,7 +2339,7 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
@@ -2712,13 +2347,13 @@ mod tests {
         // this one should be able to collect everything from t=0 a warmed up stake of 2
         // (2 credits at stake of 1) + (1 credit at a stake of 2)
         assert_eq!(
-            Some(CalculatedStakeRewards {
-                staker_rewards: stake.delegation.stake * 2 // epoch 0
+            Some((
+                stake.delegation.stake * 2 // epoch 0
                     + stake.delegation.stake // epoch 1
                     + stake.delegation.stake, // epoch 2
-                voter_rewards: 0,
-                new_credits_observed: 4,
-            }),
+                0,
+                4
+            )),
             calculate_stake_rewards(
                 2,
                 &stake,
@@ -2729,7 +2364,7 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
@@ -2748,7 +2383,7 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
         vote_state.commission = 99;
@@ -2764,7 +2399,7 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
@@ -2772,11 +2407,7 @@ mod tests {
         // to advance the stake state's credits_observed field to prevent back-
         // paying rewards when inflation is turned on.
         assert_eq!(
-            Some(CalculatedStakeRewards {
-                staker_rewards: 0,
-                voter_rewards: 0,
-                new_credits_observed: 4,
-            }),
+            Some((0, 0, 4)),
             calculate_stake_rewards(
                 2,
                 &stake,
@@ -2787,7 +2418,7 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
@@ -2795,11 +2426,7 @@ mod tests {
         // not advancing and inflation is disabled
         stake.credits_observed = 4;
         assert_eq!(
-            Some(CalculatedStakeRewards {
-                staker_rewards: 0,
-                voter_rewards: 0,
-                new_credits_observed: 4,
-            }),
+            Some((0, 0, 4)),
             calculate_stake_rewards(
                 2,
                 &stake,
@@ -2810,40 +2437,14 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
+        // assert the previous behavior is preserved where fix_stake_deactivate=false
         assert_eq!(
-            CalculatedStakePoints {
-                points: 0,
-                new_credits_observed: 4,
-                force_credits_update_with_skipped_reward: false,
-            },
-            calculate_stake_points_and_credits(&stake, &vote_state, None, null_tracer(), None)
-        );
-
-        // credits_observed is auto-rewinded when vote_state credits are assumed to have been
-        // recreated
-        stake.credits_observed = 1000;
-        // this is new behavior 1; return the post-recreation rewinded credits from the vote account
-        assert_eq!(
-            CalculatedStakePoints {
-                points: 0,
-                new_credits_observed: 4,
-                force_credits_update_with_skipped_reward: true,
-            },
-            calculate_stake_points_and_credits(&stake, &vote_state, None, null_tracer(), None)
-        );
-        // this is new behavior 2; don't hint when credits both from stake and vote are identical
-        stake.credits_observed = 4;
-        assert_eq!(
-            CalculatedStakePoints {
-                points: 0,
-                new_credits_observed: 4,
-                force_credits_update_with_skipped_reward: false,
-            },
-            calculate_stake_points_and_credits(&stake, &vote_state, None, null_tracer(), None)
+            (0, 4),
+            calculate_stake_points_and_credits(&stake, &vote_state, None, null_tracer())
         );
 
         // get rewards and credits observed when not the activation epoch
@@ -2851,11 +2452,11 @@ mod tests {
         stake.credits_observed = 3;
         stake.delegation.activation_epoch = 1;
         assert_eq!(
-            Some(CalculatedStakeRewards {
-                staker_rewards: stake.delegation.stake, // epoch 2
-                voter_rewards: 0,
-                new_credits_observed: 4,
-            }),
+            Some((
+                stake.delegation.stake, // epoch 2
+                0,
+                4
+            )),
             calculate_stake_rewards(
                 2,
                 &stake,
@@ -2866,7 +2467,7 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
 
@@ -2875,11 +2476,7 @@ mod tests {
         stake.delegation.activation_epoch = 2;
         stake.credits_observed = 3;
         assert_eq!(
-            Some(CalculatedStakeRewards {
-                staker_rewards: 0,
-                voter_rewards: 0,
-                new_credits_observed: 4,
-            }),
+            Some((0, 0, 4)),
             calculate_stake_rewards(
                 2,
                 &stake,
@@ -2890,9 +2487,1433 @@ mod tests {
                 &vote_state,
                 None,
                 null_tracer(),
-                None,
+                true,
             )
         );
+    }
+
+    #[test]
+    fn test_split_source_uninitialized() {
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let stake_lamports = (rent_exempt_reserve + MINIMUM_STAKE_DELEGATION) * 2;
+        let stake_account = AccountSharedData::new_ref_data_with_space(
+            stake_lamports,
+            &StakeState::Uninitialized,
+            std::mem::size_of::<StakeState>(),
+            &id(),
+        )
+        .expect("stake_account");
+
+        let split_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let split_stake_account = AccountSharedData::new_ref_data_with_space(
+            0,
+            &StakeState::Uninitialized,
+            std::mem::size_of::<StakeState>(),
+            &id(),
+        )
+        .expect("stake_account");
+
+        let stake_keyed_account = KeyedAccount::new(&stake_pubkey, false, &stake_account);
+        let split_stake_keyed_account =
+            KeyedAccount::new(&split_stake_pubkey, false, &split_stake_account);
+
+        // no signers should fail
+        assert_eq!(
+            stake_keyed_account.split(
+                stake_lamports / 2,
+                &split_stake_keyed_account,
+                &HashSet::default() // no signers
+            ),
+            Err(InstructionError::MissingRequiredSignature)
+        );
+
+        let signers = HashSet::from([stake_pubkey]);
+
+        // splitting an uninitialized account where the destination is the same as the source
+        {
+            // splitting should work when...
+            // - when split amount is the full balance
+            // - when split amount is zero
+            // - when split amount is non-zero and less than the full balance
+            //
+            // and splitting should fail when the split amount is greater than the balance
+            assert_eq!(
+                stake_keyed_account.split(stake_lamports, &stake_keyed_account, &signers),
+                Ok(()),
+            );
+            assert_eq!(
+                stake_keyed_account.split(0, &stake_keyed_account, &signers),
+                Ok(()),
+            );
+            assert_eq!(
+                stake_keyed_account.split(stake_lamports / 2, &stake_keyed_account, &signers),
+                Ok(()),
+            );
+            assert_eq!(
+                stake_keyed_account.split(stake_lamports + 1, &stake_keyed_account, &signers),
+                Err(InstructionError::InsufficientFunds),
+            );
+        }
+
+        // this should work
+        assert_eq!(
+            stake_keyed_account.split(stake_lamports / 2, &split_stake_keyed_account, &signers),
+            Ok(())
+        );
+        assert_eq!(
+            stake_keyed_account.account.borrow().lamports(),
+            split_stake_keyed_account.account.borrow().lamports()
+        );
+    }
+
+    #[test]
+    fn test_split_split_not_uninitialized() {
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let stake_lamports = 42;
+        let stake_account = AccountSharedData::new_ref_data_with_space(
+            stake_lamports,
+            &StakeState::Stake(Meta::auto(&stake_pubkey), just_stake(stake_lamports)),
+            std::mem::size_of::<StakeState>(),
+            &id(),
+        )
+        .expect("stake_account");
+        let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+        let signers = vec![stake_pubkey].into_iter().collect();
+
+        for split_stake_state in &[
+            StakeState::Initialized(Meta::default()),
+            StakeState::Stake(Meta::default(), Stake::default()),
+            StakeState::RewardsPool,
+        ] {
+            let split_stake_pubkey = solana_sdk::pubkey::new_rand();
+            let split_stake_account = AccountSharedData::new_ref_data_with_space(
+                0,
+                split_stake_state,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("split_stake_account");
+
+            let split_stake_keyed_account =
+                KeyedAccount::new(&split_stake_pubkey, true, &split_stake_account);
+            assert_eq!(
+                stake_keyed_account.split(stake_lamports / 2, &split_stake_keyed_account, &signers),
+                Err(InstructionError::InvalidAccountData)
+            );
+        }
+    }
+    fn just_stake(stake: u64) -> Stake {
+        Stake {
+            delegation: Delegation {
+                stake,
+                ..Delegation::default()
+            },
+            ..Stake::default()
+        }
+    }
+
+    #[test]
+    fn test_split_more_than_staked() {
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let stake_lamports = (rent_exempt_reserve + MINIMUM_STAKE_DELEGATION) * 2;
+        let stake_account = AccountSharedData::new_ref_data_with_space(
+            stake_lamports,
+            &StakeState::Stake(
+                Meta {
+                    rent_exempt_reserve,
+                    ..Meta::auto(&stake_pubkey)
+                },
+                just_stake(stake_lamports / 2 - 1),
+            ),
+            std::mem::size_of::<StakeState>(),
+            &id(),
+        )
+        .expect("stake_account");
+
+        let split_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let split_stake_account = AccountSharedData::new_ref_data_with_space(
+            0,
+            &StakeState::Uninitialized,
+            std::mem::size_of::<StakeState>(),
+            &id(),
+        )
+        .expect("stake_account");
+
+        let signers = vec![stake_pubkey].into_iter().collect();
+        let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+        let split_stake_keyed_account =
+            KeyedAccount::new(&split_stake_pubkey, true, &split_stake_account);
+        assert_eq!(
+            stake_keyed_account.split(stake_lamports / 2, &split_stake_keyed_account, &signers),
+            Err(StakeError::InsufficientStake.into())
+        );
+    }
+
+    #[test]
+    fn test_split_with_rent() {
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+        let minimum_balance = rent_exempt_reserve + MINIMUM_STAKE_DELEGATION;
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let split_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let stake_lamports = minimum_balance * 2;
+        let signers = vec![stake_pubkey].into_iter().collect();
+
+        let meta = Meta {
+            authorized: Authorized::auto(&stake_pubkey),
+            rent_exempt_reserve,
+            ..Meta::default()
+        };
+
+        // test splitting both an Initialized stake and a Staked stake
+        for state in &[
+            StakeState::Initialized(meta),
+            StakeState::Stake(meta, just_stake(stake_lamports - rent_exempt_reserve)),
+        ] {
+            let stake_account = AccountSharedData::new_ref_data_with_space(
+                stake_lamports,
+                state,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("stake_account");
+
+            let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+            let split_stake_account = AccountSharedData::new_ref_data_with_space(
+                0,
+                &StakeState::Uninitialized,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("stake_account");
+
+            let split_stake_keyed_account =
+                KeyedAccount::new(&split_stake_pubkey, true, &split_stake_account);
+
+            // not enough to make a non-zero stake account
+            assert_eq!(
+                stake_keyed_account.split(
+                    rent_exempt_reserve,
+                    &split_stake_keyed_account,
+                    &signers
+                ),
+                Err(InstructionError::InsufficientFunds)
+            );
+
+            // doesn't leave enough for initial stake to be non-zero
+            assert_eq!(
+                stake_keyed_account.split(
+                    stake_lamports - rent_exempt_reserve,
+                    &split_stake_keyed_account,
+                    &signers
+                ),
+                Err(InstructionError::InsufficientFunds)
+            );
+
+            // split account already has way enough lamports
+            split_stake_keyed_account
+                .account
+                .borrow_mut()
+                .set_lamports(minimum_balance);
+            assert_eq!(
+                stake_keyed_account.split(
+                    stake_lamports - minimum_balance,
+                    &split_stake_keyed_account,
+                    &signers
+                ),
+                Ok(())
+            );
+
+            // verify no stake leakage in the case of a stake
+            if let StakeState::Stake(meta, stake) = state {
+                assert_eq!(
+                    split_stake_keyed_account.state(),
+                    Ok(StakeState::Stake(
+                        *meta,
+                        Stake {
+                            delegation: Delegation {
+                                stake: stake_lamports - minimum_balance,
+                                ..stake.delegation
+                            },
+                            ..*stake
+                        }
+                    ))
+                );
+                assert_eq!(
+                    stake_keyed_account.account.borrow().lamports(),
+                    minimum_balance,
+                );
+                assert_eq!(
+                    split_stake_keyed_account.account.borrow().lamports(),
+                    stake_lamports,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_split_to_account_with_rent_exempt_reserve() {
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+        let stake_lamports = (rent_exempt_reserve + MINIMUM_STAKE_DELEGATION) * 2;
+
+        let split_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let signers = vec![stake_pubkey].into_iter().collect();
+
+        let meta = Meta {
+            authorized: Authorized::auto(&stake_pubkey),
+            rent_exempt_reserve,
+            ..Meta::default()
+        };
+
+        let state = StakeState::Stake(meta, just_stake(stake_lamports - rent_exempt_reserve));
+        // Test various account prefunding, including empty, less than rent_exempt_reserve, exactly
+        // rent_exempt_reserve, and more than rent_exempt_reserve. The empty case is not covered in
+        // test_split, since that test uses a Meta with rent_exempt_reserve = 0
+        let split_lamport_balances = vec![
+            0,
+            rent_exempt_reserve - 1,
+            rent_exempt_reserve,
+            rent_exempt_reserve + MINIMUM_STAKE_DELEGATION - 1,
+            rent_exempt_reserve + MINIMUM_STAKE_DELEGATION,
+        ];
+        for initial_balance in split_lamport_balances {
+            let split_stake_account = AccountSharedData::new_ref_data_with_space(
+                initial_balance,
+                &StakeState::Uninitialized,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("stake_account");
+
+            let split_stake_keyed_account =
+                KeyedAccount::new(&split_stake_pubkey, true, &split_stake_account);
+
+            let stake_account = AccountSharedData::new_ref_data_with_space(
+                stake_lamports,
+                &state,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("stake_account");
+            let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+            // split more than available fails
+            assert_eq!(
+                stake_keyed_account.split(stake_lamports + 1, &split_stake_keyed_account, &signers),
+                Err(InstructionError::InsufficientFunds)
+            );
+
+            // should work
+            assert_eq!(
+                stake_keyed_account.split(stake_lamports / 2, &split_stake_keyed_account, &signers),
+                Ok(())
+            );
+            // no lamport leakage
+            assert_eq!(
+                stake_keyed_account.account.borrow().lamports()
+                    + split_stake_keyed_account.account.borrow().lamports(),
+                stake_lamports + initial_balance
+            );
+
+            if let StakeState::Stake(meta, stake) = state {
+                let expected_stake =
+                    stake_lamports / 2 - (rent_exempt_reserve.saturating_sub(initial_balance));
+                assert_eq!(
+                    Ok(StakeState::Stake(
+                        meta,
+                        Stake {
+                            delegation: Delegation {
+                                stake: stake_lamports / 2
+                                    - (rent_exempt_reserve.saturating_sub(initial_balance)),
+                                ..stake.delegation
+                            },
+                            ..stake
+                        }
+                    )),
+                    split_stake_keyed_account.state()
+                );
+                assert_eq!(
+                    split_stake_keyed_account.account.borrow().lamports(),
+                    expected_stake
+                        + rent_exempt_reserve
+                        + initial_balance.saturating_sub(rent_exempt_reserve)
+                );
+                assert_eq!(
+                    Ok(StakeState::Stake(
+                        meta,
+                        Stake {
+                            delegation: Delegation {
+                                stake: stake_lamports / 2 - rent_exempt_reserve,
+                                ..stake.delegation
+                            },
+                            ..stake
+                        }
+                    )),
+                    stake_keyed_account.state()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_split_to_smaller_account_with_rent_exempt_reserve() {
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+        let stake_lamports = (rent_exempt_reserve + MINIMUM_STAKE_DELEGATION) * 2;
+
+        let split_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let signers = vec![stake_pubkey].into_iter().collect();
+
+        let meta = Meta {
+            authorized: Authorized::auto(&stake_pubkey),
+            rent_exempt_reserve,
+            ..Meta::default()
+        };
+
+        let state = StakeState::Stake(meta, just_stake(stake_lamports - rent_exempt_reserve));
+
+        let expected_rent_exempt_reserve = calculate_split_rent_exempt_reserve(
+            meta.rent_exempt_reserve,
+            std::mem::size_of::<StakeState>() as u64 + 100,
+            std::mem::size_of::<StakeState>() as u64,
+        );
+
+        // Test various account prefunding, including empty, less than rent_exempt_reserve, exactly
+        // rent_exempt_reserve, and more than rent_exempt_reserve. The empty case is not covered in
+        // test_split, since that test uses a Meta with rent_exempt_reserve = 0
+        let split_lamport_balances = vec![
+            0,
+            expected_rent_exempt_reserve - 1,
+            expected_rent_exempt_reserve,
+            expected_rent_exempt_reserve + MINIMUM_STAKE_DELEGATION - 1,
+            expected_rent_exempt_reserve + MINIMUM_STAKE_DELEGATION,
+        ];
+        for initial_balance in split_lamport_balances {
+            let split_stake_account = AccountSharedData::new_ref_data_with_space(
+                initial_balance,
+                &StakeState::Uninitialized,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("stake_account");
+
+            let split_stake_keyed_account =
+                KeyedAccount::new(&split_stake_pubkey, true, &split_stake_account);
+
+            let stake_account = AccountSharedData::new_ref_data_with_space(
+                stake_lamports,
+                &state,
+                std::mem::size_of::<StakeState>() + 100,
+                &id(),
+            )
+            .expect("stake_account");
+            let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+            // split more than available fails
+            assert_eq!(
+                stake_keyed_account.split(stake_lamports + 1, &split_stake_keyed_account, &signers),
+                Err(InstructionError::InsufficientFunds)
+            );
+
+            // should work
+            assert_eq!(
+                stake_keyed_account.split(stake_lamports / 2, &split_stake_keyed_account, &signers),
+                Ok(())
+            );
+            // no lamport leakage
+            assert_eq!(
+                stake_keyed_account.account.borrow().lamports()
+                    + split_stake_keyed_account.account.borrow().lamports(),
+                stake_lamports + initial_balance
+            );
+
+            if let StakeState::Stake(meta, stake) = state {
+                let expected_split_meta = Meta {
+                    authorized: Authorized::auto(&stake_pubkey),
+                    rent_exempt_reserve: expected_rent_exempt_reserve,
+                    ..Meta::default()
+                };
+                let expected_stake = stake_lamports / 2
+                    - (expected_rent_exempt_reserve.saturating_sub(initial_balance));
+
+                assert_eq!(
+                    Ok(StakeState::Stake(
+                        expected_split_meta,
+                        Stake {
+                            delegation: Delegation {
+                                stake: expected_stake,
+                                ..stake.delegation
+                            },
+                            ..stake
+                        }
+                    )),
+                    split_stake_keyed_account.state()
+                );
+                assert_eq!(
+                    split_stake_keyed_account.account.borrow().lamports(),
+                    expected_stake
+                        + expected_rent_exempt_reserve
+                        + initial_balance.saturating_sub(expected_rent_exempt_reserve)
+                );
+                assert_eq!(
+                    Ok(StakeState::Stake(
+                        meta,
+                        Stake {
+                            delegation: Delegation {
+                                stake: stake_lamports / 2 - rent_exempt_reserve,
+                                ..stake.delegation
+                            },
+                            ..stake
+                        }
+                    )),
+                    stake_keyed_account.state()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_split_to_larger_account() {
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+
+        let split_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let signers = vec![stake_pubkey].into_iter().collect();
+
+        let meta = Meta {
+            authorized: Authorized::auto(&stake_pubkey),
+            rent_exempt_reserve,
+            ..Meta::default()
+        };
+
+        let expected_rent_exempt_reserve = calculate_split_rent_exempt_reserve(
+            meta.rent_exempt_reserve,
+            std::mem::size_of::<StakeState>() as u64,
+            std::mem::size_of::<StakeState>() as u64 + 100,
+        );
+        let stake_lamports = expected_rent_exempt_reserve + 1;
+        let split_amount = stake_lamports - (rent_exempt_reserve + 1); // Enough so that split stake is > 0
+
+        let state = StakeState::Stake(meta, just_stake(stake_lamports - rent_exempt_reserve));
+
+        let split_lamport_balances = vec![
+            0,
+            1,
+            expected_rent_exempt_reserve,
+            expected_rent_exempt_reserve + 1,
+        ];
+        for initial_balance in split_lamport_balances {
+            let split_stake_account = AccountSharedData::new_ref_data_with_space(
+                initial_balance,
+                &StakeState::Uninitialized,
+                std::mem::size_of::<StakeState>() + 100,
+                &id(),
+            )
+            .expect("stake_account");
+
+            let split_stake_keyed_account =
+                KeyedAccount::new(&split_stake_pubkey, true, &split_stake_account);
+
+            let stake_account = AccountSharedData::new_ref_data_with_space(
+                stake_lamports,
+                &state,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("stake_account");
+            let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+            // should always return error when splitting to larger account
+            let split_result =
+                stake_keyed_account.split(split_amount, &split_stake_keyed_account, &signers);
+            assert_eq!(split_result, Err(InstructionError::InvalidAccountData));
+
+            // Splitting 100% of source should not make a difference
+            let split_result =
+                stake_keyed_account.split(stake_lamports, &split_stake_keyed_account, &signers);
+            assert_eq!(split_result, Err(InstructionError::InvalidAccountData));
+        }
+    }
+
+    #[test]
+    fn test_split_100_percent_of_source() {
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+        let stake_lamports = rent_exempt_reserve + MINIMUM_STAKE_DELEGATION;
+
+        let split_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let signers = vec![stake_pubkey].into_iter().collect();
+
+        let meta = Meta {
+            authorized: Authorized::auto(&stake_pubkey),
+            rent_exempt_reserve,
+            ..Meta::default()
+        };
+
+        // test splitting both an Initialized stake and a Staked stake
+        for state in &[
+            StakeState::Initialized(meta),
+            StakeState::Stake(meta, just_stake(stake_lamports - rent_exempt_reserve)),
+        ] {
+            let split_stake_account = AccountSharedData::new_ref_data_with_space(
+                0,
+                &StakeState::Uninitialized,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("stake_account");
+
+            let split_stake_keyed_account =
+                KeyedAccount::new(&split_stake_pubkey, true, &split_stake_account);
+
+            let stake_account = AccountSharedData::new_ref_data_with_space(
+                stake_lamports,
+                state,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("stake_account");
+            let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+            // split 100% over to dest
+            assert_eq!(
+                stake_keyed_account.split(stake_lamports, &split_stake_keyed_account, &signers),
+                Ok(())
+            );
+
+            // no lamport leakage
+            assert_eq!(
+                stake_keyed_account.account.borrow().lamports()
+                    + split_stake_keyed_account.account.borrow().lamports(),
+                stake_lamports
+            );
+
+            match state {
+                StakeState::Initialized(_) => {
+                    assert_eq!(Ok(*state), split_stake_keyed_account.state());
+                    assert_eq!(Ok(StakeState::Uninitialized), stake_keyed_account.state());
+                }
+                StakeState::Stake(meta, stake) => {
+                    assert_eq!(
+                        Ok(StakeState::Stake(
+                            *meta,
+                            Stake {
+                                delegation: Delegation {
+                                    stake: stake_lamports - rent_exempt_reserve,
+                                    ..stake.delegation
+                                },
+                                ..*stake
+                            }
+                        )),
+                        split_stake_keyed_account.state()
+                    );
+                    assert_eq!(Ok(StakeState::Uninitialized), stake_keyed_account.state());
+                }
+                _ => unreachable!(),
+            }
+
+            // reset
+            stake_keyed_account
+                .account
+                .borrow_mut()
+                .set_lamports(stake_lamports);
+        }
+    }
+
+    #[test]
+    fn test_split_100_percent_of_source_to_account_with_lamports() {
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+        let stake_lamports = rent_exempt_reserve + MINIMUM_STAKE_DELEGATION;
+
+        let split_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let signers = vec![stake_pubkey].into_iter().collect();
+
+        let meta = Meta {
+            authorized: Authorized::auto(&stake_pubkey),
+            rent_exempt_reserve,
+            ..Meta::default()
+        };
+
+        let state = StakeState::Stake(meta, just_stake(stake_lamports - rent_exempt_reserve));
+        // Test various account prefunding, including empty, less than rent_exempt_reserve, exactly
+        // rent_exempt_reserve, and more than rent_exempt_reserve. Technically, the empty case is
+        // covered in test_split_100_percent_of_source, but included here as well for readability
+        let split_lamport_balances = vec![
+            0,
+            rent_exempt_reserve - 1,
+            rent_exempt_reserve,
+            rent_exempt_reserve + MINIMUM_STAKE_DELEGATION - 1,
+            rent_exempt_reserve + MINIMUM_STAKE_DELEGATION,
+        ];
+        for initial_balance in split_lamport_balances {
+            let split_stake_account = AccountSharedData::new_ref_data_with_space(
+                initial_balance,
+                &StakeState::Uninitialized,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("stake_account");
+
+            let split_stake_keyed_account =
+                KeyedAccount::new(&split_stake_pubkey, true, &split_stake_account);
+
+            let stake_account = AccountSharedData::new_ref_data_with_space(
+                stake_lamports,
+                &state,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("stake_account");
+            let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+            // split 100% over to dest
+            assert_eq!(
+                stake_keyed_account.split(stake_lamports, &split_stake_keyed_account, &signers),
+                Ok(())
+            );
+
+            // no lamport leakage
+            assert_eq!(
+                stake_keyed_account.account.borrow().lamports()
+                    + split_stake_keyed_account.account.borrow().lamports(),
+                stake_lamports + initial_balance
+            );
+
+            if let StakeState::Stake(meta, stake) = state {
+                assert_eq!(
+                    Ok(StakeState::Stake(
+                        meta,
+                        Stake {
+                            delegation: Delegation {
+                                stake: stake_lamports - rent_exempt_reserve,
+                                ..stake.delegation
+                            },
+                            ..stake
+                        }
+                    )),
+                    split_stake_keyed_account.state()
+                );
+                assert_eq!(Ok(StakeState::Uninitialized), stake_keyed_account.state());
+            }
+        }
+    }
+
+    #[test]
+    fn test_split_rent_exemptness() {
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+        let stake_lamports = rent_exempt_reserve + MINIMUM_STAKE_DELEGATION;
+
+        let split_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let signers = vec![stake_pubkey].into_iter().collect();
+
+        let meta = Meta {
+            authorized: Authorized::auto(&stake_pubkey),
+            rent_exempt_reserve,
+            ..Meta::default()
+        };
+
+        for state in &[
+            StakeState::Initialized(meta),
+            StakeState::Stake(meta, just_stake(stake_lamports - rent_exempt_reserve)),
+        ] {
+            // Test that splitting to a larger account fails
+            let split_stake_account = AccountSharedData::new_ref_data_with_space(
+                0,
+                &StakeState::Uninitialized,
+                std::mem::size_of::<StakeState>() + 10000,
+                &id(),
+            )
+            .expect("stake_account");
+            let split_stake_keyed_account =
+                KeyedAccount::new(&split_stake_pubkey, true, &split_stake_account);
+
+            let stake_account = AccountSharedData::new_ref_data_with_space(
+                stake_lamports,
+                &state,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("stake_account");
+            let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+            assert_eq!(
+                stake_keyed_account.split(stake_lamports, &split_stake_keyed_account, &signers),
+                Err(InstructionError::InvalidAccountData)
+            );
+
+            // Test that splitting from a larger account to a smaller one works.
+            // Split amount should not matter, assuming other fund criteria are met
+            let split_stake_account = AccountSharedData::new_ref_data_with_space(
+                0,
+                &StakeState::Uninitialized,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            )
+            .expect("stake_account");
+            let split_stake_keyed_account =
+                KeyedAccount::new(&split_stake_pubkey, true, &split_stake_account);
+
+            let stake_account = AccountSharedData::new_ref_data_with_space(
+                stake_lamports,
+                &state,
+                std::mem::size_of::<StakeState>() + 100,
+                &id(),
+            )
+            .expect("stake_account");
+            let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+            assert_eq!(
+                stake_keyed_account.split(stake_lamports, &split_stake_keyed_account, &signers),
+                Ok(())
+            );
+
+            assert_eq!(
+                split_stake_keyed_account.account.borrow().lamports(),
+                stake_lamports
+            );
+
+            let expected_rent_exempt_reserve = calculate_split_rent_exempt_reserve(
+                meta.rent_exempt_reserve,
+                std::mem::size_of::<StakeState>() as u64 + 100,
+                std::mem::size_of::<StakeState>() as u64,
+            );
+            let expected_split_meta = Meta {
+                authorized: Authorized::auto(&stake_pubkey),
+                rent_exempt_reserve: expected_rent_exempt_reserve,
+                ..Meta::default()
+            };
+
+            match state {
+                StakeState::Initialized(_) => {
+                    assert_eq!(
+                        Ok(StakeState::Initialized(expected_split_meta)),
+                        split_stake_keyed_account.state()
+                    );
+                    assert_eq!(Ok(StakeState::Uninitialized), stake_keyed_account.state());
+                }
+                StakeState::Stake(_meta, stake) => {
+                    // Expected stake should reflect original stake amount so that extra lamports
+                    // from the rent_exempt_reserve inequality do not magically activate
+                    let expected_stake = stake_lamports - rent_exempt_reserve;
+
+                    assert_eq!(
+                        Ok(StakeState::Stake(
+                            expected_split_meta,
+                            Stake {
+                                delegation: Delegation {
+                                    stake: expected_stake,
+                                    ..stake.delegation
+                                },
+                                ..*stake
+                            }
+                        )),
+                        split_stake_keyed_account.state()
+                    );
+                    assert_eq!(
+                        split_stake_keyed_account.account.borrow().lamports(),
+                        expected_stake
+                            + expected_rent_exempt_reserve
+                            + (rent_exempt_reserve - expected_rent_exempt_reserve)
+                    );
+                    assert_eq!(Ok(StakeState::Uninitialized), stake_keyed_account.state());
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_merge() {
+        let mut transaction_context = TransactionContext::new(Vec::new(), 1, 1);
+        let invoke_context = InvokeContext::new_mock(&mut transaction_context, &[]);
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let source_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let authorized_pubkey = solana_sdk::pubkey::new_rand();
+        let stake_lamports = 42;
+
+        let signers = vec![authorized_pubkey].into_iter().collect();
+
+        for state in &[
+            StakeState::Initialized(Meta::auto(&authorized_pubkey)),
+            StakeState::Stake(Meta::auto(&authorized_pubkey), just_stake(stake_lamports)),
+        ] {
+            for source_state in &[
+                StakeState::Initialized(Meta::auto(&authorized_pubkey)),
+                StakeState::Stake(Meta::auto(&authorized_pubkey), just_stake(stake_lamports)),
+            ] {
+                let stake_account = AccountSharedData::new_ref_data_with_space(
+                    stake_lamports,
+                    state,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .expect("stake_account");
+                let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+                let source_stake_account = AccountSharedData::new_ref_data_with_space(
+                    stake_lamports,
+                    source_state,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .expect("source_stake_account");
+                let source_stake_keyed_account =
+                    KeyedAccount::new(&source_stake_pubkey, true, &source_stake_account);
+
+                // Authorized staker signature required...
+                assert_eq!(
+                    stake_keyed_account.merge(
+                        &invoke_context,
+                        &source_stake_keyed_account,
+                        &Clock::default(),
+                        &StakeHistory::default(),
+                        &HashSet::new(),
+                    ),
+                    Err(InstructionError::MissingRequiredSignature)
+                );
+
+                assert_eq!(
+                    stake_keyed_account.merge(
+                        &invoke_context,
+                        &source_stake_keyed_account,
+                        &Clock::default(),
+                        &StakeHistory::default(),
+                        &signers,
+                    ),
+                    Ok(())
+                );
+
+                // check lamports
+                assert_eq!(
+                    stake_keyed_account.account.borrow().lamports(),
+                    stake_lamports * 2
+                );
+                assert_eq!(source_stake_keyed_account.account.borrow().lamports(), 0);
+
+                // check state
+                match state {
+                    StakeState::Initialized(meta) => {
+                        assert_eq!(
+                            stake_keyed_account.state(),
+                            Ok(StakeState::Initialized(*meta)),
+                        );
+                    }
+                    StakeState::Stake(meta, stake) => {
+                        let expected_stake = stake.delegation.stake
+                            + source_state
+                                .stake()
+                                .map(|stake| stake.delegation.stake)
+                                .unwrap_or_else(|| {
+                                    stake_lamports
+                                        - source_state.meta().unwrap().rent_exempt_reserve
+                                });
+                        assert_eq!(
+                            stake_keyed_account.state(),
+                            Ok(StakeState::Stake(
+                                *meta,
+                                Stake {
+                                    delegation: Delegation {
+                                        stake: expected_stake,
+                                        ..stake.delegation
+                                    },
+                                    ..*stake
+                                }
+                            )),
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    source_stake_keyed_account.state(),
+                    Ok(StakeState::Uninitialized)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_merge_self_fails() {
+        let mut transaction_context = TransactionContext::new(Vec::new(), 1, 1);
+        let invoke_context = InvokeContext::new_mock(&mut transaction_context, &[]);
+        let stake_address = Pubkey::new_unique();
+        let authority_pubkey = Pubkey::new_unique();
+        let signers = HashSet::from_iter(vec![authority_pubkey]);
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+        let stake_amount = 4242424242;
+        let stake_lamports = rent_exempt_reserve + stake_amount;
+
+        let meta = Meta {
+            rent_exempt_reserve,
+            ..Meta::auto(&authority_pubkey)
+        };
+        let stake = Stake {
+            delegation: Delegation {
+                stake: stake_amount,
+                activation_epoch: 0,
+                ..Delegation::default()
+            },
+            ..Stake::default()
+        };
+        let stake_account = AccountSharedData::new_ref_data_with_space(
+            stake_lamports,
+            &StakeState::Stake(meta, stake),
+            std::mem::size_of::<StakeState>(),
+            &id(),
+        )
+        .expect("stake_account");
+        let stake_keyed_account = KeyedAccount::new(&stake_address, true, &stake_account);
+
+        assert_eq!(
+            stake_keyed_account.merge(
+                &invoke_context,
+                &stake_keyed_account,
+                &Clock::default(),
+                &StakeHistory::default(),
+                &signers,
+            ),
+            Err(InstructionError::InvalidArgument),
+        );
+    }
+
+    #[test]
+    fn test_merge_incorrect_authorized_staker() {
+        let mut transaction_context = TransactionContext::new(Vec::new(), 1, 1);
+        let invoke_context = InvokeContext::new_mock(&mut transaction_context, &[]);
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let source_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let authorized_pubkey = solana_sdk::pubkey::new_rand();
+        let wrong_authorized_pubkey = solana_sdk::pubkey::new_rand();
+        let stake_lamports = 42;
+
+        let signers = vec![authorized_pubkey].into_iter().collect();
+        let wrong_signers = vec![wrong_authorized_pubkey].into_iter().collect();
+
+        for state in &[
+            StakeState::Initialized(Meta::auto(&authorized_pubkey)),
+            StakeState::Stake(Meta::auto(&authorized_pubkey), just_stake(stake_lamports)),
+        ] {
+            for source_state in &[
+                StakeState::Initialized(Meta::auto(&wrong_authorized_pubkey)),
+                StakeState::Stake(
+                    Meta::auto(&wrong_authorized_pubkey),
+                    just_stake(stake_lamports),
+                ),
+            ] {
+                let stake_account = AccountSharedData::new_ref_data_with_space(
+                    stake_lamports,
+                    state,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .expect("stake_account");
+                let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+                let source_stake_account = AccountSharedData::new_ref_data_with_space(
+                    stake_lamports,
+                    source_state,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .expect("source_stake_account");
+                let source_stake_keyed_account =
+                    KeyedAccount::new(&source_stake_pubkey, true, &source_stake_account);
+
+                assert_eq!(
+                    stake_keyed_account.merge(
+                        &invoke_context,
+                        &source_stake_keyed_account,
+                        &Clock::default(),
+                        &StakeHistory::default(),
+                        &wrong_signers,
+                    ),
+                    Err(InstructionError::MissingRequiredSignature)
+                );
+
+                assert_eq!(
+                    stake_keyed_account.merge(
+                        &invoke_context,
+                        &source_stake_keyed_account,
+                        &Clock::default(),
+                        &StakeHistory::default(),
+                        &signers,
+                    ),
+                    Err(StakeError::MergeMismatch.into())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_merge_invalid_account_data() {
+        let mut transaction_context = TransactionContext::new(Vec::new(), 1, 1);
+        let invoke_context = InvokeContext::new_mock(&mut transaction_context, &[]);
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let source_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let authorized_pubkey = solana_sdk::pubkey::new_rand();
+        let stake_lamports = 42;
+        let signers = vec![authorized_pubkey].into_iter().collect();
+
+        for state in &[
+            StakeState::Uninitialized,
+            StakeState::RewardsPool,
+            StakeState::Initialized(Meta::auto(&authorized_pubkey)),
+            StakeState::Stake(Meta::auto(&authorized_pubkey), just_stake(stake_lamports)),
+        ] {
+            for source_state in &[StakeState::Uninitialized, StakeState::RewardsPool] {
+                let stake_account = AccountSharedData::new_ref_data_with_space(
+                    stake_lamports,
+                    state,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .expect("stake_account");
+                let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+                let source_stake_account = AccountSharedData::new_ref_data_with_space(
+                    stake_lamports,
+                    source_state,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .expect("source_stake_account");
+                let source_stake_keyed_account =
+                    KeyedAccount::new(&source_stake_pubkey, true, &source_stake_account);
+
+                assert_eq!(
+                    stake_keyed_account.merge(
+                        &invoke_context,
+                        &source_stake_keyed_account,
+                        &Clock::default(),
+                        &StakeHistory::default(),
+                        &signers,
+                    ),
+                    Err(InstructionError::InvalidAccountData)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_merge_fake_stake_source() {
+        let mut transaction_context = TransactionContext::new(Vec::new(), 1, 1);
+        let invoke_context = InvokeContext::new_mock(&mut transaction_context, &[]);
+        let stake_pubkey = solana_sdk::pubkey::new_rand();
+        let source_stake_pubkey = solana_sdk::pubkey::new_rand();
+        let authorized_pubkey = solana_sdk::pubkey::new_rand();
+        let stake_lamports = 42;
+
+        let signers = vec![authorized_pubkey].into_iter().collect();
+
+        let stake_account = AccountSharedData::new_ref_data_with_space(
+            stake_lamports,
+            &StakeState::Stake(Meta::auto(&authorized_pubkey), just_stake(stake_lamports)),
+            std::mem::size_of::<StakeState>(),
+            &id(),
+        )
+        .expect("stake_account");
+        let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+        let source_stake_account = AccountSharedData::new_ref_data_with_space(
+            stake_lamports,
+            &StakeState::Stake(Meta::auto(&authorized_pubkey), just_stake(stake_lamports)),
+            std::mem::size_of::<StakeState>(),
+            &solana_sdk::pubkey::new_rand(),
+        )
+        .expect("source_stake_account");
+        let source_stake_keyed_account =
+            KeyedAccount::new(&source_stake_pubkey, true, &source_stake_account);
+
+        assert_eq!(
+            stake_keyed_account.merge(
+                &invoke_context,
+                &source_stake_keyed_account,
+                &Clock::default(),
+                &StakeHistory::default(),
+                &signers,
+            ),
+            Err(InstructionError::IncorrectProgramId)
+        );
+    }
+
+    #[test]
+    fn test_merge_active_stake() {
+        let mut transaction_context = TransactionContext::new(Vec::new(), 1, 1);
+        let invoke_context = InvokeContext::new_mock(&mut transaction_context, &[]);
+        let base_lamports = 4242424242;
+        let stake_address = Pubkey::new_unique();
+        let source_address = Pubkey::new_unique();
+        let authority_pubkey = Pubkey::new_unique();
+        let signers = HashSet::from_iter(vec![authority_pubkey]);
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+        let stake_amount = base_lamports;
+        let stake_lamports = rent_exempt_reserve + stake_amount;
+        let source_amount = base_lamports;
+        let source_lamports = rent_exempt_reserve + source_amount;
+
+        let meta = Meta {
+            rent_exempt_reserve,
+            ..Meta::auto(&authority_pubkey)
+        };
+        let mut stake = Stake {
+            delegation: Delegation {
+                stake: stake_amount,
+                activation_epoch: 0,
+                ..Delegation::default()
+            },
+            ..Stake::default()
+        };
+        let stake_account = AccountSharedData::new_ref_data_with_space(
+            stake_lamports,
+            &StakeState::Stake(meta, stake),
+            std::mem::size_of::<StakeState>(),
+            &id(),
+        )
+        .expect("stake_account");
+        let stake_keyed_account = KeyedAccount::new(&stake_address, true, &stake_account);
+
+        let source_activation_epoch = 2;
+        let mut source_stake = Stake {
+            delegation: Delegation {
+                stake: source_amount,
+                activation_epoch: source_activation_epoch,
+                ..stake.delegation
+            },
+            ..stake
+        };
+        let source_account = AccountSharedData::new_ref_data_with_space(
+            source_lamports,
+            &StakeState::Stake(meta, source_stake),
+            std::mem::size_of::<StakeState>(),
+            &id(),
+        )
+        .expect("source_account");
+        let source_keyed_account = KeyedAccount::new(&source_address, true, &source_account);
+
+        let mut clock = Clock::default();
+        let mut stake_history = StakeHistory::default();
+
+        clock.epoch = 0;
+        let mut effective = base_lamports;
+        let mut activating = stake_amount;
+        let mut deactivating = 0;
+        stake_history.add(
+            clock.epoch,
+            StakeHistoryEntry {
+                effective,
+                activating,
+                deactivating,
+            },
+        );
+
+        fn try_merge(
+            invoke_context: &InvokeContext,
+            stake_account: &KeyedAccount,
+            source_account: &KeyedAccount,
+            clock: &Clock,
+            stake_history: &StakeHistory,
+            signers: &HashSet<Pubkey>,
+        ) -> Result<(), InstructionError> {
+            let test_stake_account = stake_account.account.clone();
+            let test_stake_keyed =
+                KeyedAccount::new(stake_account.unsigned_key(), true, &test_stake_account);
+            let test_source_account = source_account.account.clone();
+            let test_source_keyed =
+                KeyedAccount::new(source_account.unsigned_key(), true, &test_source_account);
+
+            let result = test_stake_keyed.merge(
+                invoke_context,
+                &test_source_keyed,
+                clock,
+                stake_history,
+                signers,
+            );
+            if result.is_ok() {
+                assert_eq!(test_source_keyed.state(), Ok(StakeState::Uninitialized),);
+            }
+            result
+        }
+
+        // stake activation epoch, source initialized succeeds
+        assert!(try_merge(
+            &invoke_context,
+            &stake_keyed_account,
+            &source_keyed_account,
+            &clock,
+            &stake_history,
+            &signers
+        )
+        .is_ok(),);
+        assert!(try_merge(
+            &invoke_context,
+            &source_keyed_account,
+            &stake_keyed_account,
+            &clock,
+            &stake_history,
+            &signers
+        )
+        .is_ok(),);
+
+        // both activating fails
+        loop {
+            clock.epoch += 1;
+            if clock.epoch == source_activation_epoch {
+                activating += source_amount;
+            }
+            let delta =
+                activating.min((effective as f64 * stake.delegation.warmup_cooldown_rate) as u64);
+            effective += delta;
+            activating -= delta;
+            stake_history.add(
+                clock.epoch,
+                StakeHistoryEntry {
+                    effective,
+                    activating,
+                    deactivating,
+                },
+            );
+            if stake_amount == stake.stake(clock.epoch, Some(&stake_history))
+                && source_amount == source_stake.stake(clock.epoch, Some(&stake_history))
+            {
+                break;
+            }
+            assert_eq!(
+                try_merge(
+                    &invoke_context,
+                    &stake_keyed_account,
+                    &source_keyed_account,
+                    &clock,
+                    &stake_history,
+                    &signers
+                )
+                .unwrap_err(),
+                InstructionError::from(StakeError::MergeTransientStake),
+            );
+            assert_eq!(
+                try_merge(
+                    &invoke_context,
+                    &source_keyed_account,
+                    &stake_keyed_account,
+                    &clock,
+                    &stake_history,
+                    &signers
+                )
+                .unwrap_err(),
+                InstructionError::from(StakeError::MergeTransientStake),
+            );
+        }
+        // Both fully activated works
+        assert!(try_merge(
+            &invoke_context,
+            &stake_keyed_account,
+            &source_keyed_account,
+            &clock,
+            &stake_history,
+            &signers
+        )
+        .is_ok(),);
+
+        // deactivate setup for deactivation
+        let source_deactivation_epoch = clock.epoch + 1;
+        let stake_deactivation_epoch = clock.epoch + 2;
+
+        // active/deactivating and deactivating/inactive mismatches fail
+        loop {
+            clock.epoch += 1;
+            let delta =
+                deactivating.min((effective as f64 * stake.delegation.warmup_cooldown_rate) as u64);
+            effective -= delta;
+            deactivating -= delta;
+            if clock.epoch == stake_deactivation_epoch {
+                deactivating += stake_amount;
+                stake = Stake {
+                    delegation: Delegation {
+                        deactivation_epoch: stake_deactivation_epoch,
+                        ..stake.delegation
+                    },
+                    ..stake
+                };
+                stake_keyed_account
+                    .set_state(&StakeState::Stake(meta, stake))
+                    .unwrap();
+            }
+            if clock.epoch == source_deactivation_epoch {
+                deactivating += source_amount;
+                source_stake = Stake {
+                    delegation: Delegation {
+                        deactivation_epoch: source_deactivation_epoch,
+                        ..source_stake.delegation
+                    },
+                    ..source_stake
+                };
+                source_keyed_account
+                    .set_state(&StakeState::Stake(meta, source_stake))
+                    .unwrap();
+            }
+            stake_history.add(
+                clock.epoch,
+                StakeHistoryEntry {
+                    effective,
+                    activating,
+                    deactivating,
+                },
+            );
+            if 0 == stake.stake(clock.epoch, Some(&stake_history))
+                && 0 == source_stake.stake(clock.epoch, Some(&stake_history))
+            {
+                break;
+            }
+            assert_eq!(
+                try_merge(
+                    &invoke_context,
+                    &stake_keyed_account,
+                    &source_keyed_account,
+                    &clock,
+                    &stake_history,
+                    &signers
+                )
+                .unwrap_err(),
+                InstructionError::from(StakeError::MergeTransientStake),
+            );
+            assert_eq!(
+                try_merge(
+                    &invoke_context,
+                    &source_keyed_account,
+                    &stake_keyed_account,
+                    &clock,
+                    &stake_history,
+                    &signers
+                )
+                .unwrap_err(),
+                InstructionError::from(StakeError::MergeTransientStake),
+            );
+        }
+
+        // Both fully deactivated works
+        assert!(try_merge(
+            &invoke_context,
+            &stake_keyed_account,
+            &source_keyed_account,
+            &clock,
+            &stake_history,
+            &signers
+        )
+        .is_ok(),);
     }
 
     #[test]
@@ -2954,7 +3975,7 @@ mod tests {
     #[ignore]
     #[should_panic]
     fn test_dbg_stake_minimum_balance() {
-        let minimum_balance = Rent::default().minimum_balance(StakeStateV2::size_of());
+        let minimum_balance = Rent::default().minimum_balance(std::mem::size_of::<StakeState>());
         panic!(
             "stake minimum_balance: {} lamports, {} SOL",
             minimum_balance,
@@ -2963,8 +3984,46 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_lamports_per_byte_year() {
+        let rent = Rent::default();
+        let data_len = 200u64;
+        let rent_exempt_reserve = rent.minimum_balance(data_len as usize);
+        assert_eq!(
+            calculate_split_rent_exempt_reserve(rent_exempt_reserve, data_len, data_len),
+            rent_exempt_reserve
+        );
+
+        let larger_data = 4008u64;
+        let larger_rent_exempt_reserve = rent.minimum_balance(larger_data as usize);
+        assert_eq!(
+            calculate_split_rent_exempt_reserve(rent_exempt_reserve, data_len, larger_data),
+            larger_rent_exempt_reserve
+        );
+        assert_eq!(
+            calculate_split_rent_exempt_reserve(larger_rent_exempt_reserve, larger_data, data_len),
+            rent_exempt_reserve
+        );
+
+        let even_larger_data = solana_sdk::system_instruction::MAX_PERMITTED_DATA_LENGTH;
+        let even_larger_rent_exempt_reserve = rent.minimum_balance(even_larger_data as usize);
+        assert_eq!(
+            calculate_split_rent_exempt_reserve(rent_exempt_reserve, data_len, even_larger_data),
+            even_larger_rent_exempt_reserve
+        );
+        assert_eq!(
+            calculate_split_rent_exempt_reserve(
+                even_larger_rent_exempt_reserve,
+                even_larger_data,
+                data_len
+            ),
+            rent_exempt_reserve
+        );
+    }
+
+    #[test]
     fn test_things_can_merge() {
-        with_mock_invoke_context!(invoke_context, transaction_context, Vec::new());
+        let mut transaction_context = TransactionContext::new(Vec::new(), 1, 1);
+        let invoke_context = InvokeContext::new_mock(&mut transaction_context, &[]);
         let good_stake = Stake {
             credits_observed: 4242,
             delegation: Delegation {
@@ -3025,6 +4084,23 @@ mod tests {
         )
         .is_err());
 
+        let bad_warmup_cooldown_rate = Delegation {
+            warmup_cooldown_rate: good_delegation.warmup_cooldown_rate + f64::EPSILON,
+            ..good_delegation
+        };
+        assert!(MergeKind::active_delegations_can_merge(
+            &invoke_context,
+            &good_delegation,
+            &bad_warmup_cooldown_rate
+        )
+        .is_err());
+        assert!(MergeKind::active_delegations_can_merge(
+            &invoke_context,
+            &bad_warmup_cooldown_rate,
+            &good_delegation
+        )
+        .is_err());
+
         let bad_deactivation_epoch = Delegation {
             deactivation_epoch: 43,
             ..good_delegation
@@ -3045,7 +4121,8 @@ mod tests {
 
     #[test]
     fn test_metas_can_merge() {
-        with_mock_invoke_context!(invoke_context, transaction_context, Vec::new());
+        let mut transaction_context = TransactionContext::new(Vec::new(), 1, 1);
+        let invoke_context = InvokeContext::new_mock(&mut transaction_context, &[]);
         // Identical Metas can merge
         assert!(MergeKind::metas_can_merge(
             &invoke_context,
@@ -3191,29 +4268,26 @@ mod tests {
 
     #[test]
     fn test_merge_kind_get_if_mergeable() {
-        let transaction_accounts = vec![(
-            epoch_schedule::id(),
-            create_account_shared_data_for_test(&EpochSchedule::default()),
-        )];
-        with_mock_invoke_context!(invoke_context, transaction_context, transaction_accounts);
+        let mut transaction_context = TransactionContext::new(Vec::new(), 1, 1);
+        let invoke_context = InvokeContext::new_mock(&mut transaction_context, &[]);
         let authority_pubkey = Pubkey::new_unique();
         let initial_lamports = 4242424242;
         let rent = Rent::default();
-        let rent_exempt_reserve = rent.minimum_balance(StakeStateV2::size_of());
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
         let stake_lamports = rent_exempt_reserve + initial_lamports;
-        let new_rate_activation_epoch = Some(0);
 
         let meta = Meta {
             rent_exempt_reserve,
             ..Meta::auto(&authority_pubkey)
         };
-        let mut stake_account = AccountSharedData::new_data_with_space(
+        let stake_account = AccountSharedData::new_ref_data_with_space(
             stake_lamports,
-            &StakeStateV2::Uninitialized,
-            StakeStateV2::size_of(),
+            &StakeState::Uninitialized,
+            std::mem::size_of::<StakeState>(),
             &id(),
         )
         .expect("stake_account");
+        let stake_keyed_account = KeyedAccount::new(&authority_pubkey, true, &stake_account);
         let mut clock = Clock::default();
         let mut stake_history = StakeHistory::default();
 
@@ -3221,8 +4295,7 @@ mod tests {
         assert_eq!(
             MergeKind::get_if_mergeable(
                 &invoke_context,
-                &stake_account.state().unwrap(),
-                stake_account.lamports(),
+                &stake_keyed_account,
                 &clock,
                 &stake_history
             )
@@ -3231,12 +4304,13 @@ mod tests {
         );
 
         // RewardsPool state fails
-        stake_account.set_state(&StakeStateV2::RewardsPool).unwrap();
+        stake_keyed_account
+            .set_state(&StakeState::RewardsPool)
+            .unwrap();
         assert_eq!(
             MergeKind::get_if_mergeable(
                 &invoke_context,
-                &stake_account.state().unwrap(),
-                stake_account.lamports(),
+                &stake_keyed_account,
                 &clock,
                 &stake_history
             )
@@ -3245,19 +4319,18 @@ mod tests {
         );
 
         // Initialized state succeeds
-        stake_account
-            .set_state(&StakeStateV2::Initialized(meta))
+        stake_keyed_account
+            .set_state(&StakeState::Initialized(meta))
             .unwrap();
         assert_eq!(
             MergeKind::get_if_mergeable(
                 &invoke_context,
-                &stake_account.state().unwrap(),
-                stake_account.lamports(),
+                &stake_keyed_account,
                 &clock,
                 &stake_history
             )
             .unwrap(),
-            MergeKind::Inactive(meta, stake_lamports, StakeFlags::empty())
+            MergeKind::Inactive(meta, stake_lamports)
         );
 
         clock.epoch = 0;
@@ -3288,34 +4361,31 @@ mod tests {
             delegation: Delegation {
                 stake: initial_lamports,
                 activation_epoch: 1,
-                deactivation_epoch: 9,
+                deactivation_epoch: 5,
                 ..Delegation::default()
             },
             ..Stake::default()
         };
-        stake_account
-            .set_state(&StakeStateV2::Stake(meta, stake, StakeFlags::empty()))
+        stake_keyed_account
+            .set_state(&StakeState::Stake(meta, stake))
             .unwrap();
         // activation_epoch succeeds
         assert_eq!(
             MergeKind::get_if_mergeable(
                 &invoke_context,
-                &stake_account.state().unwrap(),
-                stake_account.lamports(),
+                &stake_keyed_account,
                 &clock,
                 &stake_history
             )
             .unwrap(),
-            MergeKind::ActivationEpoch(meta, stake, StakeFlags::empty()),
+            MergeKind::ActivationEpoch(meta, stake),
         );
 
         // all paritially activated, transient epochs fail
         loop {
             clock.epoch += 1;
-            let delta = activating.min(
-                (effective as f64 * warmup_cooldown_rate(clock.epoch, new_rate_activation_epoch))
-                    as u64,
-            );
+            let delta =
+                activating.min((effective as f64 * stake.delegation.warmup_cooldown_rate) as u64);
             effective += delta;
             activating -= delta;
             stake_history.add(
@@ -3332,8 +4402,7 @@ mod tests {
             assert_eq!(
                 MergeKind::get_if_mergeable(
                     &invoke_context,
-                    &stake_account.state().unwrap(),
-                    stake_account.lamports(),
+                    &stake_keyed_account,
                     &clock,
                     &stake_history
                 )
@@ -3356,8 +4425,7 @@ mod tests {
             assert_eq!(
                 MergeKind::get_if_mergeable(
                     &invoke_context,
-                    &stake_account.state().unwrap(),
-                    stake_account.lamports(),
+                    &stake_keyed_account,
                     &clock,
                     &stake_history
                 )
@@ -3380,8 +4448,7 @@ mod tests {
         assert_eq!(
             MergeKind::get_if_mergeable(
                 &invoke_context,
-                &stake_account.state().unwrap(),
-                stake_account.lamports(),
+                &stake_keyed_account,
                 &clock,
                 &stake_history
             )
@@ -3392,10 +4459,8 @@ mod tests {
         // all transient, deactivating epochs fail
         loop {
             clock.epoch += 1;
-            let delta = deactivating.min(
-                (effective as f64 * warmup_cooldown_rate(clock.epoch, new_rate_activation_epoch))
-                    as u64,
-            );
+            let delta =
+                deactivating.min((effective as f64 * stake.delegation.warmup_cooldown_rate) as u64);
             effective -= delta;
             deactivating -= delta;
             stake_history.add(
@@ -3412,8 +4477,7 @@ mod tests {
             assert_eq!(
                 MergeKind::get_if_mergeable(
                     &invoke_context,
-                    &stake_account.state().unwrap(),
-                    stake_account.lamports(),
+                    &stake_keyed_account,
                     &clock,
                     &stake_history
                 )
@@ -3426,19 +4490,19 @@ mod tests {
         assert_eq!(
             MergeKind::get_if_mergeable(
                 &invoke_context,
-                &stake_account.state().unwrap(),
-                stake_account.lamports(),
+                &stake_keyed_account,
                 &clock,
                 &stake_history
             )
             .unwrap(),
-            MergeKind::Inactive(meta, stake_lamports, StakeFlags::empty()),
+            MergeKind::Inactive(meta, stake_lamports),
         );
     }
 
     #[test]
     fn test_merge_kind_merge() {
-        with_mock_invoke_context!(invoke_context, transaction_context, Vec::new());
+        let mut transaction_context = TransactionContext::new(Vec::new(), 1, 1);
+        let invoke_context = InvokeContext::new_mock(&mut transaction_context, &[]);
         let clock = Clock::default();
         let lamports = 424242;
         let meta = Meta {
@@ -3452,8 +4516,8 @@ mod tests {
             },
             ..Stake::default()
         };
-        let inactive = MergeKind::Inactive(Meta::default(), lamports, StakeFlags::empty());
-        let activation_epoch = MergeKind::ActivationEpoch(meta, stake, StakeFlags::empty());
+        let inactive = MergeKind::Inactive(Meta::default(), lamports);
+        let activation_epoch = MergeKind::ActivationEpoch(meta, stake);
         let fully_active = MergeKind::FullyActive(meta, stake);
 
         assert_eq!(
@@ -3517,11 +4581,8 @@ mod tests {
 
     #[test]
     fn test_active_stake_merge() {
-        let transaction_accounts = vec![(
-            Rent::id(),
-            create_account_shared_data_for_test(&Rent::default()),
-        )];
-        with_mock_invoke_context!(invoke_context, transaction_context, transaction_accounts);
+        let mut transaction_context = TransactionContext::new(Vec::new(), 1, 1);
+        let invoke_context = InvokeContext::new_mock(&mut transaction_context, &[]);
         let clock = Clock::default();
         let delegation_a = 4_242_424_242u64;
         let delegation_b = 6_200_000_000u64;
@@ -3547,8 +4608,8 @@ mod tests {
         };
 
         // activating stake merge, match credits observed
-        let activation_epoch_a = MergeKind::ActivationEpoch(meta, stake_a, StakeFlags::empty());
-        let activation_epoch_b = MergeKind::ActivationEpoch(meta, stake_b, StakeFlags::empty());
+        let activation_epoch_a = MergeKind::ActivationEpoch(meta, stake_a);
+        let activation_epoch_b = MergeKind::ActivationEpoch(meta, stake_b);
         let new_stake = activation_epoch_a
             .merge(&invoke_context, activation_epoch_b, &clock)
             .unwrap()
@@ -3582,8 +4643,8 @@ mod tests {
             },
             credits_observed: credits_b,
         };
-        let activation_epoch_a = MergeKind::ActivationEpoch(meta, stake_a, StakeFlags::empty());
-        let activation_epoch_b = MergeKind::ActivationEpoch(meta, stake_b, StakeFlags::empty());
+        let activation_epoch_a = MergeKind::ActivationEpoch(meta, stake_a);
+        let activation_epoch_b = MergeKind::ActivationEpoch(meta, stake_b);
         let new_stake = activation_epoch_a
             .merge(&invoke_context, activation_epoch_b, &clock)
             .unwrap()
@@ -3653,6 +4714,520 @@ mod tests {
             (credits_a * delegation + credits_b * delegation) / (delegation + delegation)
         );
         assert_eq!(new_stake.delegation.stake, delegation * 2);
+    }
+
+    /// Ensure that `initialize()` respects the MINIMUM_STAKE_DELEGATION requirements
+    /// - Assert 1: accounts with a balance equal-to the minimum initialize OK
+    /// - Assert 2: accounts with a balance less-than the minimum do not initialize
+    #[test]
+    fn test_initialize_minimum_stake_delegation() {
+        for (stake_delegation, expected_result) in [
+            (MINIMUM_STAKE_DELEGATION, Ok(())),
+            (
+                MINIMUM_STAKE_DELEGATION - 1,
+                Err(InstructionError::InsufficientFunds),
+            ),
+        ] {
+            let rent = Rent::default();
+            let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+            let stake_pubkey = Pubkey::new_unique();
+            let stake_account = AccountSharedData::new_ref(
+                stake_delegation + rent_exempt_reserve,
+                std::mem::size_of::<StakeState>(),
+                &id(),
+            );
+            let stake_keyed_account = KeyedAccount::new(&stake_pubkey, false, &stake_account);
+
+            assert_eq!(
+                expected_result,
+                stake_keyed_account.initialize(
+                    &Authorized::auto(&stake_pubkey),
+                    &Lockup::default(),
+                    &rent
+                ),
+            );
+        }
+    }
+
+    /// Ensure that `delegate()` respects the MINIMUM_STAKE_DELEGATION requirements
+    /// - Assert 1: delegating an amount equal-to the minimum delegates OK
+    /// - Assert 2: delegating an amount less-than the minimum delegates OK
+    /// Also test both asserts above over both StakeState::{Initialized and Stake}, since the logic
+    /// is slightly different for the variants.
+    ///
+    /// NOTE: Even though new stake accounts must have a minimum balance that is at least
+    /// MINIMUM_STAKE_DELEGATION (plus rent exempt reserve), the current behavior allows
+    /// withdrawing below the minimum delegation, then re-delegating successfully (see
+    /// `test_behavior_withdrawal_then_redelegate_with_less_than_minimum_stake_delegation()` for
+    /// more information.)
+    #[test]
+    fn test_delegate_minimum_stake_delegation() {
+        for (stake_delegation, expected_result) in [
+            (MINIMUM_STAKE_DELEGATION, Ok(())),
+            (MINIMUM_STAKE_DELEGATION - 1, Ok(())),
+        ] {
+            let rent = Rent::default();
+            let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+            let stake_pubkey = Pubkey::new_unique();
+            let signers = HashSet::from([stake_pubkey]);
+            let meta = Meta {
+                rent_exempt_reserve,
+                ..Meta::auto(&stake_pubkey)
+            };
+
+            for stake_state in &[
+                StakeState::Initialized(meta),
+                StakeState::Stake(meta, just_stake(stake_delegation)),
+            ] {
+                let stake_account = AccountSharedData::new_ref_data_with_space(
+                    stake_delegation + rent_exempt_reserve,
+                    stake_state,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .unwrap();
+                let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+                let vote_pubkey = Pubkey::new_unique();
+                let vote_account = RefCell::new(vote_state::create_account(
+                    &vote_pubkey,
+                    &Pubkey::new_unique(),
+                    0,
+                    100,
+                ));
+                let vote_keyed_account = KeyedAccount::new(&vote_pubkey, false, &vote_account);
+
+                assert_eq!(
+                    expected_result,
+                    stake_keyed_account.delegate(
+                        &vote_keyed_account,
+                        &Clock::default(),
+                        &StakeHistory::default(),
+                        &Config::default(),
+                        &signers,
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Ensure that `split()` respects the MINIMUM_STAKE_DELEGATION requirements.  This applies to
+    /// both the source and destination acounts.  Thus, we have four permutations possible based on
+    /// if each account's post-split delegation is equal-to (EQ) or less-than (LT) the minimum:
+    ///
+    ///  source | dest | result
+    /// --------+------+--------
+    ///  EQ     | EQ   | Ok
+    ///  EQ     | LT   | Err
+    ///  LT     | EQ   | Err
+    ///  LT     | LT   | Err
+    #[test]
+    fn test_split_minimum_stake_delegation() {
+        for (source_stake_delegation, dest_stake_delegation, expected_result) in [
+            (MINIMUM_STAKE_DELEGATION, MINIMUM_STAKE_DELEGATION, Ok(())),
+            (
+                MINIMUM_STAKE_DELEGATION,
+                MINIMUM_STAKE_DELEGATION - 1,
+                Err(InstructionError::InsufficientFunds),
+            ),
+            (
+                MINIMUM_STAKE_DELEGATION - 1,
+                MINIMUM_STAKE_DELEGATION,
+                Err(InstructionError::InsufficientFunds),
+            ),
+            (
+                MINIMUM_STAKE_DELEGATION - 1,
+                MINIMUM_STAKE_DELEGATION - 1,
+                Err(InstructionError::InsufficientFunds),
+            ),
+        ] {
+            let rent = Rent::default();
+            let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+            let source_pubkey = Pubkey::new_unique();
+            let source_meta = Meta {
+                rent_exempt_reserve,
+                ..Meta::auto(&source_pubkey)
+            };
+            // The source account's starting balance is equal to *both* the source and dest
+            // accounts' *final* balance
+            let source_starting_balance =
+                source_stake_delegation + dest_stake_delegation + rent_exempt_reserve * 2;
+
+            for source_stake_state in &[
+                StakeState::Initialized(source_meta),
+                StakeState::Stake(
+                    source_meta,
+                    just_stake(source_starting_balance - rent_exempt_reserve),
+                ),
+            ] {
+                let source_account = AccountSharedData::new_ref_data_with_space(
+                    source_starting_balance,
+                    source_stake_state,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .unwrap();
+                let source_keyed_account = KeyedAccount::new(&source_pubkey, true, &source_account);
+
+                let dest_pubkey = Pubkey::new_unique();
+                let dest_account = AccountSharedData::new_ref_data_with_space(
+                    0,
+                    &StakeState::Uninitialized,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .unwrap();
+                let dest_keyed_account = KeyedAccount::new(&dest_pubkey, true, &dest_account);
+
+                assert_eq!(
+                    expected_result,
+                    source_keyed_account.split(
+                        dest_stake_delegation + rent_exempt_reserve,
+                        &dest_keyed_account,
+                        &HashSet::from([source_pubkey]),
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Ensure that splitting the full amount from an account respects the MINIMUM_STAKE_DELEGATION
+    /// requirements.  This ensures that we are future-proofing/testing any raises to the minimum
+    /// delegation.
+    /// - Assert 1: splitting the full amount from an account that has at least the minimum
+    ///             delegation is OK
+    /// - Assert 2: splitting the full amount from an account that has less than the minimum
+    ///             delegation is not OK
+    #[test]
+    fn test_split_full_amount_minimum_stake_delegation() {
+        for (stake_delegation, expected_result) in [
+            (MINIMUM_STAKE_DELEGATION, Ok(())),
+            (
+                MINIMUM_STAKE_DELEGATION - 1,
+                Err(InstructionError::InsufficientFunds),
+            ),
+        ] {
+            let rent = Rent::default();
+            let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+            let source_pubkey = Pubkey::new_unique();
+            let source_meta = Meta {
+                rent_exempt_reserve,
+                ..Meta::auto(&source_pubkey)
+            };
+
+            for source_stake_state in &[
+                StakeState::Initialized(source_meta),
+                StakeState::Stake(source_meta, just_stake(stake_delegation)),
+            ] {
+                let source_account = AccountSharedData::new_ref_data_with_space(
+                    stake_delegation + rent_exempt_reserve,
+                    source_stake_state,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .unwrap();
+                let source_keyed_account = KeyedAccount::new(&source_pubkey, true, &source_account);
+
+                let dest_pubkey = Pubkey::new_unique();
+                let dest_account = AccountSharedData::new_ref_data_with_space(
+                    0,
+                    &StakeState::Uninitialized,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .unwrap();
+                let dest_keyed_account = KeyedAccount::new(&dest_pubkey, true, &dest_account);
+
+                assert_eq!(
+                    expected_result,
+                    source_keyed_account.split(
+                        source_keyed_account.lamports().unwrap(),
+                        &dest_keyed_account,
+                        &HashSet::from([source_pubkey]),
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Ensure that `split()` correctly handles prefunded destination accounts.  When a destination
+    /// account already has funds, ensure the minimum split amount reduces accordingly.
+    #[test]
+    fn test_split_destination_minimum_stake_delegation() {
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+
+        for (destination_starting_balance, split_amount, expected_result) in [
+            // split amount must be non zero
+            (
+                rent_exempt_reserve + MINIMUM_STAKE_DELEGATION,
+                0,
+                Err(InstructionError::InsufficientFunds),
+            ),
+            // any split amount is OK when destination account is already fully funded
+            (rent_exempt_reserve + MINIMUM_STAKE_DELEGATION, 1, Ok(())),
+            // if destination is only short by 1 lamport, then split amount can be 1 lamport
+            (
+                rent_exempt_reserve + MINIMUM_STAKE_DELEGATION - 1,
+                1,
+                Ok(()),
+            ),
+            // destination short by 2 lamports, so 1 isn't enough (non-zero split amount)
+            (
+                rent_exempt_reserve + MINIMUM_STAKE_DELEGATION - 2,
+                1,
+                Err(InstructionError::InsufficientFunds),
+            ),
+            // destination is rent exempt, so split enough for minimum delegation
+            (rent_exempt_reserve, MINIMUM_STAKE_DELEGATION, Ok(())),
+            // destination is rent exempt, but split amount less than minimum delegation
+            (
+                rent_exempt_reserve,
+                MINIMUM_STAKE_DELEGATION - 1,
+                Err(InstructionError::InsufficientFunds),
+            ),
+            // destination is not rent exempt, so split enough for rent and minimum delegation
+            (
+                rent_exempt_reserve - 1,
+                MINIMUM_STAKE_DELEGATION + 1,
+                Ok(()),
+            ),
+            // destination is not rent exempt, but split amount only for minimum delegation
+            (
+                rent_exempt_reserve - 1,
+                MINIMUM_STAKE_DELEGATION,
+                Err(InstructionError::InsufficientFunds),
+            ),
+            // destination has smallest non-zero balance, so can split the minimum balance
+            // requirements minus what destination already has
+            (
+                1,
+                rent_exempt_reserve + MINIMUM_STAKE_DELEGATION - 1,
+                Ok(()),
+            ),
+            // destination has smallest non-zero balance, but cannot split less than the minimum
+            // balance requirements minus what destination already has
+            (
+                1,
+                rent_exempt_reserve + MINIMUM_STAKE_DELEGATION - 2,
+                Err(InstructionError::InsufficientFunds),
+            ),
+            // destination has zero lamports, so split must be at least rent exempt reserve plus
+            // minimum delegation
+            (0, rent_exempt_reserve + MINIMUM_STAKE_DELEGATION, Ok(())),
+            // destination has zero lamports, but split amount is less than rent exempt reserve
+            // plus minimum delegation
+            (
+                0,
+                rent_exempt_reserve + MINIMUM_STAKE_DELEGATION - 1,
+                Err(InstructionError::InsufficientFunds),
+            ),
+        ] {
+            let source_pubkey = Pubkey::new_unique();
+            let source_meta = Meta {
+                rent_exempt_reserve,
+                ..Meta::auto(&source_pubkey)
+            };
+
+            // Set the source's starting balance and stake delegation amount to something large
+            // to ensure its post-split balance meets all the requirements
+            let source_balance = u64::MAX;
+            let source_stake_delegation = source_balance - rent_exempt_reserve;
+
+            for source_stake_state in &[
+                StakeState::Initialized(source_meta),
+                StakeState::Stake(source_meta, just_stake(source_stake_delegation)),
+            ] {
+                let source_account = AccountSharedData::new_ref_data_with_space(
+                    source_balance,
+                    &source_stake_state,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .unwrap();
+                let source_keyed_account = KeyedAccount::new(&source_pubkey, true, &source_account);
+
+                let destination_pubkey = Pubkey::new_unique();
+                let destination_account = AccountSharedData::new_ref_data_with_space(
+                    destination_starting_balance,
+                    &StakeState::Uninitialized,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .unwrap();
+                let destination_keyed_account =
+                    KeyedAccount::new(&destination_pubkey, true, &destination_account);
+
+                assert_eq!(
+                    expected_result,
+                    source_keyed_account.split(
+                        split_amount,
+                        &destination_keyed_account,
+                        &HashSet::from([source_pubkey]),
+                    ),
+                );
+
+                // For the expected OK cases, when the source's StakeState is Stake, then the
+                // destination's StakeState *must* also end up as Stake as well.  Additionally,
+                // check to ensure the destination's delegation amount is correct.  If the
+                // destination is already rent exempt, then the destination's stake delegation
+                // *must* equal the split amount. Otherwise, the split amount must first be used to
+                // make the destination rent exempt, and then the leftover lamports are delegated.
+                if expected_result.is_ok() {
+                    if let StakeState::Stake(_, _) = source_keyed_account.state().unwrap() {
+                        if let StakeState::Stake(_, destination_stake) =
+                            destination_keyed_account.state().unwrap()
+                        {
+                            let destination_initial_rent_deficit =
+                                rent_exempt_reserve.saturating_sub(destination_starting_balance);
+                            let expected_destination_stake_delegation =
+                                split_amount - destination_initial_rent_deficit;
+                            assert_eq!(
+                                expected_destination_stake_delegation,
+                                destination_stake.delegation.stake
+                            );
+                            assert!(destination_stake.delegation.stake >= MINIMUM_STAKE_DELEGATION,);
+                        } else {
+                            panic!("destination state must be StakeStake::Stake after successful split when source is also StakeState::Stake!");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ensure that `withdraw()` respects the MINIMUM_STAKE_DELEGATION requirements
+    /// - Assert 1: withdrawing so remaining stake is equal-to the minimum is OK
+    /// - Assert 2: withdrawing so remaining stake is less-than the minimum is not OK
+    #[test]
+    fn test_withdraw_minimum_stake_delegation() {
+        let starting_stake_delegation = MINIMUM_STAKE_DELEGATION;
+        for (ending_stake_delegation, expected_result) in [
+            (MINIMUM_STAKE_DELEGATION, Ok(())),
+            (
+                MINIMUM_STAKE_DELEGATION - 1,
+                Err(InstructionError::InsufficientFunds),
+            ),
+        ] {
+            let rent = Rent::default();
+            let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+            let stake_pubkey = Pubkey::new_unique();
+            let meta = Meta {
+                rent_exempt_reserve,
+                ..Meta::auto(&stake_pubkey)
+            };
+
+            for stake_state in &[
+                StakeState::Initialized(meta),
+                StakeState::Stake(meta, just_stake(starting_stake_delegation)),
+            ] {
+                let rewards_balance = 123;
+                let stake_account = AccountSharedData::new_ref_data_with_space(
+                    starting_stake_delegation + rent_exempt_reserve + rewards_balance,
+                    stake_state,
+                    std::mem::size_of::<StakeState>(),
+                    &id(),
+                )
+                .unwrap();
+                let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+
+                let to_pubkey = Pubkey::new_unique();
+                let to_account =
+                    AccountSharedData::new_ref(rent_exempt_reserve, 0, &system_program::id());
+                let to_keyed_account = KeyedAccount::new(&to_pubkey, false, &to_account);
+
+                let withdraw_amount =
+                    (starting_stake_delegation + rewards_balance) - ending_stake_delegation;
+                assert_eq!(
+                    expected_result,
+                    stake_keyed_account.withdraw(
+                        withdraw_amount,
+                        &to_keyed_account,
+                        &Clock::default(),
+                        &StakeHistory::default(),
+                        &stake_keyed_account,
+                        None,
+                    ),
+                );
+            }
+        }
+    }
+
+    /// The stake program currently allows delegations below the minimum stake delegation (see also
+    /// `test_delegate_minimum_stake_delegation()`).  This is not the ultimate desired behavior,
+    /// but this test ensures the existing behavior is not changed inadvertently.
+    ///
+    /// This test:
+    /// 1. Initialises a stake account (with sufficient balance for both rent and minimum delegation)
+    /// 2. Delegates the minimum amount
+    /// 3. Deactives the delegation
+    /// 4. Withdraws from the account such that the ending balance is *below* rent + minimum delegation
+    /// 5. Re-delegates, now with less than the minimum delegation, but it still succeeds
+    #[test]
+    fn test_behavior_withdrawal_then_redelegate_with_less_than_minimum_stake_delegation() {
+        let rent = Rent::default();
+        let rent_exempt_reserve = rent.minimum_balance(std::mem::size_of::<StakeState>());
+        let stake_pubkey = Pubkey::new_unique();
+        let signers = HashSet::from([stake_pubkey]);
+        let stake_account = AccountSharedData::new_ref(
+            rent_exempt_reserve + MINIMUM_STAKE_DELEGATION,
+            std::mem::size_of::<StakeState>(),
+            &id(),
+        );
+        let stake_keyed_account = KeyedAccount::new(&stake_pubkey, true, &stake_account);
+        stake_keyed_account
+            .initialize(&Authorized::auto(&stake_pubkey), &Lockup::default(), &rent)
+            .unwrap();
+
+        let vote_pubkey = Pubkey::new_unique();
+        let vote_account = RefCell::new(vote_state::create_account(
+            &vote_pubkey,
+            &Pubkey::new_unique(),
+            0,
+            100,
+        ));
+        let vote_keyed_account = KeyedAccount::new(&vote_pubkey, false, &vote_account);
+        let mut clock = Clock::default();
+        stake_keyed_account
+            .delegate(
+                &vote_keyed_account,
+                &clock,
+                &StakeHistory::default(),
+                &Config::default(),
+                &signers,
+            )
+            .unwrap();
+
+        clock.epoch += 1;
+        stake_keyed_account.deactivate(&clock, &signers).unwrap();
+
+        clock.epoch += 1;
+        let withdraw_amount = stake_keyed_account.lamports().unwrap()
+            - (rent_exempt_reserve + MINIMUM_STAKE_DELEGATION - 1);
+        let withdraw_pubkey = Pubkey::new_unique();
+        let withdraw_account =
+            AccountSharedData::new_ref(rent_exempt_reserve, 0, &system_program::id());
+        let withdraw_keyed_account = KeyedAccount::new(&withdraw_pubkey, false, &withdraw_account);
+        stake_keyed_account
+            .withdraw(
+                withdraw_amount,
+                &withdraw_keyed_account,
+                &clock,
+                &StakeHistory::default(),
+                &stake_keyed_account,
+                None,
+            )
+            .unwrap();
+
+        assert!(stake_keyed_account
+            .delegate(
+                &vote_keyed_account,
+                &clock,
+                &StakeHistory::default(),
+                &Config::default(),
+                &signers,
+            )
+            .is_ok());
     }
 
     prop_compose! {

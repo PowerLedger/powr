@@ -2,13 +2,12 @@ use {
     crate::parse_token::UiAccountState,
     solana_sdk::clock::UnixTimestamp,
     spl_token_2022::{
-        extension::{self, BaseState, BaseStateWithExtensions, ExtensionType, StateWithExtensions},
+        extension::{self, BaseState, ExtensionType, StateWithExtensions},
         solana_program::pubkey::Pubkey,
-        solana_zk_token_sdk::zk_token_elgamal::pod::ElGamalPubkey,
     },
 };
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "extension", content = "state")]
 pub enum UiExtension {
     Uninitialized,
@@ -22,10 +21,7 @@ pub enum UiExtension {
     MemoTransfer(UiMemoTransfer),
     NonTransferable,
     InterestBearingConfig(UiInterestBearingConfig),
-    CpiGuard(UiCpiGuard),
-    PermanentDelegate(UiPermanentDelegate),
     UnparseableExtension,
-    NonTransferableAccount,
 }
 
 pub fn parse_extension<S: BaseState>(
@@ -68,19 +64,10 @@ pub fn parse_extension<S: BaseState>(
             .get_extension::<extension::interest_bearing_mint::InterestBearingConfig>()
             .map(|&extension| UiExtension::InterestBearingConfig(extension.into()))
             .unwrap_or(UiExtension::UnparseableExtension),
-        ExtensionType::CpiGuard => account
-            .get_extension::<extension::cpi_guard::CpiGuard>()
-            .map(|&extension| UiExtension::CpiGuard(extension.into()))
-            .unwrap_or(UiExtension::UnparseableExtension),
-        ExtensionType::PermanentDelegate => account
-            .get_extension::<extension::permanent_delegate::PermanentDelegate>()
-            .map(|&extension| UiExtension::PermanentDelegate(extension.into()))
-            .unwrap_or(UiExtension::UnparseableExtension),
-        ExtensionType::NonTransferableAccount => UiExtension::NonTransferableAccount,
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UiTransferFee {
     pub epoch: u64,
@@ -98,7 +85,7 @@ impl From<extension::transfer_fee::TransferFee> for UiTransferFee {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UiTransferFeeConfig {
     pub transfer_fee_config_authority: Option<String>,
@@ -127,7 +114,7 @@ impl From<extension::transfer_fee::TransferFeeConfig> for UiTransferFeeConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UiTransferFeeAmount {
     pub withheld_amount: u64,
@@ -141,7 +128,7 @@ impl From<extension::transfer_fee::TransferFeeAmount> for UiTransferFeeAmount {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UiMintCloseAuthority {
     pub close_authority: Option<String>,
@@ -156,7 +143,7 @@ impl From<extension::mint_close_authority::MintCloseAuthority> for UiMintCloseAu
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UiDefaultAccountState {
     pub account_state: UiAccountState,
@@ -173,7 +160,7 @@ impl From<extension::default_account_state::DefaultAccountState> for UiDefaultAc
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UiMemoTransfer {
     pub require_incoming_transfer_memos: bool,
@@ -219,40 +206,11 @@ impl From<extension::interest_bearing_mint::InterestBearingConfig> for UiInteres
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct UiCpiGuard {
-    pub lock_cpi: bool,
-}
-
-impl From<extension::cpi_guard::CpiGuard> for UiCpiGuard {
-    fn from(cpi_guard: extension::cpi_guard::CpiGuard) -> Self {
-        Self {
-            lock_cpi: cpi_guard.lock_cpi.into(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct UiPermanentDelegate {
-    pub delegate: Option<String>,
-}
-
-impl From<extension::permanent_delegate::PermanentDelegate> for UiPermanentDelegate {
-    fn from(permanent_delegate: extension::permanent_delegate::PermanentDelegate) -> Self {
-        let delegate: Option<Pubkey> = permanent_delegate.delegate.into();
-        Self {
-            delegate: delegate.map(|pubkey| pubkey.to_string()),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub struct UiConfidentialTransferMint {
-    pub authority: Option<String>,
+    pub authority: String,
     pub auto_approve_new_accounts: bool,
-    pub auditor_encryption_pubkey: Option<String>,
-    pub withdraw_withheld_authority_encryption_pubkey: Option<String>,
+    pub auditor_encryption_pubkey: String,
+    pub withdraw_withheld_authority_encryption_pubkey: String,
     pub withheld_amount: String,
 }
 
@@ -262,19 +220,17 @@ impl From<extension::confidential_transfer::ConfidentialTransferMint>
     fn from(
         confidential_transfer_mint: extension::confidential_transfer::ConfidentialTransferMint,
     ) -> Self {
-        let authority: Option<Pubkey> = confidential_transfer_mint.authority.into();
-        let auditor_encryption_pubkey: Option<ElGamalPubkey> =
-            confidential_transfer_mint.auditor_encryption_pubkey.into();
-        let withdraw_withheld_authority_encryption_pubkey: Option<ElGamalPubkey> =
-            confidential_transfer_mint
-                .withdraw_withheld_authority_encryption_pubkey
-                .into();
         Self {
-            authority: authority.map(|pubkey| pubkey.to_string()),
+            authority: confidential_transfer_mint.authority.to_string(),
             auto_approve_new_accounts: confidential_transfer_mint.auto_approve_new_accounts.into(),
-            auditor_encryption_pubkey: auditor_encryption_pubkey.map(|pubkey| pubkey.to_string()),
-            withdraw_withheld_authority_encryption_pubkey:
-                withdraw_withheld_authority_encryption_pubkey.map(|pubkey| pubkey.to_string()),
+            auditor_encryption_pubkey: format!(
+                "{}",
+                confidential_transfer_mint.auditor_encryption_pubkey
+            ),
+            withdraw_withheld_authority_encryption_pubkey: format!(
+                "{}",
+                confidential_transfer_mint.withdraw_withheld_authority_encryption_pubkey
+            ),
             withheld_amount: format!("{}", confidential_transfer_mint.withheld_amount),
         }
     }
@@ -289,8 +245,7 @@ pub struct UiConfidentialTransferAccount {
     pub pending_balance_hi: String,
     pub available_balance: String,
     pub decryptable_available_balance: String,
-    pub allow_confidential_credits: bool,
-    pub allow_non_confidential_credits: bool,
+    pub allow_balance_credits: bool,
     pub pending_balance_credit_counter: u64,
     pub maximum_pending_balance_credit_counter: u64,
     pub expected_pending_balance_credit_counter: u64,
@@ -314,12 +269,7 @@ impl From<extension::confidential_transfer::ConfidentialTransferAccount>
                 "{}",
                 confidential_transfer_account.decryptable_available_balance
             ),
-            allow_confidential_credits: confidential_transfer_account
-                .allow_confidential_credits
-                .into(),
-            allow_non_confidential_credits: confidential_transfer_account
-                .allow_non_confidential_credits
-                .into(),
+            allow_balance_credits: confidential_transfer_account.allow_balance_credits.into(),
             pending_balance_credit_counter: confidential_transfer_account
                 .pending_balance_credit_counter
                 .into(),

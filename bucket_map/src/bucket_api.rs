@@ -16,7 +16,7 @@ use {
 
 type LockedBucket<T> = RwLock<Option<Bucket<T>>>;
 
-pub struct BucketApi<T: Clone + Copy + PartialEq + 'static> {
+pub struct BucketApi<T: Clone + Copy> {
     drives: Arc<Vec<PathBuf>>,
     max_search: MaxSearch,
     pub stats: Arc<BucketMapStats>,
@@ -25,7 +25,7 @@ pub struct BucketApi<T: Clone + Copy + PartialEq + 'static> {
     count: Arc<AtomicU64>,
 }
 
-impl<T: Clone + Copy + PartialEq + std::fmt::Debug> BucketApi<T> {
+impl<T: Clone + Copy> BucketApi<T> {
     pub fn new(
         drives: Arc<Vec<PathBuf>>,
         max_search: MaxSearch,
@@ -82,26 +82,32 @@ impl<T: Clone + Copy + PartialEq + std::fmt::Debug> BucketApi<T> {
         }
     }
 
-    /// allocate new bucket if not allocated yet
-    fn allocate_bucket(&self, bucket: &mut RwLockWriteGuard<Option<Bucket<T>>>) {
+    fn get_write_bucket(&self) -> RwLockWriteGuard<Option<Bucket<T>>> {
+        let mut bucket = self.bucket.write().unwrap();
         if bucket.is_none() {
-            **bucket = Some(Bucket::new(
+            *bucket = Some(Bucket::new(
                 Arc::clone(&self.drives),
                 self.max_search,
                 Arc::clone(&self.stats),
                 Arc::clone(&self.count),
             ));
-        }
-    }
-
-    fn get_write_bucket(&self) -> RwLockWriteGuard<Option<Bucket<T>>> {
-        let mut bucket = self.bucket.write().unwrap();
-        if let Some(bucket) = bucket.as_mut() {
-            bucket.handle_delayed_grows();
         } else {
-            self.allocate_bucket(&mut bucket);
+            let write = bucket.as_mut().unwrap();
+            write.handle_delayed_grows();
         }
         bucket
+    }
+
+    pub fn addref(&self, key: &Pubkey) -> Option<RefCount> {
+        self.get_write_bucket()
+            .as_mut()
+            .and_then(|bucket| bucket.addref(key))
+    }
+
+    pub fn unref(&self, key: &Pubkey) -> Option<RefCount> {
+        self.get_write_bucket()
+            .as_mut()
+            .and_then(|bucket| bucket.unref(key))
     }
 
     pub fn insert(&self, pubkey: &Pubkey, value: (&[T], RefCount)) {
@@ -115,20 +121,6 @@ impl<T: Clone + Copy + PartialEq + std::fmt::Debug> BucketApi<T> {
         if let Some(bucket) = self.bucket.read().unwrap().as_ref() {
             bucket.grow(err)
         }
-    }
-
-    /// caller can specify that the index needs to hold approximately `count` entries soon.
-    /// This gives a hint to the resizing algorithm and prevents repeated incremental resizes.
-    pub fn set_anticipated_count(&self, count: u64) {
-        let mut bucket = self.get_write_bucket();
-        bucket.as_mut().unwrap().set_anticipated_count(count);
-    }
-
-    /// batch insert of `items`. Assumption is a single slot list element and ref_count == 1.
-    /// For any pubkeys that already exist, the index in `items` of the failed insertion and the existing data (previously put in the index) are returned.
-    pub fn batch_insert_non_duplicates(&self, items: &[(Pubkey, T)]) -> Vec<(usize, T)> {
-        let mut bucket = self.get_write_bucket();
-        bucket.as_mut().unwrap().batch_insert_non_duplicates(items)
     }
 
     pub fn update<F>(&self, key: &Pubkey, updatefn: F)
@@ -145,9 +137,6 @@ impl<T: Clone + Copy + PartialEq + std::fmt::Debug> BucketApi<T> {
         value: (&[T], RefCount),
     ) -> Result<(), BucketMapError> {
         let mut bucket = self.get_write_bucket();
-        bucket
-            .as_mut()
-            .unwrap()
-            .try_write(pubkey, value.0.iter(), value.0.len(), value.1)
+        bucket.as_mut().unwrap().try_write(pubkey, value.0, value.1)
     }
 }

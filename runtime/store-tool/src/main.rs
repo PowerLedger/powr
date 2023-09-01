@@ -1,13 +1,7 @@
 use {
-    clap::{crate_description, crate_name, value_t, value_t_or_exit, App, Arg},
+    clap::{crate_description, crate_name, value_t_or_exit, App, Arg},
     log::*,
-    solana_accounts_db::{account_storage::meta::StoredAccountMeta, append_vec::AppendVec},
-    solana_sdk::{
-        account::{AccountSharedData, ReadableAccount},
-        hash::Hash,
-        pubkey::Pubkey,
-    },
-    std::mem::ManuallyDrop,
+    solana_runtime::append_vec::AppendVec,
 };
 
 fn main() {
@@ -32,42 +26,22 @@ fn main() {
         .get_matches();
 
     let file = value_t_or_exit!(matches, "file", String);
-    let len = value_t!(matches, "len", usize)
-        .unwrap_or_else(|_| std::fs::metadata(&file).unwrap().len() as usize);
-
-    // When the AppendVec is dropped, the backing file will be removed.  We do not want to remove
-    // the backing file here in the store-tool, so prevent dropping.
-    let store = ManuallyDrop::new(
-        AppendVec::new_from_file_unchecked(file, len).expect("new AppendVec from file"),
-    );
-    info!("store: len: {} capacity: {}", store.len(), store.capacity());
-    let mut num_accounts: usize = 0;
-    let mut stored_accounts_len: usize = 0;
-    for account in store.account_iter() {
-        if is_account_zeroed(&account) {
-            break;
-        }
-        info!(
-            "  account: {:?} version: {} lamports: {} data: {} hash: {:?}",
-            account.pubkey(),
-            account.write_version(),
-            account.lamports(),
-            account.data_len(),
-            account.hash()
-        );
-        num_accounts = num_accounts.saturating_add(1);
-        stored_accounts_len = stored_accounts_len.saturating_add(account.stored_size());
-    }
+    let len = value_t_or_exit!(matches, "len", usize);
+    let (mut store, num_accounts) = AppendVec::new_from_file(file, len).expect("should succeed");
+    store.set_no_remove_on_drop();
     info!(
-        "num_accounts: {} stored_accounts_len: {}",
-        num_accounts, stored_accounts_len
+        "store: len: {} capacity: {} accounts: {}",
+        store.len(),
+        store.capacity(),
+        num_accounts,
     );
+    for account in store.accounts(0) {
+        info!(
+            "  account: {:?} version: {} data: {} hash: {:?}",
+            account.meta.pubkey, account.meta.write_version, account.meta.data_len, account.hash
+        );
+    }
 }
 
-fn is_account_zeroed(account: &StoredAccountMeta) -> bool {
-    account.hash() == &Hash::default()
-        && account.data_len() == 0
-        && account.write_version() == 0
-        && account.pubkey() == &Pubkey::default()
-        && account.to_account_shared_data() == AccountSharedData::default()
-}
+#[cfg(test)]
+pub mod test {}

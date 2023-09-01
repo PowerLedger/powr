@@ -1,9 +1,9 @@
 use {
-    enum_iterator::{all, Sequence},
+    enum_iterator::IntoEnumIterator,
     std::io::{self, BufReader, Read, Write},
 };
 
-#[derive(Debug, Serialize, Deserialize, Sequence)]
+#[derive(Debug, Serialize, Deserialize, IntoEnumIterator)]
 pub enum CompressionMethod {
     NoCompression,
     Bzip2,
@@ -36,7 +36,7 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, io::Error> {
     let method = bincode::deserialize(&data[..method_size as usize]).map_err(|err| {
         io::Error::new(
             io::ErrorKind::Other,
-            format!("method deserialize failed: {err}"),
+            format!("method deserialize failed: {}", err),
         )
     })?;
 
@@ -48,31 +48,35 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, io::Error> {
 
 pub fn compress(method: CompressionMethod, data: &[u8]) -> Result<Vec<u8>, io::Error> {
     let mut compressed_data = bincode::serialize(&method).unwrap();
-    compressed_data.extend(match method {
-        CompressionMethod::Bzip2 => {
-            let mut e = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::best());
-            e.write_all(data)?;
-            e.finish()?
+    compressed_data.extend(
+        match method {
+            CompressionMethod::Bzip2 => {
+                let mut e = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::best());
+                e.write_all(data)?;
+                e.finish()?
+            }
+            CompressionMethod::Gzip => {
+                let mut e =
+                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                e.write_all(data)?;
+                e.finish()?
+            }
+            CompressionMethod::Zstd => {
+                let mut e = zstd::stream::write::Encoder::new(Vec::new(), 0).unwrap();
+                e.write_all(data)?;
+                e.finish()?
+            }
+            CompressionMethod::NoCompression => data.to_vec(),
         }
-        CompressionMethod::Gzip => {
-            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-            e.write_all(data)?;
-            e.finish()?
-        }
-        CompressionMethod::Zstd => {
-            let mut e = zstd::stream::write::Encoder::new(Vec::new(), 0).unwrap();
-            e.write_all(data)?;
-            e.finish()?
-        }
-        CompressionMethod::NoCompression => data.to_vec(),
-    });
+        .into_iter(),
+    );
 
     Ok(compressed_data)
 }
 
 pub fn compress_best(data: &[u8]) -> Result<Vec<u8>, io::Error> {
     let mut candidates = vec![];
-    for method in all::<CompressionMethod>() {
+    for method in CompressionMethod::into_enum_iter() {
         candidates.push(compress(method, data)?);
     }
 

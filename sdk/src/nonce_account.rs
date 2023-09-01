@@ -1,5 +1,3 @@
-//! Functions related to nonce accounts.
-
 use {
     crate::{
         account::{AccountSharedData, ReadableAccount},
@@ -13,11 +11,11 @@ use {
     std::cell::RefCell,
 };
 
-pub fn create_account(lamports: u64) -> RefCell<AccountSharedData> {
+pub fn create_account(lamports: u64, separate_domains: bool) -> RefCell<AccountSharedData> {
     RefCell::new(
         AccountSharedData::new_data_with_space(
             lamports,
-            &Versions::new(State::Uninitialized),
+            &Versions::new(State::Uninitialized, separate_domains),
             State::size(),
             &crate::system_program::id(),
         )
@@ -30,12 +28,13 @@ pub fn create_account(lamports: u64) -> RefCell<AccountSharedData> {
 pub fn verify_nonce_account(
     account: &AccountSharedData,
     recent_blockhash: &Hash, // Transaction.message.recent_blockhash
+    separate_domains: bool,
 ) -> Option<Data> {
     (account.owner() == &crate::system_program::id())
         .then(|| {
             StateMut::<Versions>::state(account)
                 .ok()?
-                .verify_recent_blockhash(recent_blockhash)
+                .verify_recent_blockhash(recent_blockhash, separate_domains)
                 .cloned()
         })
         .flatten()
@@ -54,6 +53,7 @@ mod tests {
         super::*,
         crate::{
             fee_calculator::FeeCalculator,
+            hash::hashv,
             nonce::state::{Data, DurableNonce},
             pubkey::Pubkey,
             system_program,
@@ -66,12 +66,17 @@ mod tests {
         assert_ne!(program_id, crate::system_program::id());
         let account = AccountSharedData::new_data_with_space(
             42,
-            &Versions::new(State::Uninitialized),
+            &Versions::new(State::Uninitialized, /*separate_domains:*/ true),
             State::size(),
             &program_id,
         )
         .expect("nonce_account");
-        assert_eq!(verify_nonce_account(&account, &Hash::default()), None);
+        for separate_domains in [false, true] {
+            assert_eq!(
+                verify_nonce_account(&account, &Hash::default(), separate_domains),
+                None
+            );
+        }
     }
 
     fn new_nonce_account(versions: Versions) -> AccountSharedData {
@@ -85,16 +90,33 @@ mod tests {
 
     #[test]
     fn test_verify_nonce_account() {
-        let blockhash = Hash::from([171; 32]);
+        let blockhash: Hash = hashv(&[&[171u8; 32]]);
         let versions = Versions::Legacy(Box::new(State::Uninitialized));
         let account = new_nonce_account(versions);
-        assert_eq!(verify_nonce_account(&account, &blockhash), None);
-        assert_eq!(verify_nonce_account(&account, &Hash::default()), None);
+        for separate_domains in [false, true] {
+            assert_eq!(
+                verify_nonce_account(&account, &blockhash, separate_domains),
+                None
+            );
+            assert_eq!(
+                verify_nonce_account(&account, &Hash::default(), separate_domains),
+                None
+            );
+        }
         let versions = Versions::Current(Box::new(State::Uninitialized));
         let account = new_nonce_account(versions);
-        assert_eq!(verify_nonce_account(&account, &blockhash), None);
-        assert_eq!(verify_nonce_account(&account, &Hash::default()), None);
-        let durable_nonce = DurableNonce::from_blockhash(&blockhash);
+        for separate_domains in [false, true] {
+            assert_eq!(
+                verify_nonce_account(&account, &blockhash, separate_domains),
+                None
+            );
+            assert_eq!(
+                verify_nonce_account(&account, &Hash::default(), separate_domains),
+                None
+            );
+        }
+        let durable_nonce =
+            DurableNonce::from_blockhash(&blockhash, /*separate_domains:*/ false);
         let data = Data {
             authority: Pubkey::new_unique(),
             durable_nonce,
@@ -104,14 +126,42 @@ mod tests {
         };
         let versions = Versions::Legacy(Box::new(State::Initialized(data.clone())));
         let account = new_nonce_account(versions);
-        assert_eq!(verify_nonce_account(&account, &blockhash), None);
-        assert_eq!(verify_nonce_account(&account, &Hash::default()), None);
-        assert_eq!(verify_nonce_account(&account, &data.blockhash()), None);
+        let separate_domains = false;
         assert_eq!(
-            verify_nonce_account(&account, durable_nonce.as_hash()),
+            verify_nonce_account(&account, &blockhash, separate_domains),
+            Some(data.clone())
+        );
+        assert_eq!(
+            verify_nonce_account(&account, &Hash::default(), separate_domains),
             None
         );
-        let durable_nonce = DurableNonce::from_blockhash(durable_nonce.as_hash());
+        assert_eq!(
+            verify_nonce_account(&account, &data.blockhash(), separate_domains),
+            Some(data.clone())
+        );
+        assert_eq!(
+            verify_nonce_account(&account, durable_nonce.as_hash(), separate_domains),
+            Some(data.clone())
+        );
+        let separate_domains = true;
+        assert_eq!(
+            verify_nonce_account(&account, &blockhash, separate_domains),
+            None
+        );
+        assert_eq!(
+            verify_nonce_account(&account, &Hash::default(), separate_domains),
+            None
+        );
+        assert_eq!(
+            verify_nonce_account(&account, &data.blockhash(), separate_domains),
+            None
+        );
+        assert_eq!(
+            verify_nonce_account(&account, durable_nonce.as_hash(), separate_domains),
+            None
+        );
+        let durable_nonce =
+            DurableNonce::from_blockhash(&blockhash, /*separate_domains:*/ true);
         assert_ne!(data.durable_nonce, durable_nonce);
         let data = Data {
             durable_nonce,
@@ -119,15 +169,23 @@ mod tests {
         };
         let versions = Versions::Current(Box::new(State::Initialized(data.clone())));
         let account = new_nonce_account(versions);
-        assert_eq!(verify_nonce_account(&account, &blockhash), None);
-        assert_eq!(verify_nonce_account(&account, &Hash::default()), None);
-        assert_eq!(
-            verify_nonce_account(&account, &data.blockhash()),
-            Some(data.clone())
-        );
-        assert_eq!(
-            verify_nonce_account(&account, durable_nonce.as_hash()),
-            Some(data)
-        );
+        for separate_domains in [false, true] {
+            assert_eq!(
+                verify_nonce_account(&account, &blockhash, separate_domains),
+                None
+            );
+            assert_eq!(
+                verify_nonce_account(&account, &Hash::default(), separate_domains),
+                None
+            );
+            assert_eq!(
+                verify_nonce_account(&account, &data.blockhash(), separate_domains),
+                Some(data.clone())
+            );
+            assert_eq!(
+                verify_nonce_account(&account, durable_nonce.as_hash(), separate_domains),
+                Some(data.clone())
+            );
+        }
     }
 }

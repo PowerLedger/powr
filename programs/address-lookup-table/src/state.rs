@@ -18,7 +18,7 @@ pub const LOOKUP_TABLE_MAX_ADDRESSES: usize = 256;
 pub const LOOKUP_TABLE_META_SIZE: usize = 56;
 
 /// Program account states
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, AbiExample, AbiEnumVisitor)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, AbiExample, AbiEnumVisitor)]
 #[allow(clippy::large_enum_variant)]
 pub enum ProgramState {
     /// Account is not initialized.
@@ -28,7 +28,7 @@ pub enum ProgramState {
 }
 
 /// Activation status of a lookup table
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum LookupTableStatus {
     Activated,
     Deactivating { remaining_blocks: usize },
@@ -36,7 +36,7 @@ pub enum LookupTableStatus {
 }
 
 /// Address lookup table metadata
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, AbiExample)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, AbiExample)]
 pub struct LookupTableMeta {
     /// Lookup tables cannot be closed until the deactivation slot is
     /// no longer "recent" (not accessible in the `SlotHashes` sysvar).
@@ -112,7 +112,7 @@ impl LookupTableMeta {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, AbiExample)]
+#[derive(Debug, PartialEq, Clone, AbiExample)]
 pub struct AddressLookupTable<'a> {
     pub meta: LookupTableMeta,
     pub addresses: Cow<'a, [Pubkey]>,
@@ -329,7 +329,8 @@ mod tests {
         serialized_table_1.resize(LOOKUP_TABLE_META_SIZE, 0);
 
         let address_table = AddressLookupTable::new_for_tests(meta, 0);
-        let mut serialized_table_2 = vec![0; LOOKUP_TABLE_META_SIZE];
+        let mut serialized_table_2 = Vec::new();
+        serialized_table_2.resize(LOOKUP_TABLE_META_SIZE, 0);
         AddressLookupTable::overwrite_meta_data(&mut serialized_table_2, address_table.meta)
             .unwrap();
 

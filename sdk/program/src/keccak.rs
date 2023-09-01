@@ -1,7 +1,3 @@
-//! Hashing with the [keccak] (SHA-3) hash function.
-//!
-//! [keccak]: https://keccak.team/keccak.html
-
 use {
     crate::sanitize::Sanitize,
     borsh::{BorshDeserialize, BorshSchema, BorshSerialize},
@@ -128,18 +124,21 @@ impl Hash {
 pub fn hashv(vals: &[&[u8]]) -> Hash {
     // Perform the calculation inline, calling this from within a program is
     // not supported
-    #[cfg(not(target_os = "solana"))]
+    #[cfg(not(target_arch = "bpf"))]
     {
         let mut hasher = Hasher::default();
         hasher.hashv(vals);
         hasher.result()
     }
     // Call via a system call to perform the calculation
-    #[cfg(target_os = "solana")]
+    #[cfg(target_arch = "bpf")]
     {
+        extern "C" {
+            fn sol_keccak256(vals: *const u8, val_len: u64, hash_result: *mut u8) -> u64;
+        }
         let mut hash_result = [0; HASH_BYTES];
         unsafe {
-            crate::syscalls::sol_keccak256(
+            sol_keccak256(
                 vals as *const _ as *const u8,
                 vals.len() as u64,
                 &mut hash_result as *mut _ as *mut u8,

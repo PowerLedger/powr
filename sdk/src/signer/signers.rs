@@ -1,11 +1,7 @@
 #![cfg(feature = "full")]
-
-use {
-    crate::{
-        pubkey::Pubkey,
-        signature::{Signature, Signer, SignerError},
-    },
-    std::sync::Arc,
+use crate::{
+    pubkey::Pubkey,
+    signature::{Signature, Signer, SignerError},
 };
 
 /// Convenience trait for working with mixed collections of `Signer`s
@@ -60,34 +56,6 @@ impl Signers for [Box<dyn Signer>] {
 }
 
 impl Signers for Vec<Box<dyn Signer>> {
-    default_keypairs_impl!();
-}
-
-impl Signers for [Arc<dyn Signer>] {
-    default_keypairs_impl!();
-}
-
-impl Signers for [Arc<dyn Signer>; 0] {
-    default_keypairs_impl!();
-}
-
-impl Signers for [Arc<dyn Signer>; 1] {
-    default_keypairs_impl!();
-}
-
-impl Signers for [Arc<dyn Signer>; 2] {
-    default_keypairs_impl!();
-}
-
-impl Signers for [Arc<dyn Signer>; 3] {
-    default_keypairs_impl!();
-}
-
-impl Signers for [Arc<dyn Signer>; 4] {
-    default_keypairs_impl!();
-}
-
-impl Signers for Vec<Arc<dyn Signer>> {
     default_keypairs_impl!();
 }
 
@@ -190,6 +158,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::blacklisted_name)]
     fn test_dyn_keypairs_by_ref_compile() {
         let foo = Foo {};
         let bar = Bar {};

@@ -1,8 +1,5 @@
-//! The Rust-based BPF program entrypoint supported by the latest BPF loader.
-//!
-//! For more information see the [`bpf_loader`] module.
-//!
-//! [`bpf_loader`]: crate::bpf_loader
+//! Solana Rust-based BPF program entry point supported by the latest
+//! BPFLoader.  For more information see './bpf_loader.rs'
 
 extern crate alloc;
 use {
@@ -36,10 +33,7 @@ pub const HEAP_START_ADDRESS: u64 = 0x300000000;
 /// Length of the heap memory region used for program heap.
 pub const HEAP_LENGTH: usize = 32 * 1024;
 
-/// Value used to indicate that a serialized account is not a duplicate
-pub const NON_DUP_MARKER: u8 = u8::MAX;
-
-/// Declare the program entrypoint and set up global handlers.
+/// Declare the program entry point and set up global handlers.
 ///
 /// This macro emits the common boilerplate necessary to begin program
 /// execution, calling a provided function to process the program instruction
@@ -47,9 +41,6 @@ pub const NON_DUP_MARKER: u8 = u8::MAX;
 ///
 /// It also sets up a [global allocator] and [panic handler], using the
 /// [`custom_heap_default`] and [`custom_panic_default`] macros.
-///
-/// [`custom_heap_default`]: crate::custom_heap_default
-/// [`custom_panic_default`]: crate::custom_panic_default
 ///
 /// [global allocator]: https://doc.rust-lang.org/stable/std/alloc/trait.GlobalAlloc.html
 /// [panic handler]: https://doc.rust-lang.org/nomicon/panic-handler.html
@@ -91,7 +82,7 @@ pub const NON_DUP_MARKER: u8 = u8::MAX;
 ///
 /// # Examples
 ///
-/// Defining an entrypoint and making it conditional on the `no-entrypoint`
+/// Defining an entry point and making it conditional on the `no-entrypoint`
 /// feature. Although the `entrypoint` module is written inline in this example,
 /// it is common to put it into its own file.
 ///
@@ -161,7 +152,7 @@ macro_rules! entrypoint {
 #[macro_export]
 macro_rules! custom_heap_default {
     () => {
-        #[cfg(all(not(feature = "custom-heap"), target_os = "solana"))]
+        #[cfg(all(not(feature = "custom-heap"), target_arch = "bpf"))]
         #[global_allocator]
         static A: $crate::entrypoint::BumpAllocator = $crate::entrypoint::BumpAllocator {
             start: $crate::entrypoint::HEAP_START_ADDRESS as usize,
@@ -206,7 +197,7 @@ macro_rules! custom_heap_default {
 /// with the `#[no_mangle]` attribute, as below:
 ///
 /// ```ignore
-/// #[cfg(all(feature = "custom-panic", target_os = "solana"))]
+/// #[cfg(all(feature = "custom-panic", target_arch = "bpf"))]
 /// #[no_mangle]
 /// fn custom_panic(info: &core::panic::PanicInfo<'_>) {
 ///     $crate::msg!("{}", info);
@@ -217,7 +208,7 @@ macro_rules! custom_heap_default {
 #[macro_export]
 macro_rules! custom_panic_default {
     () => {
-        #[cfg(all(not(feature = "custom-panic"), target_os = "solana"))]
+        #[cfg(all(not(feature = "custom-panic"), target_arch = "bpf"))]
         #[no_mangle]
         fn custom_panic(info: &core::panic::PanicInfo<'_>) {
             // Full panic reporting
@@ -289,7 +280,7 @@ pub unsafe fn deserialize<'a>(input: *mut u8) -> (&'a Pubkey, Vec<AccountInfo<'a
     for _ in 0..num_accounts {
         let dup_info = *(input.add(offset) as *const u8);
         offset += size_of::<u8>();
-        if dup_info == NON_DUP_MARKER {
+        if dup_info == std::u8::MAX {
             #[allow(clippy::cast_ptr_alignment)]
             let is_signer = *(input.add(offset) as *const u8) != 0;
             offset += size_of::<u8>();
@@ -378,7 +369,7 @@ mod test {
     fn test_bump_allocator() {
         // alloc the entire
         {
-            let heap = [0u8; 128];
+            let heap = vec![0u8; 128];
             let allocator = BumpAllocator {
                 start: heap.as_ptr() as *const _ as usize,
                 len: heap.len(),
@@ -398,7 +389,7 @@ mod test {
         }
         // check alignment
         {
-            let heap = [0u8; 128];
+            let heap = vec![0u8; 128];
             let allocator = BumpAllocator {
                 start: heap.as_ptr() as *const _ as usize,
                 len: heap.len(),
@@ -423,7 +414,7 @@ mod test {
         }
         // alloc entire block (minus the pos ptr)
         {
-            let heap = [0u8; 128];
+            let heap = vec![0u8; 128];
             let allocator = BumpAllocator {
                 start: heap.as_ptr() as *const _ as usize,
                 len: heap.len(),

@@ -1,5 +1,8 @@
 use {
-    crate::shred::{Shred, ShredType},
+    crate::{
+        erasure::ErasureConfig,
+        shred::{Shred, ShredType},
+    },
     bitflags::bitflags,
     serde::{Deserialize, Deserializer, Serialize, Serializer},
     solana_sdk::{
@@ -13,7 +16,7 @@ use {
 };
 
 bitflags! {
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+    #[derive(Deserialize, Serialize)]
     /// Flags to indicate whether a slot is a descendant of a slot on the main fork
     pub struct ConnectedFlags:u8 {
         // A slot S should be considered to be connected if:
@@ -50,36 +53,34 @@ impl Default for ConnectedFlags {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
-/// The Meta column family
+// The Meta column family
 pub struct SlotMeta {
-    /// The number of slots above the root (the genesis block). The first
-    /// slot has slot 0.
+    // The number of slots above the root (the genesis block). The first
+    // slot has slot 0.
     pub slot: Slot,
-    /// The total number of consecutive shreds starting from index 0 we have received for this slot.
-    /// At the same time, it is also an index of the first missing shred for this slot, while the
-    /// slot is incomplete.
+    // The total number of consecutive shreds starting from index 0
+    // we have received for this slot.
     pub consumed: u64,
-    /// The index *plus one* of the highest shred received for this slot.  Useful
-    /// for checking if the slot has received any shreds yet, and to calculate the
-    /// range where there is one or more holes: `(consumed..received)`.
+    // The index *plus one* of the highest shred received for this slot.  Useful
+    // for checking if the slot has received any shreds yet, and to calculate the
+    // range where there is one or more holes: `(consumed..received)`.
     pub received: u64,
-    /// The timestamp of the first time a shred was added for this slot
+    // The timestamp of the first time a shred was added for this slot
     pub first_shred_timestamp: u64,
-    /// The index of the shred that is flagged as the last shred for this slot.
-    /// None until the shred with LAST_SHRED_IN_SLOT flag is received.
+    // The index of the shred that is flagged as the last shred for this slot.
+    // None until the shred with LAST_SHRED_IN_SLOT flag is received.
     #[serde(with = "serde_compat")]
     pub last_index: Option<u64>,
-    /// The slot height of the block this one derives from.
-    /// The parent slot of the head of a detached chain of slots is None.
+    // The slot height of the block this one derives from.
+    // The parent slot of the head of a detached chain of slots is None.
     #[serde(with = "serde_compat")]
     pub parent_slot: Option<Slot>,
-    /// The list of slots, each of which contains a block that derives
-    /// from this one.
+    // The list of slots, each of which contains a block that derives
+    // from this one.
     pub next_slots: Vec<Slot>,
-    /// Connected status flags of this slot
+    // Connected status flags of this slot
     pub connected_flags: ConnectedFlags,
-    /// Shreds indices which are marked data complete.  That is, those that have the
-    /// [`ShredFlags::DATA_COMPLETE_SHRED`][`crate::shred::ShredFlags::DATA_COMPLETE_SHRED`] set.
+    // Shreds indices which are marked data complete.
     pub completed_data_indexes: BTreeSet<u32>,
 }
 
@@ -100,11 +101,11 @@ mod serde_compat {
         D: Deserializer<'de>,
     {
         let val = u64::deserialize(deserializer)?;
-        Ok((val != u64::MAX).then_some(val))
+        Ok((val != u64::MAX).then(|| val))
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 /// Index recording presence/absence of shreds
 pub struct Index {
     pub slot: Slot,
@@ -112,7 +113,7 @@ pub struct Index {
     coding: ShredIndex,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct ShredIndex {
     /// Map representing presence/absence of shreds
     index: BTreeSet<u64>,
@@ -132,12 +133,6 @@ pub struct ErasureMeta {
     config: ErasureConfig,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct ErasureConfig {
-    num_data: usize,
-    num_coding: usize,
-}
-
 #[derive(Deserialize, Serialize)]
 pub struct DuplicateSlotProof {
     #[serde(with = "serde_bytes")]
@@ -146,14 +141,14 @@ pub struct DuplicateSlotProof {
     pub shred2: Vec<u8>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum ErasureMetaStatus {
     CanRecover,
     DataFull,
     StillNeed(usize),
 }
 
-#[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub enum FrozenHashVersioned {
     Current(FrozenHashStatus),
 }
@@ -174,7 +169,7 @@ impl FrozenHashVersioned {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct FrozenHashStatus {
     pub frozen_hash: Hash,
     pub is_duplicate_confirmed: bool,
@@ -253,58 +248,25 @@ impl SlotMeta {
         Some(self.consumed) == self.last_index.map(|ix| ix + 1)
     }
 
-    /// Returns a boolean indicating whether the meta is connected.
     pub fn is_connected(&self) -> bool {
         self.connected_flags.contains(ConnectedFlags::CONNECTED)
     }
 
-    /// Mark the meta as connected.
     pub fn set_connected(&mut self) {
-        assert!(self.is_parent_connected());
         self.connected_flags.set(ConnectedFlags::CONNECTED, true);
     }
 
-    /// Returns a boolean indicating whether the meta's parent is connected.
-    pub fn is_parent_connected(&self) -> bool {
-        self.connected_flags
-            .contains(ConnectedFlags::PARENT_CONNECTED)
-    }
-
-    /// Mark the meta's parent as connected.
-    /// If the meta is also full, the meta is now connected as well. Return a
-    /// boolean indicating whether the meta becamed connected from this call.
-    pub fn set_parent_connected(&mut self) -> bool {
-        // Already connected so nothing to do, bail early
-        if self.is_connected() {
-            return false;
-        }
-
-        self.connected_flags
-            .set(ConnectedFlags::PARENT_CONNECTED, true);
-
-        if self.is_full() {
-            self.set_connected();
-        }
-
-        self.is_connected()
-    }
-
-    /// Dangerous.
-    #[cfg(feature = "dev-context-only-utils")]
-    pub fn unset_parent(&mut self) {
-        self.parent_slot = None;
-    }
-
     pub fn clear_unconfirmed_slot(&mut self) {
-        let old = std::mem::replace(self, SlotMeta::new_orphan(self.slot));
-        self.next_slots = old.next_slots;
+        let mut new_self = SlotMeta::new_orphan(self.slot);
+        std::mem::swap(&mut new_self.next_slots, &mut self.next_slots);
+        std::mem::swap(self, &mut new_self);
     }
 
     pub(crate) fn new(slot: Slot, parent_slot: Option<Slot>) -> Self {
         let connected_flags = if slot == 0 {
             // Slot 0 is the start, mark it as having its' parent connected
             // such that slot 0 becoming full will be updated as connected
-            ConnectedFlags::PARENT_CONNECTED
+            ConnectedFlags::CONNECTED
         } else {
             ConnectedFlags::default()
         };
@@ -326,10 +288,10 @@ impl ErasureMeta {
         match shred.shred_type() {
             ShredType::Data => None,
             ShredType::Code => {
-                let config = ErasureConfig {
-                    num_data: usize::from(shred.num_data_shreds().ok()?),
-                    num_coding: usize::from(shred.num_coding_shreds().ok()?),
-                };
+                let config = ErasureConfig::new(
+                    usize::from(shred.coding_header.num_data_shreds),
+                    usize::from(shred.coding_header.num_coding_shreds),
+                );
                 let first_coding_index = u64::from(shred.first_coding_index()?);
                 let erasure_meta = ErasureMeta {
                     set_index: u64::from(shred.fec_set_index()),
@@ -345,20 +307,12 @@ impl ErasureMeta {
     // Returns true if the erasure fields on the shred
     // are consistent with the erasure-meta.
     pub(crate) fn check_coding_shred(&self, shred: &Shred) -> bool {
-        let Some(mut other) = Self::from_coding_shred(shred) else {
-            return false;
+        let mut other = match Self::from_coding_shred(shred) {
+            Some(erasure_meta) => erasure_meta,
+            None => return false,
         };
         other.__unused_size = self.__unused_size;
         self == &other
-    }
-
-    /// Returns true if both shreds are coding shreds and have a
-    /// consistent erasure config
-    pub fn check_erasure_consistency(shred1: &Shred, shred2: &Shred) -> bool {
-        let Some(coding_shred) = Self::from_coding_shred(shred1) else {
-            return false;
-        };
-        coding_shred.check_coding_shred(shred2)
     }
 
     pub(crate) fn config(&self) -> ErasureConfig {
@@ -366,12 +320,12 @@ impl ErasureMeta {
     }
 
     pub(crate) fn data_shreds_indices(&self) -> Range<u64> {
-        let num_data = self.config.num_data as u64;
+        let num_data = self.config.num_data() as u64;
         self.set_index..self.set_index + num_data
     }
 
     pub(crate) fn coding_shreds_indices(&self) -> Range<u64> {
-        let num_coding = self.config.num_coding as u64;
+        let num_coding = self.config.num_coding() as u64;
         self.first_coding_index..self.first_coding_index + num_coding
     }
 
@@ -382,8 +336,8 @@ impl ErasureMeta {
         let num_data = index.data().range(self.data_shreds_indices()).count();
 
         let (data_missing, num_needed) = (
-            self.config.num_data.saturating_sub(num_data),
-            self.config.num_data.saturating_sub(num_data + num_coding),
+            self.config.num_data().saturating_sub(num_data),
+            self.config.num_data().saturating_sub(num_data + num_coding),
         );
 
         if data_missing == 0 {
@@ -402,71 +356,36 @@ impl DuplicateSlotProof {
     }
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct TransactionStatusIndexMeta {
     pub max_slot: Slot,
     pub frozen: bool,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct AddressSignatureMeta {
     pub writeable: bool,
 }
 
-/// Performance information about validator execution during a time slice.
-///
-/// Older versions should only arise as a result of deserialization of entries stored by a previous
-/// version of the validator.  Current version should only produce [`PerfSampleV2`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PerfSample {
-    V1(PerfSampleV1),
-    V2(PerfSampleV2),
-}
-
-impl From<PerfSampleV1> for PerfSample {
-    fn from(value: PerfSampleV1) -> PerfSample {
-        PerfSample::V1(value)
-    }
-}
-
-impl From<PerfSampleV2> for PerfSample {
-    fn from(value: PerfSampleV2) -> PerfSample {
-        PerfSample::V2(value)
-    }
-}
-
-/// Version of [`PerfSample`] used before 1.15.x.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-pub struct PerfSampleV1 {
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct PerfSample {
     pub num_transactions: u64,
     pub num_slots: u64,
     pub sample_period_secs: u16,
 }
 
-/// Version of the [`PerfSample`] introduced in 1.15.x.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-pub struct PerfSampleV2 {
-    // `PerfSampleV1` part
-    pub num_transactions: u64,
-    pub num_slots: u64,
-    pub sample_period_secs: u16,
-
-    // New fields.
-    pub num_non_vote_transactions: u64,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct ProgramCost {
     pub cost: u64,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct OptimisticSlotMetaV0 {
     pub hash: Hash,
     pub timestamp: UnixTimestamp,
 }
 
-#[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub enum OptimisticSlotMetaVersioned {
     V0(OptimisticSlotMetaV0),
 }
@@ -496,21 +415,12 @@ mod test {
     };
 
     #[test]
-    fn test_slot_meta_slot_zero_connected() {
-        let meta = SlotMeta::new(0 /* slot */, None /* parent */);
-        assert!(meta.is_parent_connected());
-        assert!(!meta.is_connected());
-    }
-
-    #[test]
     fn test_erasure_meta_status() {
         use ErasureMetaStatus::*;
 
         let set_index = 0;
-        let erasure_config = ErasureConfig {
-            num_data: 8,
-            num_coding: 16,
-        };
+        let erasure_config = ErasureConfig::new(8, 16);
+
         let e_meta = ErasureMeta {
             set_index,
             first_coding_index: set_index,
@@ -520,10 +430,10 @@ mod test {
         let mut rng = thread_rng();
         let mut index = Index::new(0);
 
-        let data_indexes = 0..erasure_config.num_data as u64;
-        let coding_indexes = 0..erasure_config.num_coding as u64;
+        let data_indexes = 0..erasure_config.num_data() as u64;
+        let coding_indexes = 0..erasure_config.num_coding() as u64;
 
-        assert_eq!(e_meta.status(&index), StillNeed(erasure_config.num_data));
+        assert_eq!(e_meta.status(&index), StillNeed(erasure_config.num_data()));
 
         for ix in data_indexes.clone() {
             index.data_mut().insert(ix);
@@ -538,7 +448,7 @@ mod test {
         for &idx in data_indexes
             .clone()
             .collect::<Vec<_>>()
-            .choose_multiple(&mut rng, erasure_config.num_data)
+            .choose_multiple(&mut rng, erasure_config.num_data())
         {
             index.data_mut().index.remove(&idx);
 
@@ -551,7 +461,7 @@ mod test {
 
         for &idx in coding_indexes
             .collect::<Vec<_>>()
-            .choose_multiple(&mut rng, erasure_config.num_coding)
+            .choose_multiple(&mut rng, erasure_config.num_coding())
         {
             index.coding_mut().index.remove(&idx);
 
@@ -643,29 +553,5 @@ mod test {
         let mut expected = SlotMeta::new_orphan(5);
         expected.next_slots = vec![6, 7];
         assert_eq!(slot_meta, expected);
-    }
-
-    // `PerfSampleV2` should contain `PerfSampleV1` as a prefix, in order for the column to be
-    // backward and forward compatible.
-    #[test]
-    fn perf_sample_v1_is_prefix_of_perf_sample_v2() {
-        let v2 = PerfSampleV2 {
-            num_transactions: 4190143848,
-            num_slots: 3607325588,
-            sample_period_secs: 31263,
-            num_non_vote_transactions: 4056116066,
-        };
-
-        let v2_bytes = bincode::serialize(&v2).expect("`PerfSampleV2` can be serialized");
-
-        let actual: PerfSampleV1 = bincode::deserialize(&v2_bytes)
-            .expect("Bytes encoded as `PerfSampleV2` can be decoded as `PerfSampleV1`");
-        let expected = PerfSampleV1 {
-            num_transactions: v2.num_transactions,
-            num_slots: v2.num_slots,
-            sample_period_secs: v2.sample_period_secs,
-        };
-
-        assert_eq!(actual, expected);
     }
 }

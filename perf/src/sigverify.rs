@@ -3,13 +3,18 @@
 //! cores.  When perf-libs are available signature verification is offloaded
 //! to the GPU.
 //!
+
+#[cfg(test)]
+use solana_sdk::transaction::Transaction;
 use {
     crate::{
         cuda_runtime::PinnedVec,
-        packet::{Packet, PacketBatch, PacketFlags, PACKET_DATA_SIZE},
+        packet::{Packet, PacketBatch, PacketFlags},
         perf_libs,
         recycler::Recycler,
     },
+    ahash::AHasher,
+    rand::Rng,
     rayon::{prelude::*, ThreadPool},
     solana_metrics::inc_new_counter_debug,
     solana_rayon_threadlimit::get_thread_count,
@@ -20,7 +25,15 @@ use {
         short_vec::decode_shortu16_len,
         signature::Signature,
     },
-    std::{convert::TryFrom, mem::size_of},
+    std::{
+        convert::TryFrom,
+        hash::Hasher,
+        iter::repeat_with,
+        marker::PhantomData,
+        mem::size_of,
+        sync::atomic::{AtomicU64, Ordering},
+        time::{Duration, Instant},
+    },
 };
 
 // Representing key tKeYE4wtowRb8yRroZShTipE18YVnqwXjsSAoNsFU6g
@@ -30,13 +43,11 @@ const TRACER_KEY_BYTES: [u8; 32] = [
 ];
 const TRACER_KEY: Pubkey = Pubkey::new_from_array(TRACER_KEY_BYTES);
 const TRACER_KEY_OFFSET_IN_TRANSACTION: usize = 69;
-// Empirically derived to constrain max verify latency to ~8ms at lower packet counts
-pub const VERIFY_PACKET_CHUNK_SIZE: usize = 128;
 
 lazy_static! {
     static ref PAR_THREAD_POOL: ThreadPool = rayon::ThreadPoolBuilder::new()
         .num_threads(get_thread_count())
-        .thread_name(|i| format!("solSigVerify{i:02}"))
+        .thread_name(|ix| format!("sigverify_{}", ix))
         .build()
         .unwrap();
 }
@@ -72,7 +83,7 @@ impl PacketOffsets {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum PacketError {
     InvalidLen,
     InvalidPubkeyLen,
@@ -112,7 +123,7 @@ pub fn init() {
 #[must_use]
 fn verify_packet(packet: &mut Packet, reject_non_vote: bool) -> bool {
     // If this packet was already marked as discard, drop it
-    if packet.meta().discard() {
+    if packet.meta.discard() {
         return false;
     }
 
@@ -125,23 +136,27 @@ fn verify_packet(packet: &mut Packet, reject_non_vote: bool) -> bool {
         return false;
     }
 
-    if packet.meta().size <= msg_start {
+    if packet.meta.size <= msg_start {
         return false;
     }
 
     for _ in 0..packet_offsets.sig_len {
         let pubkey_end = pubkey_start.saturating_add(size_of::<Pubkey>());
-        let Some(sig_end) = sig_start.checked_add(size_of::<Signature>()) else {
-            return false;
+        let sig_end = match sig_start.checked_add(size_of::<Signature>()) {
+            Some(sig_end) => sig_end,
+            None => return false,
         };
-        let Some(Ok(signature)) = packet.data(sig_start..sig_end).map(Signature::try_from) else {
-            return false;
+        let signature = match packet.data(sig_start..sig_end) {
+            Some(signature) => Signature::new(signature),
+            None => return false,
         };
-        let Some(pubkey) = packet.data(pubkey_start..pubkey_end) else {
-            return false;
+        let pubkey = match packet.data(pubkey_start..pubkey_end) {
+            Some(pubkey) => pubkey,
+            None => return false,
         };
-        let Some(message) = packet.data(msg_start..) else {
-            return false;
+        let message = match packet.data(msg_start..) {
+            Some(message) => message,
+            None => return false,
         };
         if !signature.verify(pubkey, message) {
             return false;
@@ -166,7 +181,7 @@ pub fn count_valid_packets(
             batch
                 .iter()
                 .filter(|p| {
-                    let should_keep = !p.meta().discard();
+                    let should_keep = !p.meta.discard();
                     if should_keep {
                         process_valid_packet(p);
                     }
@@ -180,7 +195,7 @@ pub fn count_valid_packets(
 pub fn count_discarded_packets(batches: &[PacketBatch]) -> usize {
     batches
         .iter()
-        .map(|batch| batch.iter().filter(|p| p.meta().discard()).count())
+        .map(|batch| batch.iter().filter(|p| p.meta.discard()).count())
         .sum()
 }
 
@@ -192,7 +207,7 @@ fn do_get_packet_offsets(
     // should have at least 1 signature and sig lengths
     let _ = 1usize
         .checked_add(size_of::<Signature>())
-        .filter(|v| *v <= packet.meta().size)
+        .filter(|v| *v <= packet.meta.size)
         .ok_or(PacketError::InvalidLen)?;
 
     // read the length of Transaction.signatures (serialized with short_vec)
@@ -210,7 +225,7 @@ fn do_get_packet_offsets(
     // Determine the start of the message header by checking the message prefix bit.
     let msg_header_offset = {
         // Packet should have data for prefix bit
-        if msg_start_offset >= packet.meta().size {
+        if msg_start_offset >= packet.meta.size {
             return Err(PacketError::InvalidSignatureLen);
         }
 
@@ -245,7 +260,7 @@ fn do_get_packet_offsets(
     // Packet should have data at least for MessageHeader and 1 byte for Message.account_keys.len
     let _ = msg_header_offset_plus_one
         .checked_add(MESSAGE_HEADER_LENGTH)
-        .filter(|v| *v <= packet.meta().size)
+        .filter(|v| *v <= packet.meta.size)
         .ok_or(PacketError::InvalidSignatureLen)?;
 
     // read MessageHeader.num_required_signatures (serialized with u8)
@@ -285,7 +300,7 @@ fn do_get_packet_offsets(
     let _ = pubkey_len
         .checked_mul(size_of::<Pubkey>())
         .and_then(|v| v.checked_add(pubkey_start))
-        .filter(|v| *v <= packet.meta().size)
+        .filter(|v| *v <= packet.meta.size)
         .ok_or(PacketError::InvalidPubkeyLen)?;
 
     if pubkey_len < sig_len_untrusted {
@@ -313,13 +328,14 @@ fn do_get_packet_offsets(
 
 pub fn check_for_tracer_packet(packet: &mut Packet) -> bool {
     let first_pubkey_start: usize = TRACER_KEY_OFFSET_IN_TRANSACTION;
-    let Some(first_pubkey_end) = first_pubkey_start.checked_add(size_of::<Pubkey>()) else {
-        return false;
+    let first_pubkey_end = match first_pubkey_start.checked_add(size_of::<Pubkey>()) {
+        Some(offset) => offset,
+        None => return false,
     };
     // Check for tracer pubkey
     match packet.data(first_pubkey_start..first_pubkey_end) {
         Some(pubkey) if pubkey == TRACER_KEY.as_ref() => {
-            packet.meta_mut().set_tracer(true);
+            packet.meta.set_tracer(true);
             true
         }
         _ => false,
@@ -334,7 +350,7 @@ fn get_packet_offsets(
     let unsanitized_packet_offsets = do_get_packet_offsets(packet, current_offset);
     if let Ok(offsets) = unsanitized_packet_offsets {
         check_for_simple_vote_transaction(packet, &offsets, current_offset).ok();
-        if !reject_non_vote || packet.meta().is_simple_vote_tx() {
+        if !reject_non_vote || packet.meta.is_simple_vote_tx() {
             return offsets;
         }
     }
@@ -353,15 +369,6 @@ fn check_for_simple_vote_transaction(
         return Err(PacketError::InvalidSignatureLen);
     }
 
-    // simple vote should only be legacy message
-    let msg_start = (packet_offsets.msg_start as usize)
-        .checked_sub(current_offset)
-        .ok_or(PacketError::InvalidLen)?;
-    let message_prefix = *packet.data(msg_start).ok_or(PacketError::InvalidLen)?;
-    if message_prefix & MESSAGE_VERSION_PREFIX != 0 {
-        return Ok(());
-    }
-
     let pubkey_start = (packet_offsets.pubkey_start as usize)
         .checked_sub(current_offset)
         .ok_or(PacketError::InvalidLen)?;
@@ -375,7 +382,7 @@ fn check_for_simple_vote_transaction(
     // Packet should have at least 1 more byte for instructions.len
     let _ = instructions_len_offset
         .checked_add(1usize)
-        .filter(|v| *v <= packet.meta().size)
+        .filter(|v| *v <= packet.meta.size)
         .ok_or(PacketError::InvalidLen)?;
 
     let (instruction_len, instruction_len_size) = packet
@@ -394,7 +401,7 @@ fn check_for_simple_vote_transaction(
     // Packet should have at least 1 more byte for one instructions_program_id
     let _ = instruction_start
         .checked_add(1usize)
-        .filter(|v| *v <= packet.meta().size)
+        .filter(|v| *v <= packet.meta.size)
         .ok_or(PacketError::InvalidLen)?;
 
     let instruction_program_id_index: usize = usize::from(
@@ -420,7 +427,7 @@ fn check_for_simple_vote_transaction(
         .ok_or(PacketError::InvalidLen)?
         == solana_sdk::vote::program::id().as_ref()
     {
-        packet.meta_mut().flags |= PacketFlags::SIMPLE_VOTE_TX;
+        packet.meta.flags |= PacketFlags::SIMPLE_VOTE_TX;
     }
     Ok(())
 }
@@ -453,7 +460,7 @@ pub fn generate_offsets(
 
                     let mut pubkey_offset = packet_offsets.pubkey_start;
                     let mut sig_offset = packet_offsets.sig_start;
-                    let msg_size = current_offset.saturating_add(packet.meta().size) as u32;
+                    let msg_size = current_offset.saturating_add(packet.meta.size) as u32;
                     for _ in 0..packet_offsets.sig_len {
                         signature_offsets.push(sig_offset);
                         sig_offset = sig_offset.saturating_add(size_of::<Signature>() as u32);
@@ -481,6 +488,102 @@ pub fn generate_offsets(
     )
 }
 
+pub struct Deduper<const K: usize, T: ?Sized> {
+    num_bits: u64,
+    bits: Vec<AtomicU64>,
+    seeds: [(u128, u128); K],
+    clock: Instant,
+    popcount: AtomicU64, // Number of one bits in self.bits.
+    _phantom: PhantomData<T>,
+}
+
+impl<const K: usize, T: ?Sized + std::hash::Hash> Deduper<K, T> {
+    pub fn new<R: Rng>(rng: &mut R, num_bits: u64) -> Self {
+        let size = num_bits.checked_add(63).unwrap() / 64;
+        let size = usize::try_from(size).unwrap();
+        Self {
+            num_bits,
+            seeds: [(); K].map(|_| rng.gen()),
+            clock: Instant::now(),
+            bits: repeat_with(AtomicU64::default).take(size).collect(),
+            popcount: AtomicU64::default(),
+            _phantom: PhantomData::<T>::default(),
+        }
+    }
+
+    fn false_positive_rate(&self) -> f64 {
+        let popcount = self.popcount.load(Ordering::Relaxed);
+        let ones_ratio = popcount.min(self.num_bits) as f64 / self.num_bits as f64;
+        ones_ratio.powi(K as i32)
+    }
+
+    /// Resets the Deduper if either it is older than the reset_cycle or it is
+    /// saturated enough that false positive rate exceeds specified threshold.
+    /// Returns true if the deduper was saturated.
+    pub fn maybe_reset<R: Rng>(
+        &mut self,
+        rng: &mut R,
+        false_positive_rate: f64,
+        reset_cycle: Duration,
+    ) -> bool {
+        assert!(0.0 < false_positive_rate && false_positive_rate < 1.0);
+        let saturated = self.false_positive_rate() >= false_positive_rate;
+        if saturated || self.clock.elapsed() >= reset_cycle {
+            self.seeds = [(); K].map(|_| rng.gen());
+            self.clock = Instant::now();
+            self.bits.fill_with(AtomicU64::default);
+            self.popcount = AtomicU64::default();
+        }
+        saturated
+    }
+
+    // Returns true if the data is duplicate.
+    #[must_use]
+    #[allow(clippy::integer_arithmetic)]
+    pub fn dedup(&self, data: &T) -> bool {
+        let mut out = true;
+        for seed in self.seeds {
+            let mut hasher = AHasher::new_with_keys(seed.0, seed.1);
+            data.hash(&mut hasher);
+            let hash: u64 = hasher.finish() % self.num_bits;
+            let index = (hash >> 6) as usize;
+            let mask: u64 = 1u64 << (hash & 63);
+            let old = self.bits[index].fetch_or(mask, Ordering::Relaxed);
+            if old & mask == 0u64 {
+                self.popcount.fetch_add(1, Ordering::Relaxed);
+                out = false;
+            }
+        }
+        out
+    }
+}
+
+pub fn dedup_packets_and_count_discards<const K: usize>(
+    deduper: &Deduper<K, [u8]>,
+    batches: &mut [PacketBatch],
+    mut process_received_packet: impl FnMut(&mut Packet, bool, bool),
+) -> u64 {
+    batches
+        .iter_mut()
+        .flat_map(PacketBatch::iter_mut)
+        .map(|packet| {
+            if packet.meta.discard() {
+                process_received_packet(packet, true, false);
+            } else if packet
+                .data(..)
+                .map(|data| deduper.dedup(data))
+                .unwrap_or(true)
+            {
+                packet.meta.set_discard(true);
+                process_received_packet(packet, false, true);
+            } else {
+                process_received_packet(packet, false, false);
+            }
+            u64::from(packet.meta.discard())
+        })
+        .sum()
+}
+
 //inplace shrink a batch of packets
 pub fn shrink_batches(batches: &mut Vec<PacketBatch>) {
     let mut valid_batch_ix = 0;
@@ -488,17 +591,17 @@ pub fn shrink_batches(batches: &mut Vec<PacketBatch>) {
     let mut last_valid_batch = 0;
     for batch_ix in 0..batches.len() {
         for packet_ix in 0..batches[batch_ix].len() {
-            if batches[batch_ix][packet_ix].meta().discard() {
+            if batches[batch_ix][packet_ix].meta.discard() {
                 continue;
             }
             last_valid_batch = batch_ix.saturating_add(1);
             let mut found_spot = false;
             while valid_batch_ix < batch_ix && !found_spot {
                 while valid_packet_ix < batches[valid_batch_ix].len() {
-                    if batches[valid_batch_ix][valid_packet_ix].meta().discard() {
+                    if batches[valid_batch_ix][valid_packet_ix].meta.discard() {
                         batches[valid_batch_ix][valid_packet_ix] =
                             batches[batch_ix][packet_ix].clone();
-                        batches[batch_ix][packet_ix].meta_mut().set_discard(true);
+                        batches[batch_ix][packet_ix].meta.set_discard(true);
                         last_valid_batch = valid_batch_ix.saturating_add(1);
                         found_spot = true;
                         break;
@@ -518,18 +621,13 @@ pub fn shrink_batches(batches: &mut Vec<PacketBatch>) {
 pub fn ed25519_verify_cpu(batches: &mut [PacketBatch], reject_non_vote: bool, packet_count: usize) {
     debug!("CPU ECDSA for {}", packet_count);
     PAR_THREAD_POOL.install(|| {
-        batches
-            .par_iter_mut()
-            .flatten()
-            .collect::<Vec<&mut Packet>>()
-            .par_chunks_mut(VERIFY_PACKET_CHUNK_SIZE)
-            .for_each(|packets| {
-                for packet in packets.iter_mut() {
-                    if !packet.meta().discard() && !verify_packet(packet, reject_non_vote) {
-                        packet.meta_mut().set_discard(true);
-                    }
+        batches.into_par_iter().for_each(|batch| {
+            batch.par_iter_mut().for_each(|packet| {
+                if !packet.meta.discard() && !verify_packet(packet, reject_non_vote) {
+                    packet.meta.set_discard(true);
                 }
-            });
+            })
+        });
     });
     inc_new_counter_debug!("ed25519_verify_cpu", packet_count);
 }
@@ -537,26 +635,32 @@ pub fn ed25519_verify_cpu(batches: &mut [PacketBatch], reject_non_vote: bool, pa
 pub fn ed25519_verify_disabled(batches: &mut [PacketBatch]) {
     let packet_count = count_packets_in_batches(batches);
     debug!("disabled ECDSA for {}", packet_count);
-    batches.into_par_iter().for_each(|batch| {
-        batch
-            .par_iter_mut()
-            .for_each(|p| p.meta_mut().set_discard(false))
-    });
+    batches
+        .into_par_iter()
+        .for_each(|batch| batch.par_iter_mut().for_each(|p| p.meta.set_discard(false)));
     inc_new_counter_debug!("ed25519_verify_disabled", packet_count);
 }
 
-pub fn copy_return_values<I, T>(sig_lens: I, out: &PinnedVec<u8>, rvs: &mut [Vec<u8>])
-where
-    I: IntoIterator<Item = T>,
-    T: IntoIterator<Item = u32>,
-{
-    debug_assert!(rvs.iter().flatten().all(|&rv| rv == 0u8));
-    let mut offset = 0usize;
-    let rvs = rvs.iter_mut().flatten();
-    for (k, rv) in sig_lens.into_iter().flatten().zip(rvs) {
-        let out = out[offset..].iter().take(k as usize).all(|&x| x == 1u8);
-        *rv = u8::from(k != 0u32 && out);
-        offset = offset.saturating_add(k as usize);
+pub fn copy_return_values(sig_lens: &[Vec<u32>], out: &PinnedVec<u8>, rvs: &mut [Vec<u8>]) {
+    let mut num = 0;
+    for (vs, sig_vs) in rvs.iter_mut().zip(sig_lens.iter()) {
+        for (v, sig_v) in vs.iter_mut().zip(sig_vs.iter()) {
+            if *sig_v == 0 {
+                *v = 0;
+            } else {
+                let mut vout = 1;
+                for _ in 0..*sig_v {
+                    if 0 == out[num] {
+                        vout = 0;
+                    }
+                    num = num.saturating_add(1);
+                }
+                *v = vout;
+            }
+            if *v != 0 {
+                trace!("VERIFIED PACKET!!!!!");
+            }
+        }
     }
 }
 
@@ -591,8 +695,8 @@ pub fn get_checked_scalar(scalar: &[u8; 32]) -> Result<[u8; 32], PacketError> {
 pub fn mark_disabled(batches: &mut [PacketBatch], r: &[Vec<u8>]) {
     for (batch, v) in batches.iter_mut().zip(r) {
         for (pkt, f) in batch.iter_mut().zip(v) {
-            if !pkt.meta().discard() {
-                pkt.meta_mut().set_discard(*f == 0);
+            if !pkt.meta.discard() {
+                pkt.meta.set_discard(*f == 0);
             }
         }
     }
@@ -605,24 +709,27 @@ pub fn ed25519_verify(
     reject_non_vote: bool,
     valid_packet_count: usize,
 ) {
-    let Some(api) = perf_libs::api() else {
+    let api = perf_libs::api();
+    if api.is_none() {
         return ed25519_verify_cpu(batches, reject_non_vote, valid_packet_count);
-    };
+    }
+    let api = api.unwrap();
+
+    use crate::packet::PACKET_DATA_SIZE;
+
     let total_packet_count = count_packets_in_batches(batches);
     // micro-benchmarks show GPU time for smallest batch around 15-20ms
     // and CPU speed for 64-128 sigverifies around 10-20ms. 64 is a nice
     // power-of-two number around that accounting for the fact that the CPU
     // may be busy doing other things while being a real validator
     // TODO: dynamically adjust this crossover
-    let maybe_valid_percentage = 100usize
-        .wrapping_mul(valid_packet_count)
-        .checked_div(total_packet_count);
-    let Some(valid_percentage) = maybe_valid_percentage else {
-        return;
-    };
-    if valid_percentage < 90 || valid_packet_count < 64 {
-        ed25519_verify_cpu(batches, reject_non_vote, valid_packet_count);
-        return;
+    if valid_packet_count < 64
+        || 100usize
+            .wrapping_mul(valid_packet_count)
+            .wrapping_div(total_packet_count)
+            < 90
+    {
+        return ed25519_verify_cpu(batches, reject_non_vote, valid_packet_count);
     }
 
     let (signature_offsets, pubkey_offsets, msg_start_offsets, msg_sizes, sig_lens) =
@@ -638,7 +745,7 @@ pub fn ed25519_verify(
     let mut num_packets: usize = 0;
     for batch in batches.iter() {
         elems.push(perf_libs::Elems {
-            elems: batch.as_ptr().cast::<u8>(),
+            elems: batch.as_ptr(),
             num: batch.len() as u32,
         });
         let v = vec![0u8; batch.len()];
@@ -670,9 +777,20 @@ pub fn ed25519_verify(
         }
     }
     trace!("done verify");
-    copy_return_values(sig_lens, &out, &mut rvs);
+    copy_return_values(&sig_lens, &out, &mut rvs);
     mark_disabled(batches, &rvs);
     inc_new_counter_debug!("ed25519_verify_gpu", valid_packet_count);
+}
+
+#[cfg(test)]
+pub fn make_packet_from_transaction(tx: Transaction) -> Packet {
+    use bincode::serialize;
+
+    let tx_bytes = serialize(&tx).unwrap();
+    let mut packet = Packet::default();
+    packet.meta.size = tx_bytes.len();
+    packet.buffer_mut()[..tx_bytes.len()].copy_from_slice(&tx_bytes);
+    packet
 }
 
 #[cfg(test)]
@@ -687,17 +805,17 @@ mod tests {
         },
         bincode::{deserialize, serialize},
         curve25519_dalek::{edwards::CompressedEdwardsY, scalar::Scalar},
-        rand::{thread_rng, Rng},
+        rand::{thread_rng, Rng, SeedableRng},
+        rand_chacha::ChaChaRng,
         solana_sdk::{
             instruction::CompiledInstruction,
             message::{Message, MessageHeader},
+            packet::{Meta, PACKET_DATA_SIZE},
             signature::{Keypair, Signature, Signer},
             transaction::Transaction,
         },
-        std::{
-            iter::repeat_with,
-            sync::atomic::{AtomicU64, Ordering},
-        },
+        std::sync::atomic::{AtomicU64, Ordering},
+        test_case::test_case,
     };
 
     const SIG_OFFSET: usize = 1;
@@ -705,46 +823,12 @@ mod tests {
     pub fn memfind<A: Eq>(a: &[A], b: &[A]) -> Option<usize> {
         assert!(a.len() >= b.len());
         let end = a.len() - b.len() + 1;
-        (0..end).find(|&i| a[i..i + b.len()] == b[..])
-    }
-
-    #[test]
-    fn test_copy_return_values() {
-        let mut rng = rand::thread_rng();
-        let sig_lens: Vec<Vec<u32>> = {
-            let size = rng.gen_range(0..64);
-            repeat_with(|| {
-                let size = rng.gen_range(0..16);
-                repeat_with(|| rng.gen_range(0..5)).take(size).collect()
-            })
-            .take(size)
-            .collect()
-        };
-        let out: Vec<Vec<Vec<bool>>> = sig_lens
-            .iter()
-            .map(|sig_lens| {
-                sig_lens
-                    .iter()
-                    .map(|&size| repeat_with(|| rng.gen()).take(size as usize).collect())
-                    .collect()
-            })
-            .collect();
-        let expected: Vec<Vec<u8>> = out
-            .iter()
-            .map(|out| {
-                out.iter()
-                    .map(|out| u8::from(!out.is_empty() && out.iter().all(|&k| k)))
-                    .collect()
-            })
-            .collect();
-        let out =
-            PinnedVec::<u8>::from_vec(out.into_iter().flatten().flatten().map(u8::from).collect());
-        let mut rvs: Vec<Vec<u8>> = sig_lens
-            .iter()
-            .map(|sig_lens| vec![0u8; sig_lens.len()])
-            .collect();
-        copy_return_values(sig_lens, &out, &mut rvs);
-        assert_eq!(rvs, expected);
+        for i in 0..end {
+            if a[i..i + b.len()] == b[..] {
+                return Some(i);
+            }
+        }
+        None
     }
 
     #[test]
@@ -754,10 +838,10 @@ mod tests {
         batch.resize(batch_size, Packet::default());
         let mut batches: Vec<PacketBatch> = vec![batch];
         mark_disabled(&mut batches, &[vec![0]]);
-        assert!(batches[0][0].meta().discard());
-        batches[0][0].meta_mut().set_discard(false);
+        assert!(batches[0][0].meta.discard());
+        batches[0][0].meta.set_discard(false);
         mark_disabled(&mut batches, &[vec![1]]);
-        assert!(!batches[0][0].meta().discard());
+        assert!(!batches[0][0].meta.discard());
     }
 
     #[test]
@@ -774,7 +858,7 @@ mod tests {
         let tx = test_tx();
         let tx_bytes = serialize(&tx).unwrap();
         let message_data = tx.message_data();
-        let mut packet = Packet::from_data(None, tx.clone()).unwrap();
+        let mut packet = sigverify::make_packet_from_transaction(tx.clone());
 
         let packet_offsets = sigverify::get_packet_offsets(&mut packet, 0, false);
 
@@ -809,8 +893,8 @@ mod tests {
             instructions: vec![],
         };
         let mut tx = Transaction::new_unsigned(message);
-        tx.signatures = vec![Signature::default(); actual_num_sigs];
-        Packet::from_data(None, tx).unwrap()
+        tx.signatures = vec![Signature::default(); actual_num_sigs as usize];
+        sigverify::make_packet_from_transaction(tx)
     }
 
     #[test]
@@ -831,11 +915,11 @@ mod tests {
     #[test]
     fn test_small_packet() {
         let tx = test_tx();
-        let mut packet = Packet::from_data(None, tx).unwrap();
+        let mut packet = sigverify::make_packet_from_transaction(tx);
 
         packet.buffer_mut()[0] = 0xff;
         packet.buffer_mut()[1] = 0xff;
-        packet.meta_mut().size = 2;
+        packet.meta.size = 2;
 
         let res = sigverify::do_get_packet_offsets(&packet, 0);
         assert_eq!(res, Err(PacketError::InvalidLen));
@@ -850,17 +934,17 @@ mod tests {
         tx.signatures = vec![sig; NUM_SIG];
         tx.message.account_keys = vec![];
         tx.message.header.num_required_signatures = NUM_SIG as u8;
-        let mut packet = Packet::from_data(None, tx).unwrap();
+        let mut packet = sigverify::make_packet_from_transaction(tx);
 
         let res = sigverify::do_get_packet_offsets(&packet, 0);
         assert_eq!(res, Err(PacketError::InvalidPubkeyLen));
 
         assert!(!verify_packet(&mut packet, false));
 
-        packet.meta_mut().set_discard(false);
+        packet.meta.set_discard(false);
         let mut batches = generate_packet_batches(&packet, 1, 1);
         ed25519_verify(&mut batches);
-        assert!(batches[0][0].meta().discard());
+        assert!(batches[0][0].meta.discard());
     }
 
     #[test]
@@ -884,23 +968,23 @@ mod tests {
         let sig = keypair1.try_sign_message(&tx.message_data()).unwrap();
         tx.signatures = vec![sig; NUM_SIG];
 
-        let mut packet = Packet::from_data(None, tx).unwrap();
+        let mut packet = sigverify::make_packet_from_transaction(tx);
 
         let res = sigverify::do_get_packet_offsets(&packet, 0);
         assert_eq!(res, Err(PacketError::InvalidPubkeyLen));
 
         assert!(!verify_packet(&mut packet, false));
 
-        packet.meta_mut().set_discard(false);
+        packet.meta.set_discard(false);
         let mut batches = generate_packet_batches(&packet, 1, 1);
         ed25519_verify(&mut batches);
-        assert!(batches[0][0].meta().discard());
+        assert!(batches[0][0].meta.discard());
     }
 
     #[test]
     fn test_large_sig_len() {
         let tx = test_tx();
-        let mut packet = Packet::from_data(None, tx).unwrap();
+        let mut packet = sigverify::make_packet_from_transaction(tx);
 
         // Make the signatures len huge
         packet.buffer_mut()[0] = 0x7f;
@@ -912,7 +996,7 @@ mod tests {
     #[test]
     fn test_really_large_sig_len() {
         let tx = test_tx();
-        let mut packet = Packet::from_data(None, tx).unwrap();
+        let mut packet = sigverify::make_packet_from_transaction(tx);
 
         // Make the signatures len huge
         packet.buffer_mut()[0] = 0xff;
@@ -927,7 +1011,7 @@ mod tests {
     #[test]
     fn test_invalid_pubkey_len() {
         let tx = test_tx();
-        let mut packet = Packet::from_data(None, tx).unwrap();
+        let mut packet = sigverify::make_packet_from_transaction(tx);
 
         let res = sigverify::do_get_packet_offsets(&packet, 0);
 
@@ -952,7 +1036,7 @@ mod tests {
         };
         let mut tx = Transaction::new_unsigned(message);
         tx.signatures = vec![Signature::default()];
-        let packet = Packet::from_data(None, tx).unwrap();
+        let packet = sigverify::make_packet_from_transaction(tx);
         let res = sigverify::do_get_packet_offsets(&packet, 0);
 
         assert_eq!(res, Err(PacketError::PayerNotWritable));
@@ -961,7 +1045,7 @@ mod tests {
     #[test]
     fn test_unsupported_version() {
         let tx = test_tx();
-        let mut packet = Packet::from_data(None, tx).unwrap();
+        let mut packet = sigverify::make_packet_from_transaction(tx);
 
         let res = sigverify::do_get_packet_offsets(&packet, 0);
 
@@ -975,7 +1059,7 @@ mod tests {
     #[test]
     fn test_versioned_message() {
         let tx = test_tx();
-        let mut packet = Packet::from_data(None, tx).unwrap();
+        let mut packet = sigverify::make_packet_from_transaction(tx);
 
         let mut legacy_offsets = sigverify::do_get_packet_offsets(&packet, 0).unwrap();
 
@@ -983,8 +1067,8 @@ mod tests {
         let msg_start = legacy_offsets.msg_start as usize;
         let msg_bytes = packet.data(msg_start..).unwrap().to_vec();
         packet.buffer_mut()[msg_start] = MESSAGE_VERSION_PREFIX;
-        packet.meta_mut().size += 1;
-        let msg_end = packet.meta().size;
+        packet.meta.size += 1;
+        let msg_end = packet.meta.size;
         packet.buffer_mut()[msg_start + 1..msg_end].copy_from_slice(&msg_bytes);
 
         let offsets = sigverify::do_get_packet_offsets(&packet, 0).unwrap();
@@ -1018,7 +1102,7 @@ mod tests {
 
     // Just like get_packet_offsets, but not returning redundant information.
     fn get_packet_offsets_from_tx(tx: Transaction, current_offset: u32) -> PacketOffsets {
-        let mut packet = Packet::from_data(None, tx).unwrap();
+        let mut packet = sigverify::make_packet_from_transaction(tx);
         let packet_offsets =
             sigverify::get_packet_offsets(&mut packet, current_offset as usize, false);
         PacketOffsets::new(
@@ -1062,7 +1146,7 @@ mod tests {
         // generate packet vector
         let batches: Vec<_> = (0..num_batches)
             .map(|_| {
-                let num_packets_per_batch = thread_rng().gen_range(1..max_packets_per_batch);
+                let num_packets_per_batch = thread_rng().gen_range(1, max_packets_per_batch);
                 let mut packet_batch = PacketBatch::with_capacity(num_packets_per_batch);
                 for _ in 0..num_packets_per_batch {
                     packet_batch.push(packet.clone());
@@ -1099,7 +1183,7 @@ mod tests {
 
     fn test_verify_n(n: usize, modify_data: bool) {
         let tx = test_tx();
-        let mut packet = Packet::from_data(None, tx).unwrap();
+        let mut packet = sigverify::make_packet_from_transaction(tx);
 
         // jumble some data to test failure
         if modify_data {
@@ -1116,7 +1200,7 @@ mod tests {
         assert!(batches
             .iter()
             .flat_map(|batch| batch.iter())
-            .all(|p| p.meta().discard() == should_discard));
+            .all(|p| p.meta.discard() == should_discard));
     }
 
     fn ed25519_verify(batches: &mut [PacketBatch]) {
@@ -1131,7 +1215,7 @@ mod tests {
         let mut tx = test_tx();
         // pretend malicious leader dropped a signature...
         tx.signatures.pop();
-        let packet = Packet::from_data(None, tx).unwrap();
+        let packet = sigverify::make_packet_from_transaction(tx);
 
         let mut batches = generate_packet_batches(&packet, 1, 1);
 
@@ -1140,7 +1224,7 @@ mod tests {
         assert!(batches
             .iter()
             .flat_map(|batch| batch.iter())
-            .all(|p| p.meta().discard()));
+            .all(|p| p.meta.discard()));
     }
 
     #[test]
@@ -1159,31 +1243,11 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_medium_pass() {
-        test_verify_n(VERIFY_PACKET_CHUNK_SIZE, false);
-    }
-
-    #[test]
-    fn test_verify_large_pass() {
-        test_verify_n(VERIFY_PACKET_CHUNK_SIZE * get_thread_count(), false);
-    }
-
-    #[test]
-    fn test_verify_medium_fail() {
-        test_verify_n(VERIFY_PACKET_CHUNK_SIZE, true);
-    }
-
-    #[test]
-    fn test_verify_large_fail() {
-        test_verify_n(VERIFY_PACKET_CHUNK_SIZE * get_thread_count(), true);
-    }
-
-    #[test]
     fn test_verify_multisig() {
         solana_logger::setup();
 
         let tx = test_multisig_tx();
-        let mut packet = Packet::from_data(None, tx).unwrap();
+        let mut packet = sigverify::make_packet_from_transaction(tx);
 
         let n = 4;
         let num_batches = 3;
@@ -1206,9 +1270,9 @@ mod tests {
             .zip(ref_vec.into_iter().flatten())
             .all(|(p, discard)| {
                 if discard == 0 {
-                    p.meta().discard()
+                    p.meta.discard()
                 } else {
-                    !p.meta().discard()
+                    !p.meta.discard()
                 }
             }));
     }
@@ -1218,29 +1282,29 @@ mod tests {
         solana_logger::setup();
 
         let tx = test_multisig_tx();
-        let packet = Packet::from_data(None, tx).unwrap();
+        let packet = sigverify::make_packet_from_transaction(tx);
 
         let recycler = Recycler::default();
         let recycler_out = Recycler::default();
         for _ in 0..50 {
-            let num_batches = thread_rng().gen_range(2..30);
+            let num_batches = thread_rng().gen_range(2, 30);
             let mut batches = generate_packet_batches_random_size(&packet, 128, num_batches);
 
-            let num_modifications = thread_rng().gen_range(0..5);
+            let num_modifications = thread_rng().gen_range(0, 5);
             for _ in 0..num_modifications {
-                let batch = thread_rng().gen_range(0..batches.len());
-                let packet = thread_rng().gen_range(0..batches[batch].len());
-                let offset = thread_rng().gen_range(0..batches[batch][packet].meta().size);
-                let add = thread_rng().gen_range(0..255);
+                let batch = thread_rng().gen_range(0, batches.len());
+                let packet = thread_rng().gen_range(0, batches[batch].len());
+                let offset = thread_rng().gen_range(0, batches[batch][packet].meta.size);
+                let add = thread_rng().gen_range(0, 255);
                 batches[batch][packet].buffer_mut()[offset] = batches[batch][packet]
                     .data(offset)
                     .unwrap()
                     .wrapping_add(add);
             }
 
-            let batch_to_disable = thread_rng().gen_range(0..batches.len());
+            let batch_to_disable = thread_rng().gen_range(0, batches.len());
             for p in batches[batch_to_disable].iter_mut() {
-                p.meta_mut().set_discard(true);
+                p.meta.set_discard(true);
             }
 
             // verify from GPU verification pipeline (when GPU verification is enabled) are
@@ -1350,40 +1414,20 @@ mod tests {
         {
             let mut tx = test_tx();
             tx.message.instructions[0].data = vec![1, 2, 3];
-            let mut packet = Packet::from_data(None, tx).unwrap();
+            let mut packet = sigverify::make_packet_from_transaction(tx);
             let packet_offsets = do_get_packet_offsets(&packet, 0).unwrap();
             check_for_simple_vote_transaction(&mut packet, &packet_offsets, 0).ok();
-            assert!(!packet.meta().is_simple_vote_tx());
+            assert!(!packet.meta.is_simple_vote_tx());
         }
 
-        // single legacy vote tx is
+        // single vote tx is
         {
             let mut tx = new_test_vote_tx(&mut rng);
             tx.message.instructions[0].data = vec![1, 2, 3];
-            let mut packet = Packet::from_data(None, tx).unwrap();
+            let mut packet = sigverify::make_packet_from_transaction(tx);
             let packet_offsets = do_get_packet_offsets(&packet, 0).unwrap();
             check_for_simple_vote_transaction(&mut packet, &packet_offsets, 0).ok();
-            assert!(packet.meta().is_simple_vote_tx());
-        }
-
-        // single versioned vote tx is not
-        {
-            let mut tx = new_test_vote_tx(&mut rng);
-            tx.message.instructions[0].data = vec![1, 2, 3];
-            let mut packet = Packet::from_data(None, tx).unwrap();
-
-            // set messager version to v0
-            let mut packet_offsets = do_get_packet_offsets(&packet, 0).unwrap();
-            let msg_start = packet_offsets.msg_start as usize;
-            let msg_bytes = packet.data(msg_start..).unwrap().to_vec();
-            packet.buffer_mut()[msg_start] = MESSAGE_VERSION_PREFIX;
-            packet.meta_mut().size += 1;
-            let msg_end = packet.meta().size;
-            packet.buffer_mut()[msg_start + 1..msg_end].copy_from_slice(&msg_bytes);
-
-            packet_offsets = do_get_packet_offsets(&packet, 0).unwrap();
-            check_for_simple_vote_transaction(&mut packet, &packet_offsets, 0).ok();
-            assert!(!packet.meta().is_simple_vote_tx());
+            assert!(packet.meta.is_simple_vote_tx());
         }
 
         // multiple mixed tx is not
@@ -1401,25 +1445,10 @@ mod tests {
                     CompiledInstruction::new(4, &(), vec![0, 2]),
                 ],
             );
-            let mut packet = Packet::from_data(None, tx).unwrap();
+            let mut packet = sigverify::make_packet_from_transaction(tx);
             let packet_offsets = do_get_packet_offsets(&packet, 0).unwrap();
             check_for_simple_vote_transaction(&mut packet, &packet_offsets, 0).ok();
-            assert!(!packet.meta().is_simple_vote_tx());
-        }
-
-        // single legacy vote tx with extra (invalid) signature is not
-        {
-            let mut tx = new_test_vote_tx(&mut rng);
-            tx.signatures.push(Signature::default());
-            tx.message.header.num_required_signatures = 3;
-            tx.message.instructions[0].data = vec![1, 2, 3];
-            let mut packet = Packet::from_data(None, tx).unwrap();
-            let packet_offsets = do_get_packet_offsets(&packet, 0).unwrap();
-            assert_eq!(
-                Err(PacketError::InvalidSignatureLen),
-                check_for_simple_vote_transaction(&mut packet, &packet_offsets, 0)
-            );
-            assert!(!packet.meta().is_simple_vote_tx());
+            assert!(!packet.meta.is_simple_vote_tx());
         }
     }
 
@@ -1428,52 +1457,177 @@ mod tests {
         solana_logger::setup();
         let mut rng = rand::thread_rng();
 
-        // batch of legacy messages
-        {
-            let mut current_offset = 0usize;
-            let mut batch = PacketBatch::default();
-            batch.push(Packet::from_data(None, test_tx()).unwrap());
-            let tx = new_test_vote_tx(&mut rng);
-            batch.push(Packet::from_data(None, tx).unwrap());
-            batch.iter_mut().enumerate().for_each(|(index, packet)| {
-                let packet_offsets = do_get_packet_offsets(packet, current_offset).unwrap();
-                check_for_simple_vote_transaction(packet, &packet_offsets, current_offset).ok();
-                if index == 1 {
-                    assert!(packet.meta().is_simple_vote_tx());
-                } else {
-                    assert!(!packet.meta().is_simple_vote_tx());
-                }
+        let mut current_offset = 0usize;
+        let mut batch = PacketBatch::default();
+        batch.push(sigverify::make_packet_from_transaction(test_tx()));
+        let tx = new_test_vote_tx(&mut rng);
+        batch.push(sigverify::make_packet_from_transaction(tx));
+        batch.iter_mut().enumerate().for_each(|(index, packet)| {
+            let packet_offsets = do_get_packet_offsets(packet, current_offset).unwrap();
+            check_for_simple_vote_transaction(packet, &packet_offsets, current_offset).ok();
+            if index == 1 {
+                assert!(packet.meta.is_simple_vote_tx());
+            } else {
+                assert!(!packet.meta.is_simple_vote_tx());
+            }
 
-                current_offset = current_offset.saturating_add(size_of::<Packet>());
-            });
+            current_offset = current_offset.saturating_add(size_of::<Packet>());
+        });
+    }
+
+    #[test]
+    fn test_dedup_same() {
+        let tx = test_tx();
+
+        let mut batches =
+            to_packet_batches(&std::iter::repeat(tx).take(1024).collect::<Vec<_>>(), 128);
+        let packet_count = sigverify::count_packets_in_batches(&batches);
+        let mut rng = rand::thread_rng();
+        let filter = Deduper::<2, [u8]>::new(&mut rng, /*num_bits:*/ 63_999_979);
+        let mut num_deduped = 0;
+        let discard = dedup_packets_and_count_discards(
+            &filter,
+            &mut batches,
+            |_deduped_packet, _removed_before_sigverify_stage, _is_dup| {
+                num_deduped += 1;
+            },
+        ) as usize;
+        assert_eq!(num_deduped, discard + 1);
+        assert_eq!(packet_count, discard + 1);
+    }
+
+    #[test]
+    fn test_dedup_diff() {
+        let mut rng = rand::thread_rng();
+        let mut filter = Deduper::<2, [u8]>::new(&mut rng, /*num_bits:*/ 63_999_979);
+        let mut batches = to_packet_batches(&(0..1024).map(|_| test_tx()).collect::<Vec<_>>(), 128);
+        let discard =
+            dedup_packets_and_count_discards(&filter, &mut batches, |_, _, _| ()) as usize;
+        // because dedup uses a threadpool, there maybe up to N threads of txs that go through
+        assert_eq!(discard, 0);
+        assert!(!filter.maybe_reset(
+            &mut rng,
+            0.001,                    // false_positive_rate
+            Duration::from_millis(0), // reset_cycle
+        ));
+        for i in filter.bits {
+            assert_eq!(i.load(Ordering::Relaxed), 0);
         }
+    }
 
-        // batch of mixed legacy messages and versioned vote tx, which won't be flagged as
-        // simple_vote_tx
-        {
-            let mut current_offset = 0usize;
-            let mut batch = PacketBatch::default();
-            batch.push(Packet::from_data(None, test_tx()).unwrap());
-            // versioned vote tx
-            let tx = new_test_vote_tx(&mut rng);
-            let mut packet = Packet::from_data(None, tx).unwrap();
-            let packet_offsets = do_get_packet_offsets(&packet, 0).unwrap();
-            let msg_start = packet_offsets.msg_start as usize;
-            let msg_bytes = packet.data(msg_start..).unwrap().to_vec();
-            packet.buffer_mut()[msg_start] = MESSAGE_VERSION_PREFIX;
-            packet.meta_mut().size += 1;
-            let msg_end = packet.meta().size;
-            packet.buffer_mut()[msg_start + 1..msg_end].copy_from_slice(&msg_bytes);
-            batch.push(packet);
+    fn get_capacity<const K: usize>(num_bits: u64, false_positive_rate: f64) -> u64 {
+        (num_bits as f64 * false_positive_rate.powf(1f64 / K as f64)) as u64
+    }
 
-            batch.iter_mut().for_each(|packet| {
-                let packet_offsets = do_get_packet_offsets(packet, current_offset).unwrap();
-                check_for_simple_vote_transaction(packet, &packet_offsets, current_offset).ok();
-                assert!(!packet.meta().is_simple_vote_tx());
-
-                current_offset = current_offset.saturating_add(size_of::<Packet>());
-            });
+    #[test]
+    #[ignore]
+    fn test_dedup_saturated() {
+        const NUM_BITS: u64 = 63_999_979;
+        const FALSE_POSITIVE_RATE: f64 = 0.001;
+        let mut rng = rand::thread_rng();
+        let mut filter = Deduper::<2, [u8]>::new(&mut rng, NUM_BITS);
+        let capacity = get_capacity::<2>(NUM_BITS, FALSE_POSITIVE_RATE);
+        let mut discard = 0;
+        assert!(filter.popcount.load(Ordering::Relaxed) < capacity);
+        for i in 0..1000 {
+            let mut batches =
+                to_packet_batches(&(0..1000).map(|_| test_tx()).collect::<Vec<_>>(), 128);
+            discard +=
+                dedup_packets_and_count_discards(&filter, &mut batches, |_, _, _| ()) as usize;
+            trace!("{} {}", i, discard);
+            if filter.popcount.load(Ordering::Relaxed) > capacity {
+                break;
+            }
         }
+        assert!(filter.popcount.load(Ordering::Relaxed) > capacity);
+        assert!(filter.false_positive_rate() >= FALSE_POSITIVE_RATE);
+        assert!(filter.maybe_reset(
+            &mut rng,
+            FALSE_POSITIVE_RATE,
+            Duration::from_millis(0), // reset_cycle
+        ));
+    }
+
+    #[test]
+    fn test_dedup_false_positive() {
+        let mut rng = rand::thread_rng();
+        let filter = Deduper::<2, [u8]>::new(&mut rng, /*num_bits:*/ 63_999_979);
+        let mut discard = 0;
+        for i in 0..10 {
+            let mut batches =
+                to_packet_batches(&(0..1024).map(|_| test_tx()).collect::<Vec<_>>(), 128);
+            discard +=
+                dedup_packets_and_count_discards(&filter, &mut batches, |_, _, _| ()) as usize;
+            debug!("false positive rate: {}/{}", discard, i * 1024);
+        }
+        //allow for 1 false positive even if extremely unlikely
+        assert!(discard < 2);
+    }
+
+    #[test_case(63_999_979, 0.001, 2_023_857)]
+    #[test_case(622_401_961, 0.001, 19_682_078)]
+    #[test_case(622_401_979, 0.001, 19_682_078)]
+    #[test_case(629_145_593, 0.001, 19_895_330)]
+    #[test_case(632_455_543, 0.001, 20_000_000)]
+    #[test_case(637_534_199, 0.001, 20_160_601)]
+    #[test_case(622_401_961, 0.0001, 6_224_019)]
+    #[test_case(622_401_979, 0.0001, 6_224_019)]
+    #[test_case(629_145_593, 0.0001, 6_291_455)]
+    #[test_case(632_455_543, 0.0001, 6_324_555)]
+    #[test_case(637_534_199, 0.0001, 6_375_341)]
+    fn test_dedup_capacity(num_bits: u64, false_positive_rate: f64, capacity: u64) {
+        let mut rng = rand::thread_rng();
+        assert_eq!(get_capacity::<2>(num_bits, false_positive_rate), capacity);
+        let mut deduper = Deduper::<2, [u8]>::new(&mut rng, num_bits);
+        assert_eq!(deduper.false_positive_rate(), 0.0);
+        deduper.popcount.store(capacity, Ordering::Relaxed);
+        assert!(deduper.false_positive_rate() < false_positive_rate);
+        deduper.popcount.store(capacity + 1, Ordering::Relaxed);
+        assert!(deduper.false_positive_rate() >= false_positive_rate);
+        assert!(deduper.maybe_reset(
+            &mut rng,
+            false_positive_rate,
+            Duration::from_millis(0), // reset_cycle
+        ));
+    }
+
+    #[test_case([0xf9; 32],  3_199_997, 101_192,  51_414,  70, 101_125)]
+    #[test_case([0xdc; 32],  3_200_003, 101_192,  51_414,  71, 101_132)]
+    #[test_case([0xa5; 32],  6_399_971, 202_384, 102_828, 127, 202_157)]
+    #[test_case([0xdb; 32],  6_400_013, 202_386, 102_828, 145, 202_277)]
+    #[test_case([0xcd; 32], 12_799_987, 404_771, 205_655, 289, 404_434)]
+    #[test_case([0xc3; 32], 12_800_009, 404_771, 205_656, 309, 404_278)]
+    fn test_dedup_seeded(
+        seed: [u8; 32],
+        num_bits: u64,
+        capacity: u64,
+        num_packets: usize,
+        num_dups: usize,
+        popcount: u64,
+    ) {
+        const FALSE_POSITIVE_RATE: f64 = 0.001;
+        let mut rng = ChaChaRng::from_seed(seed);
+        let mut deduper = Deduper::<2, [u8]>::new(&mut rng, num_bits);
+        assert_eq!(get_capacity::<2>(num_bits, FALSE_POSITIVE_RATE), capacity);
+        let mut packet = Packet::new([0u8; PACKET_DATA_SIZE], Meta::default());
+        let mut dup_count = 0usize;
+        for _ in 0..num_packets {
+            let size = rng.gen_range(0, PACKET_DATA_SIZE);
+            packet.meta.size = size;
+            rng.fill(&mut packet.buffer_mut()[0..size]);
+            if deduper.dedup(packet.data(..).unwrap()) {
+                dup_count += 1;
+            }
+            assert!(deduper.dedup(packet.data(..).unwrap()));
+        }
+        assert_eq!(dup_count, num_dups);
+        assert_eq!(deduper.popcount.load(Ordering::Relaxed), popcount);
+        assert!(deduper.false_positive_rate() < FALSE_POSITIVE_RATE);
+        assert!(!deduper.maybe_reset(
+            &mut rng,
+            FALSE_POSITIVE_RATE,
+            Duration::from_millis(0), // reset_cycle
+        ));
     }
 
     #[test]
@@ -1487,13 +1641,13 @@ mod tests {
             );
             batches.iter_mut().for_each(|b| {
                 b.iter_mut()
-                    .for_each(|p| p.meta_mut().set_discard(thread_rng().gen()))
+                    .for_each(|p| p.meta.set_discard(thread_rng().gen()))
             });
             //find all the non discarded packets
             let mut start = vec![];
             batches.iter_mut().for_each(|b| {
                 b.iter_mut()
-                    .filter(|p| !p.meta().discard())
+                    .filter(|p| !p.meta.discard())
                     .for_each(|p| start.push(p.clone()))
             });
             start.sort_by(|a, b| a.data(..).cmp(&b.data(..)));
@@ -1505,7 +1659,7 @@ mod tests {
             let mut end = vec![];
             batches.iter_mut().for_each(|b| {
                 b.iter_mut()
-                    .filter(|p| !p.meta().discard())
+                    .filter(|p| !p.meta.discard())
                     .for_each(|p| end.push(p.clone()))
             });
             end.sort_by(|a, b| a.data(..).cmp(&b.data(..)));
@@ -1667,7 +1821,7 @@ mod tests {
 
         let test_cases = set_discards.iter().zip(&expect_valids).enumerate();
         for (i, (set_discard, (expect_batch_count, expect_valid_packets))) in test_cases {
-            debug!("test_shrink case: {}", i);
+            println!("test_shrink case: {}", i);
             let mut batches = to_packet_batches(
                 &(0..PACKET_COUNT).map(|_| test_tx()).collect::<Vec<_>>(),
                 PACKETS_PER_BATCH,
@@ -1677,14 +1831,14 @@ mod tests {
             batches.iter_mut().enumerate().for_each(|(i, b)| {
                 b.iter_mut()
                     .enumerate()
-                    .for_each(|(j, p)| p.meta_mut().set_discard(set_discard(i, j)))
+                    .for_each(|(j, p)| p.meta.set_discard(set_discard(i, j)))
             });
             assert_eq!(count_valid_packets(&batches, |_| ()), *expect_valid_packets);
             debug!("show valid packets for case {}", i);
             batches.iter_mut().enumerate().for_each(|(i, b)| {
                 b.iter_mut().enumerate().for_each(|(j, p)| {
-                    if !p.meta().discard() {
-                        trace!("{} {}", i, j)
+                    if !p.meta.discard() {
+                        println!("{} {}", i, j)
                     }
                 })
             });

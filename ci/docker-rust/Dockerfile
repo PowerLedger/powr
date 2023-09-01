@@ -1,6 +1,10 @@
 # Note: when the rust version is changed also modify
 # ci/rust-version.sh to pick up the new image tag
-FROM rust:1.69.0
+FROM rust:1.59.0
+
+# Add Google Protocol Buffers for Libra's metrics library.
+ENV PROTOC_VERSION 3.8.0
+ENV PROTOC_ZIP protoc-$PROTOC_VERSION-linux-x86_64.zip
 
 RUN set -x \
  && apt update \
@@ -13,7 +17,6 @@ RUN set -x \
       buildkite-agent \
       clang \
       cmake \
-      jq \
       lcov \
       libudev-dev \
       mscgen \
@@ -23,8 +26,6 @@ RUN set -x \
       sudo \
       golang \
       unzip \
-      lld \
-      protobuf-compiler \
       \
  && apt remove -y libcurl4-openssl-dev \
  && rm -rf /var/lib/apt/lists/* \
@@ -34,12 +35,13 @@ RUN set -x \
  && rustup component add clippy \
  && rustup target add wasm32-unknown-unknown \
  && cargo install cargo-audit \
- && cargo install cargo-hack \
- && cargo install cargo-sort \
  && cargo install mdbook \
  && cargo install mdbook-linkcheck \
  && cargo install svgbob_cli \
  && cargo install wasm-pack \
- && cargo install sccache \
  && rustc --version \
- && cargo --version
+ && cargo --version \
+ && curl -OL https://github.com/google/protobuf/releases/download/v$PROTOC_VERSION/$PROTOC_ZIP \
+ && unzip -o $PROTOC_ZIP -d /usr/local bin/protoc \
+ && unzip -o $PROTOC_ZIP -d /usr/local include/* \
+ && rm -f $PROTOC_ZIP

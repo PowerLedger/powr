@@ -45,9 +45,6 @@ module.exports = {
     },
   },
   themeConfig: {
-    prism: {
-      additionalLanguages: ["rust"],
-    },
     navbar: {
       logo: {
         alt: "Solana Logo",
@@ -56,69 +53,49 @@ module.exports = {
       },
       items: [
         {
-          to: "introduction",
-          label: "Learn",
+          href: "https://spl.solana.com",
+          label: "Program Library »",
           position: "left",
         },
         {
-          to: "cluster/overview",
-          label: "Architecture",
-          position: "left",
-        },
-        {
-          to: "cli",
-          label: "CLI",
-          position: "left",
-        },
-        {
-          to: "/developers",
-          label: "Developers",
+          to: "developing/programming-model/overview",
+          label: "Develop",
           position: "left",
         },
         {
           to: "running-validator",
-          label: "Validators",
+          label: "Validate",
           position: "left",
         },
         {
-          label: "More",
+          to: "integrations/exchange",
+          label: "Integrate",
           position: "left",
-          items: [
-            { label: "Terminology", to: "terminology" },
-            { label: "Staking", to: "staking" },
-            { label: "Integrations", to: "integrations/exchange" },
-            { label: "Economics", to: "economics_overview" },
-            { label: "Proposals", to: "proposals" },
-            {
-              href: "https://spl.solana.com",
-              label: "Solana Program Library »",
-            },
-          ],
+        },
+        {
+          to: "cluster/overview",
+          label: "Learn",
+          position: "left",
         },
         {
           type: "localeDropdown",
           position: "right",
         },
         {
-          href: "https://solana.com/discord",
-          // label: "Discord",
-          className: "header-link-icon header-discord-link",
-          "aria-label": "Solana Discord",
+          href: "https://discordapp.com/invite/pquxPsq",
+          label: "Chat",
           position: "right",
         },
         {
           href: "https://github.com/solana-labs/solana",
-          // label: "GitHub",
-          className: "header-link-icon header-github-link",
-          "aria-label": "GitHub repository",
+          label: "GitHub",
           position: "right",
         },
       ],
     },
     algolia: {
       // This API key is "search-only" and safe to be published
-      apiKey: "011e01358301f5023b02da5db6af7f4d",
-      appId: "FQ12ISJR4B",
+      apiKey: "d58e0d68c875346d52645d68b13f3ac0",
       indexName: "solana",
       contextualSearch: true,
     },
@@ -126,27 +103,11 @@ module.exports = {
       style: "dark",
       links: [
         {
-          title: "Documentation",
+          title: "Docs",
           items: [
             {
-              label: "Learn",
+              label: "Introduction",
               to: "introduction",
-            },
-            {
-              label: "Developers",
-              to: "/developers",
-            },
-            {
-              label: "Validators",
-              to: "running-validator",
-            },
-            {
-              label: "Command Line",
-              to: "cli",
-            },
-            {
-              label: "Architecture",
-              to: "cluster/overview",
             },
           ],
         },
@@ -154,41 +115,25 @@ module.exports = {
           title: "Community",
           items: [
             {
-              label: "Stack Exchange »",
-              href: "https://solana.stackexchange.com/",
+              label: "Discord",
+              href: "https://discordapp.com/invite/pquxPsq",
             },
             {
-              label: "GitHub »",
-              href: "https://github.com/solana-labs/solana",
-            },
-            {
-              label: "Discord »",
-              href: "https://solana.com/discord",
-            },
-            {
-              label: "Twitter »",
+              label: "Twitter",
               href: "https://twitter.com/solana",
             },
             {
-              label: "Forum »",
-              href: "https://forum.solana.com",
+              label: "Forums",
+              href: "https://forums.solana.com",
             },
           ],
         },
         {
-          title: "Resources",
+          title: "More",
           items: [
             {
-              label: "Proposals",
-              to: "proposals",
-            },
-            {
-              label: "Integrations",
-              to: "integrations/exchange",
-            },
-            {
-              href: "https://spl.solana.com",
-              label: "Solana Program Library »",
+              label: "GitHub",
+              href: "https://github.com/solana-labs/solana",
             },
           ],
         },
@@ -202,7 +147,6 @@ module.exports = {
       {
         docs: {
           path: "src",
-          breadcrumbs: false,
           routeBasePath: "/",
           sidebarPath: require.resolve("./sidebars.js"),
           remarkPlugins: [math],
@@ -210,12 +154,6 @@ module.exports = {
         },
         theme: {
           customCss: require.resolve("./src/css/custom.css"),
-        },
-        // Google Analytics are only active in prod
-        gtag: {
-          // this GA code is safe to be published
-          trackingID: "G-94WS0LRZRS",
-          anonymizeIP: true,
         },
       },
     ],

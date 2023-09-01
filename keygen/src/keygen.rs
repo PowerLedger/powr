@@ -1,24 +1,18 @@
 #![allow(clippy::integer_arithmetic)]
 use {
-    bip39::{Mnemonic, MnemonicType, Seed},
-    clap::{crate_description, crate_name, Arg, ArgMatches, Command},
-    solana_clap_v3_utils::{
+    bip39::{Language, Mnemonic, MnemonicType, Seed},
+    clap::{
+        crate_description, crate_name, value_t, value_t_or_exit, values_t_or_exit, App,
+        AppSettings, Arg, ArgMatches, SubCommand,
+    },
+    solana_clap_utils::{
         input_parsers::STDOUT_OUTFILE_TOKEN,
         input_validators::{is_parsable, is_prompt_signer_source},
-        keygen::{
-            check_for_overwrite,
-            derivation_path::{acquire_derivation_path, derivation_path_arg},
-            mnemonic::{
-                acquire_language, acquire_passphrase_and_message, no_passphrase_and_message,
-                WORD_COUNT_ARG,
-            },
-            no_outfile_arg, KeyGenerationCommonArgs, NO_OUTFILE_ARG,
-        },
         keypair::{
-            keypair_from_path, keypair_from_seed_phrase, signer_from_path,
+            keypair_from_path, keypair_from_seed_phrase, prompt_passphrase, signer_from_path,
             SKIP_SEED_PHRASE_VALIDATION_ARG,
         },
-        DisplayError,
+        ArgConstant, DisplayError,
     },
     solana_cli_config::{Config, CONFIG_FILE},
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
@@ -26,15 +20,13 @@ use {
         instruction::{AccountMeta, Instruction},
         message::Message,
         pubkey::{write_pubkey_file, Pubkey},
-        signature::{
-            keypair_from_seed, keypair_from_seed_and_derivation_path, write_keypair,
-            write_keypair_file, Keypair, Signer,
-        },
+        signature::{keypair_from_seed, write_keypair, write_keypair_file, Keypair, Signer},
     },
     std::{
         collections::HashSet,
         error,
-        rc::Rc,
+        path::Path,
+        process::exit,
         sync::{
             atomic::{AtomicBool, AtomicU64, Ordering},
             Arc,
@@ -44,17 +36,7 @@ use {
     },
 };
 
-mod smallest_length_44_public_key {
-    use solana_sdk::{pubkey, pubkey::Pubkey};
-
-    pub(super) static PUBKEY: Pubkey = pubkey!("21111111111111111111111111111111111111111111");
-
-    #[test]
-    fn assert_length() {
-        use crate::smallest_length_44_public_key;
-        assert_eq!(smallest_length_44_public_key::PUBKEY.to_string().len(), 44);
-    }
-}
+const NO_PASSPHRASE: &str = "";
 
 struct GrindMatch {
     starts: String,
@@ -62,10 +44,97 @@ struct GrindMatch {
     count: AtomicU64,
 }
 
+const WORD_COUNT_ARG: ArgConstant<'static> = ArgConstant {
+    long: "word-count",
+    name: "word_count",
+    help: "Specify the number of words that will be present in the generated seed phrase",
+};
+
+const LANGUAGE_ARG: ArgConstant<'static> = ArgConstant {
+    long: "language",
+    name: "language",
+    help: "Specify the mnemonic language that will be present in the generated seed phrase",
+};
+
+const NO_PASSPHRASE_ARG: ArgConstant<'static> = ArgConstant {
+    long: "no-bip39-passphrase",
+    name: "no_passphrase",
+    help: "Do not prompt for a BIP39 passphrase",
+};
+
+const NO_OUTFILE_ARG: ArgConstant<'static> = ArgConstant {
+    long: "no-outfile",
+    name: "no_outfile",
+    help: "Only print a seed phrase and pubkey. Do not output a keypair file",
+};
+
+fn word_count_arg<'a, 'b>() -> Arg<'a, 'b> {
+    Arg::with_name(WORD_COUNT_ARG.name)
+        .long(WORD_COUNT_ARG.long)
+        .possible_values(&["12", "15", "18", "21", "24"])
+        .default_value("12")
+        .value_name("NUMBER")
+        .takes_value(true)
+        .help(WORD_COUNT_ARG.help)
+}
+
+fn language_arg<'a, 'b>() -> Arg<'a, 'b> {
+    Arg::with_name(LANGUAGE_ARG.name)
+        .long(LANGUAGE_ARG.long)
+        .possible_values(&[
+            "english",
+            "chinese-simplified",
+            "chinese-traditional",
+            "japanese",
+            "spanish",
+            "korean",
+            "french",
+            "italian",
+        ])
+        .default_value("english")
+        .value_name("LANGUAGE")
+        .takes_value(true)
+        .help(LANGUAGE_ARG.help)
+}
+
+fn no_passphrase_arg<'a, 'b>() -> Arg<'a, 'b> {
+    Arg::with_name(NO_PASSPHRASE_ARG.name)
+        .long(NO_PASSPHRASE_ARG.long)
+        .alias("no-passphrase")
+        .help(NO_PASSPHRASE_ARG.help)
+}
+
+fn no_outfile_arg<'a, 'b>() -> Arg<'a, 'b> {
+    Arg::with_name(NO_OUTFILE_ARG.name)
+        .long(NO_OUTFILE_ARG.long)
+        .conflicts_with_all(&["outfile", "silent"])
+        .help(NO_OUTFILE_ARG.help)
+}
+
+trait KeyGenerationCommonArgs {
+    fn key_generation_common_args(self) -> Self;
+}
+
+impl KeyGenerationCommonArgs for App<'_, '_> {
+    fn key_generation_common_args(self) -> Self {
+        self.arg(word_count_arg())
+            .arg(language_arg())
+            .arg(no_passphrase_arg())
+    }
+}
+
+fn check_for_overwrite(outfile: &str, matches: &ArgMatches) {
+    let force = matches.is_present("force");
+    if !force && Path::new(outfile).exists() {
+        eprintln!("Refusing to overwrite {} without --force flag", outfile);
+        exit(1);
+    }
+}
+
 fn get_keypair_from_matches(
     matches: &ArgMatches,
     config: Config,
-    wallet_manager: &mut Option<Rc<RemoteWalletManager>>,
+    wallet_manager: &mut Option<Arc<RemoteWalletManager>>,
 ) -> Result<Box<dyn Signer>, Box<dyn error::Error>> {
     let mut path = dirs_next::home_dir().expect("home directory");
     let path = if matches.is_present("keypair") {
@@ -73,7 +142,7 @@ fn get_keypair_from_matches(
     } else if !config.keypair_path.is_empty() {
         &config.keypair_path
     } else {
-        path.extend([".config", "solana", "id.json"]);
+        path.extend(&[".config", "solana", "id.json"]);
         path.to_str().unwrap()
     };
     signer_from_path(matches, path, "pubkey recovery", wallet_manager)
@@ -89,12 +158,12 @@ fn output_keypair(
         write_keypair(keypair, &mut stdout)?;
     } else {
         write_keypair_file(keypair, outfile)?;
-        println!("Wrote {source} keypair to {outfile}");
+        println!("Wrote {} keypair to {}", source, outfile);
     }
     Ok(())
 }
 
-fn grind_validator_starts_with(v: &str) -> Result<(), String> {
+fn grind_validator_starts_with(v: String) -> Result<(), String> {
     if v.matches(':').count() != 1 || (v.starts_with(':') || v.ends_with(':')) {
         return Err(String::from("Expected : between PREFIX and COUNT"));
     }
@@ -109,7 +178,7 @@ fn grind_validator_starts_with(v: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn grind_validator_ends_with(v: &str) -> Result<(), String> {
+fn grind_validator_ends_with(v: String) -> Result<(), String> {
     if v.matches(':').count() != 1 || (v.starts_with(':') || v.ends_with(':')) {
         return Err(String::from("Expected : between SUFFIX and COUNT"));
     }
@@ -124,7 +193,7 @@ fn grind_validator_ends_with(v: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn grind_validator_starts_and_ends_with(v: &str) -> Result<(), String> {
+fn grind_validator_starts_and_ends_with(v: String) -> Result<(), String> {
     if v.matches(':').count() != 2 || (v.starts_with(':') || v.ends_with(':')) {
         return Err(String::from(
             "Expected : between PREFIX and SUFFIX and COUNT",
@@ -144,8 +213,47 @@ fn grind_validator_starts_and_ends_with(v: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn acquire_language(matches: &ArgMatches<'_>) -> Language {
+    match matches.value_of(LANGUAGE_ARG.name).unwrap() {
+        "english" => Language::English,
+        "chinese-simplified" => Language::ChineseSimplified,
+        "chinese-traditional" => Language::ChineseTraditional,
+        "japanese" => Language::Japanese,
+        "spanish" => Language::Spanish,
+        "korean" => Language::Korean,
+        "french" => Language::French,
+        "italian" => Language::Italian,
+        _ => unreachable!(),
+    }
+}
+
+fn no_passphrase_and_message() -> (String, String) {
+    (NO_PASSPHRASE.to_string(), "".to_string())
+}
+
+fn acquire_passphrase_and_message(
+    matches: &ArgMatches<'_>,
+) -> Result<(String, String), Box<dyn error::Error>> {
+    if matches.is_present(NO_PASSPHRASE_ARG.name) {
+        Ok(no_passphrase_and_message())
+    } else {
+        match prompt_passphrase(
+            "\nFor added security, enter a BIP39 passphrase\n\
+             \nNOTE! This passphrase improves security of the recovery seed phrase NOT the\n\
+             keypair file itself, which is stored as insecure plain text\n\
+             \nBIP39 Passphrase (empty for none): ",
+        ) {
+            Ok(passphrase) => {
+                println!();
+                Ok((passphrase, " and your BIP39 passphrase".to_string()))
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
 fn grind_print_info(grind_matches: &[GrindMatch], num_threads: usize) {
-    println!("Searching with {num_threads} threads for:");
+    println!("Searching with {} threads for:", num_threads);
     for gm in grind_matches {
         let mut msg = Vec::<String>::new();
         if gm.count.load(Ordering::Relaxed) > 1 {
@@ -221,15 +329,15 @@ fn grind_parse_args(
     grind_matches
 }
 
-fn app<'a>(num_threads: &'a str, crate_version: &'a str) -> Command<'a> {
-    Command::new(crate_name!())
+fn main() -> Result<(), Box<dyn error::Error>> {
+    let default_num_threads = num_cpus::get().to_string();
+    let matches = App::new(crate_name!())
         .about(crate_description!())
-        .version(crate_version)
-        .subcommand_required(true)
-        .arg_required_else_help(true)
+        .version(solana_version::version!())
+        .setting(AppSettings::SubcommandRequiredElseHelp)
         .arg({
-            let arg = Arg::new("config_file")
-                .short('C')
+            let arg = Arg::with_name("config_file")
+                .short("C")
                 .long("config")
                 .value_name("FILEPATH")
                 .takes_value(true)
@@ -242,10 +350,10 @@ fn app<'a>(num_threads: &'a str, crate_version: &'a str) -> Command<'a> {
             }
         })
         .subcommand(
-            Command::new("verify")
+            SubCommand::with_name("verify")
                 .about("Verify a keypair can sign and verify a message.")
                 .arg(
-                    Arg::new("pubkey")
+                    Arg::with_name("pubkey")
                         .index(1)
                         .value_name("PUBKEY")
                         .takes_value(true)
@@ -253,7 +361,7 @@ fn app<'a>(num_threads: &'a str, crate_version: &'a str) -> Command<'a> {
                         .help("Public key"),
                 )
                 .arg(
-                    Arg::new("keypair")
+                    Arg::with_name("keypair")
                         .index(2)
                         .value_name("KEYPAIR")
                         .takes_value(true)
@@ -261,96 +369,84 @@ fn app<'a>(num_threads: &'a str, crate_version: &'a str) -> Command<'a> {
                 )
         )
         .subcommand(
-            Command::new("new")
+            SubCommand::with_name("new")
                 .about("Generate new keypair file from a random seed phrase and optional BIP39 passphrase")
-                .disable_version_flag(true)
+                .setting(AppSettings::DisableVersion)
                 .arg(
-                    Arg::new("outfile")
-                        .short('o')
+                    Arg::with_name("outfile")
+                        .short("o")
                         .long("outfile")
                         .value_name("FILEPATH")
                         .takes_value(true)
                         .help("Path to generated file"),
                 )
                 .arg(
-                    Arg::new("force")
-                        .short('f')
+                    Arg::with_name("force")
+                        .short("f")
                         .long("force")
                         .help("Overwrite the output file if it exists"),
                 )
                 .arg(
-                    Arg::new("silent")
-                        .short('s')
+                    Arg::with_name("silent")
+                        .short("s")
                         .long("silent")
                         .help("Do not display seed phrase. Useful when piping output to other programs that prompt for user input, like gpg"),
                 )
-                .arg(
-                    derivation_path_arg()
-                )
                 .key_generation_common_args()
-                .arg(no_outfile_arg()
-                    .conflicts_with_all(&["outfile", "silent"])
-                )
+                .arg(no_outfile_arg())
         )
         .subcommand(
-            Command::new("grind")
+            SubCommand::with_name("grind")
                 .about("Grind for vanity keypairs")
-                .disable_version_flag(true)
+                .setting(AppSettings::DisableVersion)
                 .arg(
-                    Arg::new("ignore_case")
+                    Arg::with_name("ignore_case")
                         .long("ignore-case")
                         .help("Performs case insensitive matches"),
                 )
                 .arg(
-                    Arg::new("starts_with")
+                    Arg::with_name("starts_with")
                         .long("starts-with")
                         .value_name("PREFIX:COUNT")
                         .number_of_values(1)
                         .takes_value(true)
-                        .multiple_occurrences(true)
-                        .multiple_values(true)
+                        .multiple(true)
                         .validator(grind_validator_starts_with)
                         .help("Saves specified number of keypairs whos public key starts with the indicated prefix\nExample: --starts-with sol:4\nPREFIX type is Base58\nCOUNT type is u64"),
                 )
                 .arg(
-                    Arg::new("ends_with")
+                    Arg::with_name("ends_with")
                         .long("ends-with")
                         .value_name("SUFFIX:COUNT")
                         .number_of_values(1)
                         .takes_value(true)
-                        .multiple_occurrences(true)
-                        .multiple_values(true)
+                        .multiple(true)
                         .validator(grind_validator_ends_with)
                         .help("Saves specified number of keypairs whos public key ends with the indicated suffix\nExample: --ends-with ana:4\nSUFFIX type is Base58\nCOUNT type is u64"),
                 )
                 .arg(
-                    Arg::new("starts_and_ends_with")
+                    Arg::with_name("starts_and_ends_with")
                         .long("starts-and-ends-with")
                         .value_name("PREFIX:SUFFIX:COUNT")
                         .number_of_values(1)
                         .takes_value(true)
-                        .multiple_occurrences(true)
-                        .multiple_values(true)
+                        .multiple(true)
                         .validator(grind_validator_starts_and_ends_with)
                         .help("Saves specified number of keypairs whos public key starts and ends with the indicated perfix and suffix\nExample: --starts-and-ends-with sol:ana:4\nPREFIX and SUFFIX type is Base58\nCOUNT type is u64"),
                 )
                 .arg(
-                    Arg::new("num_threads")
+                    Arg::with_name("num_threads")
                         .long("num-threads")
                         .value_name("NUMBER")
                         .takes_value(true)
                         .validator(is_parsable::<usize>)
-                        .default_value(num_threads)
+                        .default_value(&default_num_threads)
                         .help("Specify the number of grind threads"),
                 )
                 .arg(
-                    Arg::new("use_mnemonic")
+                    Arg::with_name("use_mnemonic")
                         .long("use-mnemonic")
                         .help("Generate using a mnemonic key phrase.  Expect a significant slowdown in this mode"),
-                )
-                .arg(
-                    derivation_path_arg()
-                        .requires("use_mnemonic")
                 )
                 .key_generation_common_args()
                 .arg(
@@ -361,42 +457,42 @@ fn app<'a>(num_threads: &'a str, crate_version: &'a str) -> Command<'a> {
                 )
         )
         .subcommand(
-            Command::new("pubkey")
+            SubCommand::with_name("pubkey")
                 .about("Display the pubkey from a keypair file")
-                .disable_version_flag(true)
+                .setting(AppSettings::DisableVersion)
                 .arg(
-                    Arg::new("keypair")
+                    Arg::with_name("keypair")
                         .index(1)
                         .value_name("KEYPAIR")
                         .takes_value(true)
                         .help("Filepath or URL to a keypair"),
                 )
                 .arg(
-                    Arg::new(SKIP_SEED_PHRASE_VALIDATION_ARG.name)
+                    Arg::with_name(SKIP_SEED_PHRASE_VALIDATION_ARG.name)
                         .long(SKIP_SEED_PHRASE_VALIDATION_ARG.long)
                         .help(SKIP_SEED_PHRASE_VALIDATION_ARG.help),
                 )
                 .arg(
-                    Arg::new("outfile")
-                        .short('o')
+                    Arg::with_name("outfile")
+                        .short("o")
                         .long("outfile")
                         .value_name("FILEPATH")
                         .takes_value(true)
                         .help("Path to generated file"),
                 )
                 .arg(
-                    Arg::new("force")
-                        .short('f')
+                    Arg::with_name("force")
+                        .short("f")
                         .long("force")
                         .help("Overwrite the output file if it exists"),
                 )
         )
         .subcommand(
-            Command::new("recover")
+            SubCommand::with_name("recover")
                 .about("Recover keypair from seed phrase and optional BIP39 passphrase")
-                .disable_version_flag(true)
+                .setting(AppSettings::DisableVersion)
                 .arg(
-                    Arg::new("prompt_signer")
+                    Arg::with_name("prompt_signer")
                         .index(1)
                         .value_name("KEYPAIR")
                         .takes_value(true)
@@ -404,37 +500,32 @@ fn app<'a>(num_threads: &'a str, crate_version: &'a str) -> Command<'a> {
                         .help("`prompt:` URI scheme or `ASK` keyword"),
                 )
                 .arg(
-                    Arg::new("outfile")
-                        .short('o')
+                    Arg::with_name("outfile")
+                        .short("o")
                         .long("outfile")
                         .value_name("FILEPATH")
                         .takes_value(true)
                         .help("Path to generated file"),
                 )
                 .arg(
-                    Arg::new("force")
-                        .short('f')
+                    Arg::with_name("force")
+                        .short("f")
                         .long("force")
                         .help("Overwrite the output file if it exists"),
                 )
                 .arg(
-                    Arg::new(SKIP_SEED_PHRASE_VALIDATION_ARG.name)
+                    Arg::with_name(SKIP_SEED_PHRASE_VALIDATION_ARG.name)
                         .long(SKIP_SEED_PHRASE_VALIDATION_ARG.long)
                         .help(SKIP_SEED_PHRASE_VALIDATION_ARG.help),
                 ),
 
         )
-}
+        .get_matches();
 
-fn main() -> Result<(), Box<dyn error::Error>> {
-    let default_num_threads = num_cpus::get().to_string();
-    let matches = app(&default_num_threads, solana_version::version!())
-        .try_get_matches()
-        .unwrap_or_else(|e| e.exit());
     do_main(&matches).map_err(|err| DisplayError::new_as_boxed(err).into())
 }
 
-fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
+fn do_main(matches: &ArgMatches<'_>) -> Result<(), Box<dyn error::Error>> {
     let config = if let Some(config_file) = matches.value_of("config_file") {
         Config::load(config_file).unwrap_or_default()
     } else {
@@ -443,39 +534,37 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
 
     let mut wallet_manager = None;
 
-    let subcommand = matches.subcommand().unwrap();
-
-    match subcommand {
-        ("pubkey", matches) => {
+    match matches.subcommand() {
+        ("pubkey", Some(matches)) => {
             let pubkey =
                 get_keypair_from_matches(matches, config, &mut wallet_manager)?.try_pubkey()?;
 
             if matches.is_present("outfile") {
                 let outfile = matches.value_of("outfile").unwrap();
-                check_for_overwrite(outfile, matches)?;
+                check_for_overwrite(outfile, matches);
                 write_pubkey_file(outfile, pubkey)?;
             } else {
-                println!("{pubkey}");
+                println!("{}", pubkey);
             }
         }
-        ("new", matches) => {
+        ("new", Some(matches)) => {
             let mut path = dirs_next::home_dir().expect("home directory");
             let outfile = if matches.is_present("outfile") {
                 matches.value_of("outfile")
             } else if matches.is_present(NO_OUTFILE_ARG.name) {
                 None
             } else {
-                path.extend([".config", "solana", "id.json"]);
+                path.extend(&[".config", "solana", "id.json"]);
                 Some(path.to_str().unwrap())
             };
 
             match outfile {
                 Some(STDOUT_OUTFILE_TOKEN) => (),
-                Some(outfile) => check_for_overwrite(outfile, matches)?,
+                Some(outfile) => check_for_overwrite(outfile, matches),
                 None => (),
             }
 
-            let word_count: usize = matches.value_of_t(WORD_COUNT_ARG.name).unwrap();
+            let word_count = value_t!(matches.value_of(WORD_COUNT_ARG.name), usize).unwrap();
             let mnemonic_type = MnemonicType::for_word_count(word_count)?;
             let language = acquire_language(matches);
 
@@ -483,21 +572,15 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
             if !silent {
                 println!("Generating a new keypair");
             }
-
-            let derivation_path = acquire_derivation_path(matches)?;
-
             let mnemonic = Mnemonic::new(mnemonic_type, language);
             let (passphrase, passphrase_message) = acquire_passphrase_and_message(matches).unwrap();
 
             let seed = Seed::new(&mnemonic, &passphrase);
-            let keypair = match derivation_path {
-                Some(_) => keypair_from_seed_and_derivation_path(seed.as_bytes(), derivation_path),
-                None => keypair_from_seed(seed.as_bytes()),
-            }?;
+            let keypair = keypair_from_seed(seed.as_bytes())?;
 
             if let Some(outfile) = outfile {
                 output_keypair(&keypair, outfile, "new")
-                    .map_err(|err| format!("Unable to write {outfile}: {err}"))?;
+                    .map_err(|err| format!("Unable to write {}: {}", outfile, err))?;
             }
 
             if !silent {
@@ -509,17 +592,17 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
                 );
             }
         }
-        ("recover", matches) => {
+        ("recover", Some(matches)) => {
             let mut path = dirs_next::home_dir().expect("home directory");
             let outfile = if matches.is_present("outfile") {
                 matches.value_of("outfile").unwrap()
             } else {
-                path.extend([".config", "solana", "id.json"]);
+                path.extend(&[".config", "solana", "id.json"]);
                 path.to_str().unwrap()
             };
 
             if outfile != STDOUT_OUTFILE_TOKEN {
-                check_for_overwrite(outfile, matches)?;
+                check_for_overwrite(outfile, matches);
             }
 
             let keypair_name = "recover";
@@ -531,12 +614,11 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
             };
             output_keypair(&keypair, outfile, "recovered")?;
         }
-        ("grind", matches) => {
+        ("grind", Some(matches)) => {
             let ignore_case = matches.is_present("ignore_case");
 
             let starts_with_args = if matches.is_present("starts_with") {
-                matches
-                    .values_of_t_or_exit::<String>("starts_with")
+                values_t_or_exit!(matches, "starts_with", String)
                     .into_iter()
                     .map(|s| if ignore_case { s.to_lowercase() } else { s })
                     .collect()
@@ -544,8 +626,7 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
                 HashSet::new()
             };
             let ends_with_args = if matches.is_present("ends_with") {
-                matches
-                    .values_of_t_or_exit::<String>("ends_with")
+                values_t_or_exit!(matches, "ends_with", String)
                     .into_iter()
                     .map(|s| if ignore_case { s.to_lowercase() } else { s })
                     .collect()
@@ -553,8 +634,7 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
                 HashSet::new()
             };
             let starts_and_ends_with_args = if matches.is_present("starts_and_ends_with") {
-                matches
-                    .values_of_t_or_exit::<String>("starts_and_ends_with")
+                values_t_or_exit!(matches, "starts_and_ends_with", String)
                     .into_iter()
                     .map(|s| if ignore_case { s.to_lowercase() } else { s })
                     .collect()
@@ -566,12 +646,13 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
                 && ends_with_args.is_empty()
                 && starts_and_ends_with_args.is_empty()
             {
-                return Err(
-                    "Error: No keypair search criteria provided (--starts-with or --ends-with or --starts-and-ends-with)".into()
+                eprintln!(
+                    "Error: No keypair search criteria provided (--starts-with or --ends-with or --starts-and-ends-with)"
                 );
+                exit(1);
             }
 
-            let num_threads: usize = matches.value_of_t_or_exit("num_threads");
+            let num_threads = value_t_or_exit!(matches.value_of("num_threads"), usize);
 
             let grind_matches = grind_parse_args(
                 ignore_case,
@@ -583,9 +664,7 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
 
             let use_mnemonic = matches.is_present("use_mnemonic");
 
-            let derivation_path = acquire_derivation_path(matches)?;
-
-            let word_count: usize = matches.value_of_t(WORD_COUNT_ARG.name).unwrap();
+            let word_count = value_t!(matches.value_of(WORD_COUNT_ARG.name), usize).unwrap();
             let mnemonic_type = MnemonicType::for_word_count(word_count)?;
             let language = acquire_language(matches);
 
@@ -595,25 +674,6 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
                 no_passphrase_and_message()
             };
             let no_outfile = matches.is_present(NO_OUTFILE_ARG.name);
-
-            // The vast majority of base58 encoded public keys have length 44, but
-            // these only encapsulate prefixes 1-9 and A-H.  If the user is searching
-            // for a keypair that starts with a prefix of J-Z or a-z, then there is no
-            // reason to waste time searching for a keypair that will never match
-            let skip_len_44_pubkeys = grind_matches
-                .iter()
-                .map(|g| {
-                    let target_key = if ignore_case {
-                        g.starts.to_ascii_uppercase()
-                    } else {
-                        g.starts.clone()
-                    };
-                    let target_key =
-                        target_key + &(0..44 - g.starts.len()).map(|_| "1").collect::<String>();
-                    bs58::decode(target_key).into_vec()
-                })
-                .filter_map(|s| s.ok())
-                .all(|s| s.len() > 32);
 
             let grind_matches_thread_safe = Arc::new(grind_matches);
             let attempts = Arc::new(AtomicU64::new(1));
@@ -629,7 +689,6 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
                     let grind_matches_thread_safe = grind_matches_thread_safe.clone();
                     let passphrase = passphrase.clone();
                     let passphrase_message = passphrase_message.clone();
-                    let derivation_path = derivation_path.clone();
 
                     thread::spawn(move || loop {
                         if done.load(Ordering::Relaxed) {
@@ -647,18 +706,10 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
                         let (keypair, phrase) = if use_mnemonic {
                             let mnemonic = Mnemonic::new(mnemonic_type, language);
                             let seed = Seed::new(&mnemonic, &passphrase);
-                            let keypair = match derivation_path {
-                                Some(_) => keypair_from_seed_and_derivation_path(seed.as_bytes(), derivation_path.clone()),
-                                None => keypair_from_seed(seed.as_bytes()),
-                            }.unwrap();
-                            (keypair, mnemonic.phrase().to_string())
+                            (keypair_from_seed(seed.as_bytes()).unwrap(), mnemonic.phrase().to_string())
                         } else {
                             (Keypair::new(), "".to_string())
                         };
-                        // Skip keypairs that will never match the user specified prefix
-                        if skip_len_44_pubkeys && keypair.pubkey() >= smallest_length_44_public_key::PUBKEY {
-                            continue;
-                        }
                         let mut pubkey = bs58::encode(keypair.pubkey()).into_string();
                         if ignore_case {
                             pubkey = pubkey.to_lowercase();
@@ -715,7 +766,7 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
                 thread_handle.join().unwrap();
             }
         }
-        ("verify", matches) => {
+        ("verify", Some(matches)) => {
             let keypair = get_keypair_from_matches(matches, config, &mut wallet_manager)?;
             let simple_message = Message::new(
                 &[Instruction::new_with_bincode(
@@ -730,384 +781,14 @@ fn do_main(matches: &ArgMatches) -> Result<(), Box<dyn error::Error>> {
             let pubkey_bs58 = matches.value_of("pubkey").unwrap();
             let pubkey = bs58::decode(pubkey_bs58).into_vec().unwrap();
             if signature.verify(&pubkey, &simple_message) {
-                println!("Verification for public key: {pubkey_bs58}: Success");
+                println!("Verification for public key: {}: Success", pubkey_bs58);
             } else {
-                let err_msg = format!("Verification for public key: {pubkey_bs58}: Failed");
-                return Err(err_msg.into());
+                println!("Verification for public key: {}: Failed", pubkey_bs58);
+                exit(1);
             }
         }
         _ => unreachable!(),
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use {
-        super::*,
-        tempfile::{tempdir, TempDir},
-    };
-
-    fn process_test_command(args: &[&str]) -> Result<(), Box<dyn error::Error>> {
-        let default_num_threads = num_cpus::get().to_string();
-        let solana_version = solana_version::version!();
-        let app_matches = app(&default_num_threads, solana_version).get_matches_from(args);
-        do_main(&app_matches)
-    }
-
-    fn create_tmp_keypair_and_config_file(
-        keypair_out_dir: &TempDir,
-        config_out_dir: &TempDir,
-    ) -> (Pubkey, String, String) {
-        let keypair = Keypair::new();
-        let keypair_path = keypair_out_dir
-            .path()
-            .join(format!("{}-keypair", keypair.pubkey()));
-        let keypair_outfile = keypair_path.into_os_string().into_string().unwrap();
-        write_keypair_file(&keypair, &keypair_outfile).unwrap();
-
-        let config = Config {
-            keypair_path: keypair_outfile.clone(),
-            ..Config::default()
-        };
-        let config_path = config_out_dir
-            .path()
-            .join(format!("{}-config", keypair.pubkey()));
-        let config_outfile = config_path.into_os_string().into_string().unwrap();
-        config.save(&config_outfile).unwrap();
-
-        (keypair.pubkey(), keypair_outfile, config_outfile)
-    }
-
-    fn tmp_outfile_path(out_dir: &TempDir, name: &str) -> String {
-        let path = out_dir.path().join(name);
-        path.into_os_string().into_string().unwrap()
-    }
-
-    #[test]
-    fn test_arguments() {
-        let default_num_threads = num_cpus::get().to_string();
-        let solana_version = solana_version::version!();
-
-        // run clap internal assert statements
-        app(&default_num_threads, solana_version).debug_assert();
-    }
-
-    #[test]
-    fn test_verify() {
-        let keypair_out_dir = tempdir().unwrap();
-        let config_out_dir = tempdir().unwrap();
-        let (correct_pubkey, keypair_path, config_path) =
-            create_tmp_keypair_and_config_file(&keypair_out_dir, &config_out_dir);
-
-        // success case using a keypair file
-        process_test_command(&[
-            "solana-keygen",
-            "verify",
-            &correct_pubkey.to_string(),
-            &keypair_path,
-        ])
-        .unwrap();
-
-        // success case using a config file
-        process_test_command(&[
-            "solana-keygen",
-            "verify",
-            &correct_pubkey.to_string(),
-            "--config",
-            &config_path,
-        ])
-        .unwrap();
-
-        // fail case using a keypair file
-        let incorrect_pubkey = Pubkey::new_unique();
-        let result = process_test_command(&[
-            "solana-keygen",
-            "verify",
-            &incorrect_pubkey.to_string(),
-            &keypair_path,
-        ])
-        .unwrap_err()
-        .to_string();
-
-        let expected = format!("Verification for public key: {incorrect_pubkey}: Failed");
-        assert_eq!(result, expected);
-
-        // fail case using a config file
-        process_test_command(&[
-            "solana-keygen",
-            "verify",
-            &incorrect_pubkey.to_string(),
-            "--config",
-            &config_path,
-        ])
-        .unwrap_err()
-        .to_string();
-
-        let expected = format!("Verification for public key: {incorrect_pubkey}: Failed");
-        assert_eq!(result, expected);
-
-        // keypair file takes precedence over config file
-        let alt_keypair_out_dir = tempdir().unwrap();
-        let alt_config_out_dir = tempdir().unwrap();
-        let (_, alt_keypair_path, alt_config_path) =
-            create_tmp_keypair_and_config_file(&alt_keypair_out_dir, &alt_config_out_dir);
-
-        process_test_command(&[
-            "solana-keygen",
-            "verify",
-            &correct_pubkey.to_string(),
-            &keypair_path,
-            "--config",
-            &alt_config_path,
-        ])
-        .unwrap();
-
-        process_test_command(&[
-            "solana-keygen",
-            "verify",
-            &correct_pubkey.to_string(),
-            &alt_keypair_path,
-            "--config",
-            &config_path,
-        ])
-        .unwrap_err()
-        .to_string();
-
-        let expected = format!("Verification for public key: {incorrect_pubkey}: Failed");
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_pubkey() {
-        let keypair_out_dir = tempdir().unwrap();
-        let config_out_dir = tempdir().unwrap();
-        let (expected_pubkey, keypair_path, config_path) =
-            create_tmp_keypair_and_config_file(&keypair_out_dir, &config_out_dir);
-
-        // success case using a keypair file
-        {
-            let outfile_dir = tempdir().unwrap();
-            let outfile_path = tmp_outfile_path(&outfile_dir, &expected_pubkey.to_string());
-
-            process_test_command(&[
-                "solana-keygen",
-                "pubkey",
-                &keypair_path,
-                "--outfile",
-                &outfile_path,
-            ])
-            .unwrap();
-
-            let result_pubkey = solana_sdk::pubkey::read_pubkey_file(&outfile_path).unwrap();
-            assert_eq!(result_pubkey, expected_pubkey);
-        }
-
-        // success case using a config file
-        {
-            let outfile_dir = tempdir().unwrap();
-            let outfile_path = tmp_outfile_path(&outfile_dir, &expected_pubkey.to_string());
-
-            process_test_command(&[
-                "solana-keygen",
-                "pubkey",
-                "--config",
-                &config_path,
-                "--outfile",
-                &outfile_path,
-            ])
-            .unwrap();
-
-            let result_pubkey = solana_sdk::pubkey::read_pubkey_file(&outfile_path).unwrap();
-            assert_eq!(result_pubkey, expected_pubkey);
-        }
-
-        // keypair file takes precedence over config file
-        {
-            let alt_keypair_out_dir = tempdir().unwrap();
-            let alt_config_out_dir = tempdir().unwrap();
-            let (_, _, alt_config_path) =
-                create_tmp_keypair_and_config_file(&alt_keypair_out_dir, &alt_config_out_dir);
-            let outfile_dir = tempdir().unwrap();
-            let outfile_path = tmp_outfile_path(&outfile_dir, &expected_pubkey.to_string());
-
-            process_test_command(&[
-                "solana-keygen",
-                "pubkey",
-                &keypair_path,
-                "--config",
-                &alt_config_path,
-                "--outfile",
-                &outfile_path,
-            ])
-            .unwrap();
-
-            let result_pubkey = solana_sdk::pubkey::read_pubkey_file(&outfile_path).unwrap();
-            assert_eq!(result_pubkey, expected_pubkey);
-        }
-
-        // refuse to overwrite file
-        {
-            let outfile_dir = tempdir().unwrap();
-            let outfile_path = tmp_outfile_path(&outfile_dir, &expected_pubkey.to_string());
-
-            process_test_command(&[
-                "solana-keygen",
-                "pubkey",
-                &keypair_path,
-                "--outfile",
-                &outfile_path,
-            ])
-            .unwrap();
-
-            let result = process_test_command(&[
-                "solana-keygen",
-                "pubkey",
-                "--config",
-                &config_path,
-                "--outfile",
-                &outfile_path,
-            ])
-            .unwrap_err()
-            .to_string();
-
-            let expected = format!("Refusing to overwrite {outfile_path} without --force flag");
-            assert_eq!(result, expected);
-        }
-    }
-
-    #[test]
-    fn test_new() {
-        let keypair_out_dir = tempdir().unwrap();
-        let config_out_dir = tempdir().unwrap();
-        let (expected_pubkey, _, _) =
-            create_tmp_keypair_and_config_file(&keypair_out_dir, &config_out_dir);
-
-        let outfile_dir = tempdir().unwrap();
-        let outfile_path = tmp_outfile_path(&outfile_dir, &expected_pubkey.to_string());
-
-        // general success case
-        process_test_command(&[
-            "solana-keygen",
-            "new",
-            "--outfile",
-            &outfile_path,
-            "--no-bip39-passphrase",
-        ])
-        .unwrap();
-
-        // refuse to overwrite file
-        let result = process_test_command(&[
-            "solana-keygen",
-            "new",
-            "--outfile",
-            &outfile_path,
-            "--no-bip39-passphrase",
-        ])
-        .unwrap_err()
-        .to_string();
-
-        let expected = format!("Refusing to overwrite {outfile_path} without --force flag");
-        assert_eq!(result, expected);
-
-        // no outfile
-        process_test_command(&[
-            "solana-keygen",
-            "new",
-            "--no-bip39-passphrase",
-            "--no-outfile",
-        ])
-        .unwrap();
-
-        // sanity check on languages and word count combinations
-        let languages = [
-            "english",
-            "chinese-simplified",
-            "chinese-traditional",
-            "japanese",
-            "spanish",
-            "korean",
-            "french",
-            "italian",
-        ];
-        let word_counts = ["12", "15", "18", "21", "24"];
-
-        for language in languages {
-            for word_count in word_counts {
-                process_test_command(&[
-                    "solana-keygen",
-                    "new",
-                    "--no-outfile",
-                    "--no-bip39-passphrase",
-                    "--language",
-                    language,
-                    "--word-count",
-                    word_count,
-                ])
-                .unwrap();
-            }
-        }
-
-        // sanity check derivation path
-        process_test_command(&[
-            "solana-keygen",
-            "new",
-            "--no-bip39-passphrase",
-            "--no-outfile",
-            "--derivation-path",
-            // empty derivation path
-        ])
-        .unwrap();
-
-        process_test_command(&[
-            "solana-keygen",
-            "new",
-            "--no-bip39-passphrase",
-            "--no-outfile",
-            "--derivation-path",
-            "m/44'/501'/0'/0'", // default derivation path
-        ])
-        .unwrap();
-
-        let result = process_test_command(&[
-            "solana-keygen",
-            "new",
-            "--no-bip39-passphrase",
-            "--no-outfile",
-            "--derivation-path",
-            "-", // invalid derivation path
-        ])
-        .unwrap_err()
-        .to_string();
-
-        let expected = "invalid derivation path: invalid prefix: -";
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_grind() {
-        // simple sanity checks
-        process_test_command(&[
-            "solana-keygen",
-            "grind",
-            "--no-outfile",
-            "--no-bip39-passphrase",
-            "--use-mnemonic",
-            "--starts-with",
-            "a:1",
-        ])
-        .unwrap();
-
-        process_test_command(&[
-            "solana-keygen",
-            "grind",
-            "--no-outfile",
-            "--no-bip39-passphrase",
-            "--use-mnemonic",
-            "--ends-with",
-            "b:1",
-        ])
-        .unwrap();
-    }
 }

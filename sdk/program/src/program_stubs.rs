@@ -1,13 +1,12 @@
-//! Implementations of syscalls used when `solana-program` is built for non-SBF targets.
+//! Syscall stubs when building for programs for non-BPF targets
 
-#![cfg(not(target_os = "solana"))]
+#![cfg(not(target_arch = "bpf"))]
 
 use {
     crate::{
         account_info::AccountInfo, entrypoint::ProgramResult, instruction::Instruction,
         program_error::UNSUPPORTED_SYSVAR, pubkey::Pubkey,
     },
-    base64::{prelude::BASE64_STANDARD, Engine},
     itertools::Itertools,
     std::sync::{Arc, RwLock},
 };
@@ -25,7 +24,7 @@ pub fn set_syscall_stubs(syscall_stubs: Box<dyn SyscallStubs>) -> Box<dyn Syscal
 #[allow(clippy::integer_arithmetic)]
 pub trait SyscallStubs: Sync + Send {
     fn sol_log(&self, message: &str) {
-        println!("{message}");
+        println!("{}", message);
     }
     fn sol_log_compute_units(&self) {
         sol_log("SyscallStubs: sol_log_compute_units() not available");
@@ -51,12 +50,6 @@ pub trait SyscallStubs: Sync + Send {
     fn sol_get_rent_sysvar(&self, _var_addr: *mut u8) -> u64 {
         UNSUPPORTED_SYSVAR
     }
-    fn sol_get_epoch_rewards_sysvar(&self, _var_addr: *mut u8) -> u64 {
-        UNSUPPORTED_SYSVAR
-    }
-    fn sol_get_last_restart_slot(&self, _var_addr: *mut u8) -> u64 {
-        UNSUPPORTED_SYSVAR
-    }
     /// # Safety
     unsafe fn sol_memcpy(&self, dst: *mut u8, src: *const u8, n: usize) {
         // cannot be overlapping
@@ -64,11 +57,11 @@ pub trait SyscallStubs: Sync + Send {
             is_nonoverlapping(src as usize, n, dst as usize, n),
             "memcpy does not support overlapping regions"
         );
-        std::ptr::copy_nonoverlapping(src, dst, n);
+        std::ptr::copy_nonoverlapping(src, dst, n as usize);
     }
     /// # Safety
     unsafe fn sol_memmove(&self, dst: *mut u8, src: *const u8, n: usize) {
-        std::ptr::copy(src, dst, n);
+        std::ptr::copy(src, dst, n as usize);
     }
     /// # Safety
     unsafe fn sol_memcmp(&self, s1: *const u8, s2: *const u8, n: usize, result: *mut i32) {
@@ -96,10 +89,7 @@ pub trait SyscallStubs: Sync + Send {
     }
     fn sol_set_return_data(&self, _data: &[u8]) {}
     fn sol_log_data(&self, fields: &[&[u8]]) {
-        println!(
-            "data: {}",
-            fields.iter().map(|v| BASE64_STANDARD.encode(v)).join(" ")
-        );
+        println!("data: {}", fields.iter().map(base64::encode).join(" "));
     }
     fn sol_get_processed_sibling_instruction(&self, _index: usize) -> Option<Instruction> {
         None
@@ -118,7 +108,8 @@ pub(crate) fn sol_log(message: &str) {
 
 pub(crate) fn sol_log_64(arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64) {
     sol_log(&format!(
-        "{arg1:#x}, {arg2:#x}, {arg3:#x}, {arg4:#x}, {arg5:#x}"
+        "{:#x}, {:#x}, {:#x}, {:#x}, {:#x}",
+        arg1, arg2, arg3, arg4, arg5
     ));
 }
 
@@ -148,19 +139,12 @@ pub(crate) fn sol_get_epoch_schedule_sysvar(var_addr: *mut u8) -> u64 {
         .sol_get_epoch_schedule_sysvar(var_addr)
 }
 
-pub(crate) fn sol_get_fees_sysvar(var_addr: *mut u8) -> u64 {
-    SYSCALL_STUBS.read().unwrap().sol_get_fees_sysvar(var_addr)
+pub(crate) fn sol_get_fees_sysvar(_var_addr: *mut u8) -> u64 {
+    UNSUPPORTED_SYSVAR
 }
 
 pub(crate) fn sol_get_rent_sysvar(var_addr: *mut u8) -> u64 {
     SYSCALL_STUBS.read().unwrap().sol_get_rent_sysvar(var_addr)
-}
-
-pub(crate) fn sol_get_last_restart_slot(var_addr: *mut u8) -> u64 {
-    SYSCALL_STUBS
-        .read()
-        .unwrap()
-        .sol_get_last_restart_slot(var_addr)
 }
 
 pub(crate) fn sol_memcpy(dst: *mut u8, src: *const u8, n: usize) {
@@ -210,27 +194,21 @@ pub(crate) fn sol_get_stack_height() -> u64 {
     SYSCALL_STUBS.read().unwrap().sol_get_stack_height()
 }
 
-pub(crate) fn sol_get_epoch_rewards_sysvar(var_addr: *mut u8) -> u64 {
-    SYSCALL_STUBS
-        .read()
-        .unwrap()
-        .sol_get_epoch_rewards_sysvar(var_addr)
-}
-
 /// Check that two regions do not overlap.
 ///
 /// Hidden to share with bpf_loader without being part of the API surface.
 #[doc(hidden)]
 pub fn is_nonoverlapping<N>(src: N, src_len: N, dst: N, dst_len: N) -> bool
 where
-    N: Ord + num_traits::SaturatingSub,
+    N: Ord + std::ops::Sub<Output = N>,
+    <N as std::ops::Sub>::Output: Ord,
 {
     // If the absolute distance between the ptrs is at least as big as the size of the other,
     // they do not overlap.
     if src > dst {
-        src.saturating_sub(&dst) >= dst_len
+        src - dst >= dst_len
     } else {
-        dst.saturating_sub(&src) >= src_len
+        dst - src >= src_len
     }
 }
 

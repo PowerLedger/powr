@@ -139,30 +139,23 @@ cloud_Initialize() {
 }
 
 #
-# cloud_CreateInstances [networkName] [namePrefix] [numNodes]
-#                       [enableGpu] [machineType] [zone]
-#                       [bootDiskSize] [startupScript] [address]
-#                       [bootDiskType] [additionalDiskSize] [preemptible]
+# cloud_CreateInstances [networkName] [namePrefix] [numNodes] [imageName]
+#                       [machineType] [bootDiskSize] [startupScript] [address]
 #
 # Creates one more identical instances.
 #
 # networkName   - unique name of this testnet
 # namePrefix    - unique string to prefix all the instance names with
 # numNodes      - number of instances to create
-# enableGpu     - Optionally enable GPU, use the value "true" to enable
-#                 eg, request 4 K80 GPUs with "count=4,type=nvidia-tesla-k80"
-# machineType   - GCE machine type.  Note that this may also include an
-#                 `--accelerator=` or other |gcloud compute instances create|
-#                 options
-# zone          - cloud zone
+# imageName     - Disk image for the instances
+# machineType   - GCE machine type
 # bootDiskSize  - Optional size of the boot disk in GB
 # startupScript - Optional startup script to execute when the instance boots
 # address       - Optional name of the GCE static IP address to attach to the
 #                 instance.  Requires that |numNodes| = 1 and that addressName
-#                 has been provisioned in the GCE region that is hosting `$zone`
+#                 has been provisioned in the GCE region that is hosting |zone|
 # bootDiskType  - Optional specify SSD or HDD boot disk
 # additionalDiskSize - Optional specify size of additional storage volume
-# preemptible   - Optionally request a preemptible instance ("true")
 #
 # Tip: use cloud_FindInstances to locate the instances once this function
 #      returns
@@ -176,7 +169,6 @@ cloud_CreateInstances() {
   declare optionalBootDiskSize="$7"
   declare optionalStartupScript="$8"
   declare optionalAddress="$9"
-
   declare region=
   region=$(__cloud_GetRegion "$zone")
 

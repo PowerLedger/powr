@@ -1,11 +1,11 @@
 use bytemuck::{Pod, Zeroable};
 pub use target_arch::*;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct PodRistrettoPoint(pub [u8; 32]);
 
-#[cfg(not(target_os = "solana"))]
+#[cfg(not(target_arch = "bpf"))]
 mod target_arch {
     use {
         super::*,
@@ -99,9 +99,9 @@ mod target_arch {
             Some((&result).into())
         }
 
-        #[cfg(not(target_os = "solana"))]
+        #[cfg(not(target_arch = "bpf"))]
         fn multiply(scalar: &PodScalar, point: &Self) -> Option<Self> {
-            let scalar: Scalar = scalar.try_into().ok()?;
+            let scalar: Scalar = scalar.into();
             let point: RistrettoPoint = point.try_into().ok()?;
 
             let result = &scalar * &point;
@@ -114,13 +114,8 @@ mod target_arch {
         type Point = Self;
 
         fn multiscalar_multiply(scalars: &[PodScalar], points: &[Self]) -> Option<Self> {
-            let scalars = scalars
-                .iter()
-                .map(|scalar| Scalar::try_from(scalar).ok())
-                .collect::<Option<Vec<_>>>()?;
-
             RistrettoPoint::optional_multiscalar_mul(
-                scalars,
+                scalars.iter().map(Scalar::from),
                 points
                     .iter()
                     .map(|point| RistrettoPoint::try_from(point).ok()),
@@ -130,13 +125,15 @@ mod target_arch {
     }
 }
 
-#[cfg(target_os = "solana")]
+#[cfg(target_arch = "bpf")]
 #[allow(unused_variables)]
 mod target_arch {
     use {
         super::*,
         crate::curve25519::{
-            curve_syscall_traits::{ADD, CURVE25519_RISTRETTO, MUL, SUB},
+            curve_syscall_traits::{
+                sol_curve_group_op, sol_curve_validate_point, ADD, CURVE25519_RISTRETTO, MUL, SUB,
+            },
             scalar::PodScalar,
         },
     };
@@ -144,7 +141,7 @@ mod target_arch {
     pub fn validate_ristretto(point: &PodRistrettoPoint) -> bool {
         let mut validate_result = 0u8;
         let result = unsafe {
-            solana_program::syscalls::sol_curve_validate_point(
+            sol_curve_validate_point(
                 CURVE25519_RISTRETTO,
                 &point.0 as *const u8,
                 &mut validate_result,
@@ -160,7 +157,7 @@ mod target_arch {
     ) -> Option<PodRistrettoPoint> {
         let mut result_point = PodRistrettoPoint::zeroed();
         let result = unsafe {
-            solana_program::syscalls::sol_curve_group_op(
+            sol_curve_group_op(
                 CURVE25519_RISTRETTO,
                 ADD,
                 &left_point.0 as *const u8,
@@ -182,7 +179,7 @@ mod target_arch {
     ) -> Option<PodRistrettoPoint> {
         let mut result_point = PodRistrettoPoint::zeroed();
         let result = unsafe {
-            solana_program::syscalls::sol_curve_group_op(
+            sol_curve_group_op(
                 CURVE25519_RISTRETTO,
                 SUB,
                 &left_point.0 as *const u8,
@@ -204,33 +201,11 @@ mod target_arch {
     ) -> Option<PodRistrettoPoint> {
         let mut result_point = PodRistrettoPoint::zeroed();
         let result = unsafe {
-            solana_program::syscalls::sol_curve_group_op(
+            sol_curve_group_op(
                 CURVE25519_RISTRETTO,
                 MUL,
                 &scalar.0 as *const u8,
                 &point.0 as *const u8,
-                &mut result_point.0 as *mut u8,
-            )
-        };
-
-        if result == 0 {
-            Some(result_point)
-        } else {
-            None
-        }
-    }
-
-    pub fn multiscalar_multiply_ristretto(
-        scalars: &[PodScalar],
-        points: &[PodRistrettoPoint],
-    ) -> Option<PodRistrettoPoint> {
-        let mut result_point = PodRistrettoPoint::zeroed();
-        let result = unsafe {
-            solana_program::syscalls::sol_curve_multiscalar_mul(
-                CURVE25519_RISTRETTO,
-                scalars.as_ptr() as *const u8,
-                points.as_ptr() as *const u8,
-                points.len() as u64,
                 &mut result_point.0 as *mut u8,
             )
         };

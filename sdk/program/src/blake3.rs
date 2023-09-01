@@ -1,7 +1,4 @@
-//! Hashing with the [blake3] hash function.
-//!
-//! [blake3]: https://github.com/BLAKE3-team/BLAKE3
-
+//! The `blake3` module provides functions for creating hashes.
 use {
     crate::sanitize::Sanitize,
     borsh::{BorshDeserialize, BorshSchema, BorshSerialize},
@@ -9,12 +6,10 @@ use {
     thiserror::Error,
 };
 
-/// Size of a hash in bytes.
+/// Size of hash
 pub const HASH_BYTES: usize = 32;
-/// Maximum string length of a base58 encoded hash.
+/// Maximum string length of a base58 encoded hash
 const MAX_BASE58_LEN: usize = 44;
-
-/// A blake3 hash.
 #[derive(
     Serialize,
     Deserialize,
@@ -128,18 +123,21 @@ impl Hash {
 pub fn hashv(vals: &[&[u8]]) -> Hash {
     // Perform the calculation inline, calling this from within a program is
     // not supported
-    #[cfg(not(target_os = "solana"))]
+    #[cfg(not(target_arch = "bpf"))]
     {
         let mut hasher = Hasher::default();
         hasher.hashv(vals);
         hasher.result()
     }
     // Call via a system call to perform the calculation
-    #[cfg(target_os = "solana")]
+    #[cfg(target_arch = "bpf")]
     {
+        extern "C" {
+            fn sol_blake3(vals: *const u8, val_len: u64, hash_result: *mut u8) -> u64;
+        }
         let mut hash_result = [0; HASH_BYTES];
         unsafe {
-            crate::syscalls::sol_blake3(
+            sol_blake3(
                 vals as *const _ as *const u8,
                 vals.len() as u64,
                 &mut hash_result as *mut _ as *mut u8,

@@ -1,7 +1,7 @@
 use {
     bincode::{serialize, Error},
     lru::LruCache,
-    rand::{CryptoRng, Fill, Rng},
+    rand::{AsByteSliceMut, CryptoRng, Rng},
     serde::Serialize,
     solana_sdk::{
         hash::{self, Hash},
@@ -64,7 +64,7 @@ impl<T: Serialize> Ping<T> {
 
 impl<T> Ping<T>
 where
-    T: Serialize + Fill + Default,
+    T: Serialize + AsByteSliceMut + Default,
 {
     pub fn new_rand<R>(rng: &mut R, keypair: &Keypair) -> Result<Self, Error>
     where
@@ -242,6 +242,27 @@ impl PingCache {
         (check, ping)
     }
 
+    // Only for tests and simulations.
+    pub(crate) fn mock_clone(&self) -> Self {
+        let mut clone = Self {
+            ttl: self.ttl,
+            rate_limit_delay: self.rate_limit_delay,
+            pings: LruCache::new(self.pings.cap()),
+            pongs: LruCache::new(self.pongs.cap()),
+            pending_cache: LruCache::new(self.pending_cache.cap()),
+        };
+        for (k, v) in self.pongs.iter().rev() {
+            clone.pings.put(*k, *v);
+        }
+        for (k, v) in self.pongs.iter().rev() {
+            clone.pongs.put(*k, *v);
+        }
+        for (k, v) in self.pending_cache.iter().rev() {
+            clone.pending_cache.put(*k, *v);
+        }
+        clone
+    }
+
     /// Only for tests and simulations.
     pub fn mock_pong(&mut self, node: Pubkey, socket: SocketAddr, now: Instant) {
         self.pongs.put((node, socket), now);
@@ -296,8 +317,8 @@ mod tests {
         .take(8)
         .collect();
         let remote_nodes: Vec<(&Keypair, SocketAddr)> = repeat_with(|| {
-            let keypair = &keypairs[rng.gen_range(0..keypairs.len())];
-            let socket = sockets[rng.gen_range(0..sockets.len())];
+            let keypair = &keypairs[rng.gen_range(0, keypairs.len())];
+            let socket = sockets[rng.gen_range(0, sockets.len())];
             (keypair, socket)
         })
         .take(128)

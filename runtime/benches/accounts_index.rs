@@ -4,15 +4,13 @@ extern crate test;
 
 use {
     rand::{thread_rng, Rng},
-    solana_accounts_db::{
+    solana_runtime::{
         account_info::AccountInfo,
         accounts_index::{
-            AccountSecondaryIndexes, AccountsIndex, UpsertReclaim,
-            ACCOUNTS_INDEX_CONFIG_FOR_BENCHMARKS,
+            AccountSecondaryIndexes, AccountsIndex, ACCOUNTS_INDEX_CONFIG_FOR_BENCHMARKS,
         },
     },
     solana_sdk::{account::AccountSharedData, pubkey},
-    std::sync::Arc,
     test::Bencher,
 };
 
@@ -24,10 +22,7 @@ fn bench_accounts_index(bencher: &mut Bencher) {
     const NUM_FORKS: u64 = 16;
 
     let mut reclaims = vec![];
-    let index = AccountsIndex::<AccountInfo, AccountInfo>::new(
-        Some(ACCOUNTS_INDEX_CONFIG_FOR_BENCHMARKS),
-        Arc::default(),
-    );
+    let index = AccountsIndex::<AccountInfo>::new(Some(ACCOUNTS_INDEX_CONFIG_FOR_BENCHMARKS));
     for f in 0..NUM_FORKS {
         for pubkey in pubkeys.iter().take(NUM_PUBKEYS) {
             index.upsert(
@@ -38,7 +33,7 @@ fn bench_accounts_index(bencher: &mut Bencher) {
                 &AccountSecondaryIndexes::default(),
                 AccountInfo::default(),
                 &mut reclaims,
-                UpsertReclaim::PopulateReclaims,
+                false,
             );
         }
     }
@@ -47,7 +42,7 @@ fn bench_accounts_index(bencher: &mut Bencher) {
     let mut root = 0;
     bencher.iter(|| {
         for _p in 0..NUM_PUBKEYS {
-            let pubkey = thread_rng().gen_range(0..NUM_PUBKEYS);
+            let pubkey = thread_rng().gen_range(0, NUM_PUBKEYS);
             index.upsert(
                 fork,
                 fork,
@@ -56,11 +51,11 @@ fn bench_accounts_index(bencher: &mut Bencher) {
                 &AccountSecondaryIndexes::default(),
                 AccountInfo::default(),
                 &mut reclaims,
-                UpsertReclaim::PopulateReclaims,
+                false,
             );
             reclaims.clear();
         }
-        index.add_root(root);
+        index.add_root(root, false);
         root += 1;
         fork += 1;
     });

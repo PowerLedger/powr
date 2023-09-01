@@ -3,7 +3,7 @@ use {
         check_num_accounts, ParsableProgram, ParseInstructionError, ParsedInstructionEnum,
     },
     bincode::deserialize,
-    serde_json::{json, Map, Value},
+    serde_json::{json, Map},
     solana_sdk::{
         instruction::CompiledInstruction, message::AccountKeys,
         stake::instruction::StakeInstruction,
@@ -269,34 +269,6 @@ pub fn parse_stake(
                 }),
             })
         }
-        StakeInstruction::GetMinimumDelegation => Ok(ParsedInstructionEnum {
-            instruction_type: "getMinimumDelegation".to_string(),
-            info: Value::default(),
-        }),
-        StakeInstruction::DeactivateDelinquent => {
-            check_num_stake_accounts(&instruction.accounts, 3)?;
-            Ok(ParsedInstructionEnum {
-                instruction_type: "deactivateDelinquent".to_string(),
-                info: json!({
-                    "stakeAccount": account_keys[instruction.accounts[0] as usize].to_string(),
-                    "voteAccount": account_keys[instruction.accounts[1] as usize].to_string(),
-                    "referenceVoteAccount": account_keys[instruction.accounts[2] as usize].to_string(),
-                }),
-            })
-        }
-        StakeInstruction::Redelegate => {
-            check_num_stake_accounts(&instruction.accounts, 5)?;
-            Ok(ParsedInstructionEnum {
-                instruction_type: "redelegate".to_string(),
-                info: json!({
-                    "stakeAccount": account_keys[instruction.accounts[0] as usize].to_string(),
-                    "newStakeAccount": account_keys[instruction.accounts[1] as usize].to_string(),
-                    "voteAccount": account_keys[instruction.accounts[2] as usize].to_string(),
-                    "stakeConfigAccount": account_keys[instruction.accounts[3] as usize].to_string(),
-                    "stakeAuthority": account_keys[instruction.accounts[4] as usize].to_string(),
-                }),
-            })
-        }
     }
 }
 
@@ -318,7 +290,6 @@ mod test {
             },
             sysvar,
         },
-        std::iter::repeat_with,
     };
 
     #[test]
@@ -761,8 +732,12 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::same_item_push)]
     fn test_parse_stake_set_lockup() {
-        let keys: Vec<Pubkey> = repeat_with(Pubkey::new_unique).take(3).collect();
+        let mut keys: Vec<Pubkey> = vec![];
+        for _ in 0..3 {
+            keys.push(Pubkey::new_unique());
+        }
         let unix_timestamp = 1_234_567_890;
         let epoch = 11;
         let custodian = Pubkey::new_unique();

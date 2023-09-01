@@ -1,12 +1,12 @@
 pub use bytemuck::{Pod, Zeroable};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct PodScalar(pub [u8; 32]);
 
-#[cfg(not(target_os = "solana"))]
+#[cfg(not(target_arch = "bpf"))]
 mod target_arch {
-    use {super::*, crate::curve25519::errors::Curve25519Error, curve25519_dalek::scalar::Scalar};
+    use {super::*, curve25519_dalek::scalar::Scalar};
 
     impl From<&Scalar> for PodScalar {
         fn from(scalar: &Scalar) -> Self {
@@ -14,11 +14,9 @@ mod target_arch {
         }
     }
 
-    impl TryFrom<&PodScalar> for Scalar {
-        type Error = Curve25519Error;
-
-        fn try_from(pod: &PodScalar) -> Result<Self, Self::Error> {
-            Scalar::from_canonical_bytes(pod.0).ok_or(Curve25519Error::PodConversion)
+    impl From<&PodScalar> for Scalar {
+        fn from(pod: &PodScalar) -> Self {
+            Scalar::from_bits(pod.0)
         }
     }
 }

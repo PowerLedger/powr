@@ -1,17 +1,17 @@
 #[allow(deprecated)]
-use solana_sdk::sysvar::{
-    fees::Fees, last_restart_slot::LastRestartSlot, recent_blockhashes::RecentBlockhashes,
-};
+use solana_sdk::sysvar::{fees::Fees, recent_blockhashes::RecentBlockhashes};
 use {
     crate::invoke_context::InvokeContext,
     solana_sdk::{
+        account::{AccountSharedData, ReadableAccount},
         instruction::InstructionError,
+        keyed_account::KeyedAccount,
         pubkey::Pubkey,
         sysvar::{
-            clock::Clock, epoch_rewards::EpochRewards, epoch_schedule::EpochSchedule, rent::Rent,
-            slot_hashes::SlotHashes, stake_history::StakeHistory, Sysvar, SysvarId,
+            clock::Clock, epoch_schedule::EpochSchedule, rent::Rent, slot_hashes::SlotHashes,
+            stake_history::StakeHistory, Sysvar, SysvarId,
         },
-        transaction_context::{IndexOfAccount, InstructionContext, TransactionContext},
+        transaction_context::{InstructionContext, TransactionContext},
     },
     std::sync::Arc,
 };
@@ -28,7 +28,6 @@ impl ::solana_frozen_abi::abi_example::AbiExample for SysvarCache {
 pub struct SysvarCache {
     clock: Option<Arc<Clock>>,
     epoch_schedule: Option<Arc<EpochSchedule>>,
-    epoch_rewards: Option<Arc<EpochRewards>>,
     #[allow(deprecated)]
     fees: Option<Arc<Fees>>,
     rent: Option<Arc<Rent>>,
@@ -36,7 +35,6 @@ pub struct SysvarCache {
     #[allow(deprecated)]
     recent_blockhashes: Option<Arc<RecentBlockhashes>>,
     stake_history: Option<Arc<StakeHistory>>,
-    last_restart_slot: Option<Arc<LastRestartSlot>>,
 }
 
 impl SysvarCache {
@@ -60,16 +58,6 @@ impl SysvarCache {
         self.epoch_schedule = Some(Arc::new(epoch_schedule));
     }
 
-    pub fn get_epoch_rewards(&self) -> Result<Arc<EpochRewards>, InstructionError> {
-        self.epoch_rewards
-            .clone()
-            .ok_or(InstructionError::UnsupportedSysvar)
-    }
-
-    pub fn set_epoch_rewards(&mut self, epoch_rewards: EpochRewards) {
-        self.epoch_rewards = Some(Arc::new(epoch_rewards));
-    }
-
     #[deprecated]
     #[allow(deprecated)]
     pub fn get_fees(&self) -> Result<Arc<Fees>, InstructionError> {
@@ -88,16 +76,6 @@ impl SysvarCache {
 
     pub fn set_rent(&mut self, rent: Rent) {
         self.rent = Some(Arc::new(rent));
-    }
-
-    pub fn get_last_restart_slot(&self) -> Result<Arc<LastRestartSlot>, InstructionError> {
-        self.last_restart_slot
-            .clone()
-            .ok_or(InstructionError::UnsupportedSysvar)
-    }
-
-    pub fn set_last_restart_slot(&mut self, last_restart_slot: LastRestartSlot) {
-        self.last_restart_slot = Some(Arc::new(last_restart_slot));
     }
 
     pub fn get_slot_hashes(&self) -> Result<Arc<SlotHashes>, InstructionError> {
@@ -134,76 +112,60 @@ impl SysvarCache {
         self.stake_history = Some(Arc::new(stake_history));
     }
 
-    pub fn fill_missing_entries<F: FnMut(&Pubkey, &mut dyn FnMut(&[u8]))>(
+    pub fn fill_missing_entries<F: FnMut(&Pubkey) -> Option<AccountSharedData>>(
         &mut self,
-        mut get_account_data: F,
+        mut load_sysvar_account: F,
     ) {
-        if self.clock.is_none() {
-            get_account_data(&Clock::id(), &mut |data: &[u8]| {
-                if let Ok(clock) = bincode::deserialize(data) {
-                    self.set_clock(clock);
-                }
-            });
+        if self.get_clock().is_err() {
+            if let Some(clock) = load_sysvar_account(&Clock::id())
+                .and_then(|account| bincode::deserialize(account.data()).ok())
+            {
+                self.set_clock(clock);
+            }
         }
-        if self.epoch_schedule.is_none() {
-            get_account_data(&EpochSchedule::id(), &mut |data: &[u8]| {
-                if let Ok(epoch_schedule) = bincode::deserialize(data) {
-                    self.set_epoch_schedule(epoch_schedule);
-                }
-            });
-        }
-
-        if self.epoch_rewards.is_none() {
-            get_account_data(&EpochRewards::id(), &mut |data: &[u8]| {
-                if let Ok(epoch_rewards) = bincode::deserialize(data) {
-                    self.set_epoch_rewards(epoch_rewards);
-                }
-            });
-        }
-
-        #[allow(deprecated)]
-        if self.fees.is_none() {
-            get_account_data(&Fees::id(), &mut |data: &[u8]| {
-                if let Ok(fees) = bincode::deserialize(data) {
-                    self.set_fees(fees);
-                }
-            });
-        }
-        if self.rent.is_none() {
-            get_account_data(&Rent::id(), &mut |data: &[u8]| {
-                if let Ok(rent) = bincode::deserialize(data) {
-                    self.set_rent(rent);
-                }
-            });
-        }
-        if self.slot_hashes.is_none() {
-            get_account_data(&SlotHashes::id(), &mut |data: &[u8]| {
-                if let Ok(slot_hashes) = bincode::deserialize(data) {
-                    self.set_slot_hashes(slot_hashes);
-                }
-            });
+        if self.get_epoch_schedule().is_err() {
+            if let Some(epoch_schedule) = load_sysvar_account(&EpochSchedule::id())
+                .and_then(|account| bincode::deserialize(account.data()).ok())
+            {
+                self.set_epoch_schedule(epoch_schedule);
+            }
         }
         #[allow(deprecated)]
-        if self.recent_blockhashes.is_none() {
-            get_account_data(&RecentBlockhashes::id(), &mut |data: &[u8]| {
-                if let Ok(recent_blockhashes) = bincode::deserialize(data) {
-                    self.set_recent_blockhashes(recent_blockhashes);
-                }
-            });
+        if self.get_fees().is_err() {
+            if let Some(fees) = load_sysvar_account(&Fees::id())
+                .and_then(|account| bincode::deserialize(account.data()).ok())
+            {
+                self.set_fees(fees);
+            }
         }
-        if self.stake_history.is_none() {
-            get_account_data(&StakeHistory::id(), &mut |data: &[u8]| {
-                if let Ok(stake_history) = bincode::deserialize(data) {
-                    self.set_stake_history(stake_history);
-                }
-            });
+        if self.get_rent().is_err() {
+            if let Some(rent) = load_sysvar_account(&Rent::id())
+                .and_then(|account| bincode::deserialize(account.data()).ok())
+            {
+                self.set_rent(rent);
+            }
         }
-        if self.last_restart_slot.is_none() {
-            get_account_data(&LastRestartSlot::id(), &mut |data: &[u8]| {
-                if let Ok(last_restart_slot) = bincode::deserialize(data) {
-                    self.set_last_restart_slot(last_restart_slot);
-                }
-            });
+        if self.get_slot_hashes().is_err() {
+            if let Some(slot_hashes) = load_sysvar_account(&SlotHashes::id())
+                .and_then(|account| bincode::deserialize(account.data()).ok())
+            {
+                self.set_slot_hashes(slot_hashes);
+            }
+        }
+        #[allow(deprecated)]
+        if self.get_recent_blockhashes().is_err() {
+            if let Some(recent_blockhashes) = load_sysvar_account(&RecentBlockhashes::id())
+                .and_then(|account| bincode::deserialize(account.data()).ok())
+            {
+                self.set_recent_blockhashes(recent_blockhashes);
+            }
+        }
+        if self.get_stake_history().is_err() {
+            if let Some(stake_history) = load_sysvar_account(&StakeHistory::id())
+                .and_then(|account| bincode::deserialize(account.data()).ok())
+            {
+                self.set_stake_history(stake_history);
+            }
         }
     }
 
@@ -220,14 +182,69 @@ impl SysvarCache {
 pub mod get_sysvar_with_account_check {
     use super::*;
 
+    fn check_sysvar_keyed_account<S: Sysvar>(
+        keyed_account: &KeyedAccount,
+    ) -> Result<(), InstructionError> {
+        if !S::check_id(keyed_account.unsigned_key()) {
+            return Err(InstructionError::InvalidArgument);
+        }
+        Ok(())
+    }
+
+    pub fn clock(
+        keyed_account: &KeyedAccount,
+        invoke_context: &InvokeContext,
+    ) -> Result<Arc<Clock>, InstructionError> {
+        check_sysvar_keyed_account::<Clock>(keyed_account)?;
+        invoke_context.get_sysvar_cache().get_clock()
+    }
+
+    pub fn rent(
+        keyed_account: &KeyedAccount,
+        invoke_context: &InvokeContext,
+    ) -> Result<Arc<Rent>, InstructionError> {
+        check_sysvar_keyed_account::<Rent>(keyed_account)?;
+        invoke_context.get_sysvar_cache().get_rent()
+    }
+
+    pub fn slot_hashes(
+        keyed_account: &KeyedAccount,
+        invoke_context: &InvokeContext,
+    ) -> Result<Arc<SlotHashes>, InstructionError> {
+        check_sysvar_keyed_account::<SlotHashes>(keyed_account)?;
+        invoke_context.get_sysvar_cache().get_slot_hashes()
+    }
+
+    #[allow(deprecated)]
+    pub fn recent_blockhashes(
+        keyed_account: &KeyedAccount,
+        invoke_context: &InvokeContext,
+    ) -> Result<Arc<RecentBlockhashes>, InstructionError> {
+        check_sysvar_keyed_account::<RecentBlockhashes>(keyed_account)?;
+        invoke_context.get_sysvar_cache().get_recent_blockhashes()
+    }
+
+    pub fn stake_history(
+        keyed_account: &KeyedAccount,
+        invoke_context: &InvokeContext,
+    ) -> Result<Arc<StakeHistory>, InstructionError> {
+        check_sysvar_keyed_account::<StakeHistory>(keyed_account)?;
+        invoke_context.get_sysvar_cache().get_stake_history()
+    }
+}
+
+pub mod get_sysvar_with_account_check2 {
+    use super::*;
+
     fn check_sysvar_account<S: Sysvar>(
         transaction_context: &TransactionContext,
         instruction_context: &InstructionContext,
-        instruction_account_index: IndexOfAccount,
+        instruction_account_index: usize,
     ) -> Result<(), InstructionError> {
-        let index_in_transaction = instruction_context
-            .get_index_of_instruction_account_in_transaction(instruction_account_index)?;
-        if !S::check_id(transaction_context.get_key_of_account_at_index(index_in_transaction)?) {
+        if !S::check_id(
+            instruction_context
+                .get_instruction_account_key(transaction_context, instruction_account_index)?,
+        ) {
             return Err(InstructionError::InvalidArgument);
         }
         Ok(())
@@ -236,12 +253,12 @@ pub mod get_sysvar_with_account_check {
     pub fn clock(
         invoke_context: &InvokeContext,
         instruction_context: &InstructionContext,
-        instruction_account_index: IndexOfAccount,
+        index_in_instruction: usize,
     ) -> Result<Arc<Clock>, InstructionError> {
         check_sysvar_account::<Clock>(
             invoke_context.transaction_context,
             instruction_context,
-            instruction_account_index,
+            index_in_instruction,
         )?;
         invoke_context.get_sysvar_cache().get_clock()
     }
@@ -249,12 +266,12 @@ pub mod get_sysvar_with_account_check {
     pub fn rent(
         invoke_context: &InvokeContext,
         instruction_context: &InstructionContext,
-        instruction_account_index: IndexOfAccount,
+        index_in_instruction: usize,
     ) -> Result<Arc<Rent>, InstructionError> {
         check_sysvar_account::<Rent>(
             invoke_context.transaction_context,
             instruction_context,
-            instruction_account_index,
+            index_in_instruction,
         )?;
         invoke_context.get_sysvar_cache().get_rent()
     }
@@ -262,12 +279,12 @@ pub mod get_sysvar_with_account_check {
     pub fn slot_hashes(
         invoke_context: &InvokeContext,
         instruction_context: &InstructionContext,
-        instruction_account_index: IndexOfAccount,
+        index_in_instruction: usize,
     ) -> Result<Arc<SlotHashes>, InstructionError> {
         check_sysvar_account::<SlotHashes>(
             invoke_context.transaction_context,
             instruction_context,
-            instruction_account_index,
+            index_in_instruction,
         )?;
         invoke_context.get_sysvar_cache().get_slot_hashes()
     }
@@ -276,12 +293,12 @@ pub mod get_sysvar_with_account_check {
     pub fn recent_blockhashes(
         invoke_context: &InvokeContext,
         instruction_context: &InstructionContext,
-        instruction_account_index: IndexOfAccount,
+        index_in_instruction: usize,
     ) -> Result<Arc<RecentBlockhashes>, InstructionError> {
         check_sysvar_account::<RecentBlockhashes>(
             invoke_context.transaction_context,
             instruction_context,
-            instruction_account_index,
+            index_in_instruction,
         )?;
         invoke_context.get_sysvar_cache().get_recent_blockhashes()
     }
@@ -289,26 +306,13 @@ pub mod get_sysvar_with_account_check {
     pub fn stake_history(
         invoke_context: &InvokeContext,
         instruction_context: &InstructionContext,
-        instruction_account_index: IndexOfAccount,
+        index_in_instruction: usize,
     ) -> Result<Arc<StakeHistory>, InstructionError> {
         check_sysvar_account::<StakeHistory>(
             invoke_context.transaction_context,
             instruction_context,
-            instruction_account_index,
+            index_in_instruction,
         )?;
         invoke_context.get_sysvar_cache().get_stake_history()
-    }
-
-    pub fn last_restart_slot(
-        invoke_context: &InvokeContext,
-        instruction_context: &InstructionContext,
-        instruction_account_index: IndexOfAccount,
-    ) -> Result<Arc<LastRestartSlot>, InstructionError> {
-        check_sysvar_account::<LastRestartSlot>(
-            invoke_context.transaction_context,
-            instruction_context,
-            instruction_account_index,
-        )?;
-        invoke_context.get_sysvar_cache().get_last_restart_slot()
     }
 }

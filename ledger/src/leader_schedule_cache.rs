@@ -165,7 +165,9 @@ impl LeaderScheduleCache {
     fn slot_leader_at_no_compute(&self, slot: Slot) -> Option<Pubkey> {
         let (epoch, slot_index) = self.epoch_schedule.get_epoch_and_slot_index(slot);
         if let Some(ref fixed_schedule) = self.fixed_schedule {
-            return Some(fixed_schedule.leader_schedule[slot_index]);
+            if epoch >= fixed_schedule.start_epoch {
+                return Some(fixed_schedule.leader_schedule[slot_index]);
+            }
         }
         self.cached_schedules
             .read()
@@ -205,7 +207,9 @@ impl LeaderScheduleCache {
         bank: &Bank,
     ) -> Option<Arc<LeaderSchedule>> {
         if let Some(ref fixed_schedule) = self.fixed_schedule {
-            return Some(fixed_schedule.leader_schedule.clone());
+            if epoch >= fixed_schedule.start_epoch {
+                return Some(fixed_schedule.leader_schedule.clone());
+            }
         }
         let epoch_schedule = self.get_epoch_leader_schedule(epoch);
         if epoch_schedule.is_some() {
@@ -333,7 +337,7 @@ mod tests {
     }
 
     fn run_thread_race() {
-        let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH;
+        let slots_per_epoch = MINIMUM_SLOTS_PER_EPOCH as u64;
         let epoch_schedule = EpochSchedule::custom(slots_per_epoch, slots_per_epoch / 2, true);
         let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(2);
         let bank = Arc::new(Bank::new_for_tests(&genesis_config));
@@ -451,7 +455,7 @@ mod tests {
 
         // Write a shred into slot 2 that chains to slot 1,
         // but slot 1 is empty so should not be skipped
-        let (shreds, _) = make_slot_entries(2, 1, 1, /*merkle_variant:*/ true);
+        let (shreds, _) = make_slot_entries(2, 1, 1);
         blockstore.insert_shreds(shreds, None, false).unwrap();
         assert_eq!(
             cache
@@ -462,7 +466,7 @@ mod tests {
         );
 
         // Write a shred into slot 1
-        let (shreds, _) = make_slot_entries(1, 0, 1, /*merkle_variant:*/ true);
+        let (shreds, _) = make_slot_entries(1, 0, 1);
 
         // Check that slot 1 and 2 are skipped
         blockstore.insert_shreds(shreds, None, false).unwrap();
@@ -518,8 +522,7 @@ mod tests {
             &mint_keypair,
             &vote_account,
             &validator_identity,
-            bootstrap_validator_stake_lamports()
-                + solana_stake_program::get_minimum_delegation(&bank.feature_set),
+            bootstrap_validator_stake_lamports(),
         );
         let node_pubkey = validator_identity.pubkey();
 
@@ -531,7 +534,7 @@ mod tests {
             target_slot += 1;
         }
 
-        let bank = Bank::new_from_parent(Arc::new(bank), &Pubkey::default(), target_slot);
+        let bank = Bank::new_from_parent(&Arc::new(bank), &Pubkey::default(), target_slot);
         let mut expected_slot = 0;
         let epoch = bank.get_leader_schedule_epoch(target_slot);
         for i in 0..epoch {
@@ -591,7 +594,7 @@ mod tests {
         assert_eq!(bank.get_epoch_and_slot_index(96).0, 2);
         assert!(cache.slot_leader_at(96, Some(&bank)).is_none());
 
-        let bank2 = Bank::new_from_parent(bank, &solana_sdk::pubkey::new_rand(), 95);
+        let bank2 = Bank::new_from_parent(&bank, &solana_sdk::pubkey::new_rand(), 95);
         assert!(bank2.epoch_vote_accounts(2).is_some());
 
         // Set root for a slot in epoch 1, so that epoch 2 is now confirmed

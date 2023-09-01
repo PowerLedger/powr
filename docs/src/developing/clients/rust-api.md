@@ -11,7 +11,7 @@ Solana's Rust crates are [published to crates.io][crates.io] and can be found
 Some important crates:
 
 - [`solana-program`] &mdash; Imported by programs running on Solana, compiled
-  to SBF. This crate contains many fundamental data types and is re-exported from
+  to BPF. This crate contains many fundamental data types and is re-exported from
   [`solana-sdk`], which cannot be imported from a Solana program.
 
 - [`solana-sdk`] &mdash; The basic off-chain SDK, it re-exports
@@ -19,7 +19,7 @@ Some important crates:
   that do not run on-chain will import this.
 
 - [`solana-client`] &mdash; For interacting with a Solana node via the
-  [JSON RPC API](/api).
+  [JSON RPC API](jsonrpc-api).
 
 - [`solana-cli-config`] &mdash; Loading and saving the Solana CLI configuration
   file.

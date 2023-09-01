@@ -1,145 +1,290 @@
 <p align="center">
-  <a href="https://solana.com">
-    <img alt="Solana" src="https://i.imgur.com/IKyzQ6T.png" width="250" />
+  <a href="https://powerledger.io">
+    <img alt="pl-solana" src="https://github.com/PowerLedger/pl-solana/raw/master/logo.png" width="250" />
   </a>
 </p>
 
-[![Solana crate](https://img.shields.io/crates/v/solana-core.svg)](https://crates.io/crates/solana-core)
-[![Solana documentation](https://docs.rs/solana-core/badge.svg)](https://docs.rs/solana-core)
-[![Build status](https://badge.buildkite.com/8cc350de251d61483db98bdfc895b9ea0ac8ffa4a32ee850ed.svg?branch=master)](https://buildkite.com/solana-labs/solana/builds?branch=master)
-[![codecov](https://codecov.io/gh/solana-labs/solana/branch/master/graph/badge.svg)](https://codecov.io/gh/solana-labs/solana)
+# POWERLEDGER ENERGY BLOCKCHAIN
 
-# Building
+## IMPORTANT NOTICE - PLEASE READ BEFORE PROCEEDING
 
-## **1. Install rustc, cargo and rustfmt.**
+Use of this software and access to the Powerledger Blockchain is subject to the Powerledger Validator
+Node Terms and Conditions set out in the Terms and Conditions file.
 
-```bash
-$ curl https://sh.rustup.rs -sSf | sh
-$ source $HOME/.cargo/env
-$ rustup component add rustfmt
+By downloading, installing and using the Powerledger Node Software and/or connecting to the Powerledger
+Blockchain you agree to the Terms and Conditions set out in the Terms and Conditions.
+
+All software is Copyright © 2023 Power Ledger Pty Ltd unless indicated otherwise.  Unauthorised use
+prohibited. All Rights Reserved.
+
+## PL-SOLANA validator node configuration
+
+### Min Requirements for mainnet validator
+
+```
+* 12 Cores, 64 GB RAM
+* ┬ 3 separate storage devices:
+  ├*- 250 GB of storage for the operating system
+  ├*- 1 TB of storage for the accounts folder
+  └*┬ 1 TB of storage for the ledger folder (pruned nodes) , OR , 
+    └ 4 TB of storage for the ledger folder (full history nodes). 
+* Rust 1.59 installed
 ```
 
-When building the master branch, please make sure you are using the latest stable rust version by running:
+### Download the project
 
 ```bash
-$ rustup update
+# Git pull pl-solana and pl-solana-program-library repositories
+# Both repos need to be downloaded in the same location
+git clone https://github.com/powerledger/pl-solana
+git clone https://github.com/powerledger/pl-solana-program-library
 ```
 
-When building a specific release branch, you should check the rust version in `ci/rust-version.sh` and if necessary, install that version by running:
-```bash
-$ rustup install VERSION
-```
-Note that if this is not the latest rust version on your machine, cargo commands may require an [override](https://rust-lang.github.io/rustup/overrides.html) in order to use the correct version.
-
-On Linux systems you may need to install libssl-dev, pkg-config, zlib1g-dev, protobuf etc.
-
-On Ubuntu:
-```bash
-$ sudo apt-get update
-$ sudo apt-get install libssl-dev libudev-dev pkg-config zlib1g-dev llvm clang cmake make libprotobuf-dev protobuf-compiler
-```
-
-On Fedora:
-```bash
-$ sudo dnf install openssl-devel systemd-devel pkg-config zlib-devel llvm clang cmake make protobuf-devel protobuf-compiler perl-core
-```
-
-## **2. Download the source code.**
+## Compile the code
 
 ```bash
-$ git clone https://github.com/solana-labs/solana.git
-$ cd solana
+cd pl-solana
+cargo clean
+cd scripts
+./cargo-install-all.sh /home/validator-admin/.local/share/pl-solana
 ```
 
-## **3. Build.**
+## Append to .bashrc
 
 ```bash
-$ ./cargo build
+echo -e "\nexport PATH=\$PATH:/home/validator-admin/.local/share/pl-solana/bin" >> ~/.bashrc
+cd
+. .bashrc
 ```
 
-# Testing
+## Create identities
 
-**Run the test suite:**
+At least 2 keypairs are necessary, and IDENTITY keypair and a VOTE-ACOUNT keypair.
+
+We suggest creating a third keypair that is going to function as the withdrawal authority
+for the vote account.
 
 ```bash
-$ ./cargo test
+# Keypair generation example: 
+
+mkdir ~/keypairs
+solana-keygen new --word-count 24 --no-bip39-passphrase -o ~/keypairs/id.json
+solana-keygen new --word-count 24 --no-bip39-passphrase -o ~/keypairs/vote-account.json
+solana-keygen new --word-count 24 --no-bip39-passphrase -o ~/keypairs/withdraw-account.json
+chmod 400 ~/keypairs/*
 ```
 
-### Starting a local testnet
-Start your own testnet locally, instructions are in the [online docs](https://docs.solana.com/cluster/bench-tps).
+## Create config file
 
-### Accessing the remote development cluster
-* `devnet` - stable public cluster for development accessible via
-devnet.solana.com. Runs 24/7. Learn more about the [public clusters](https://docs.solana.com/clusters)
-
-# Benchmarking
-
-First, install the nightly build of rustc. `cargo bench` requires the use of the
-unstable features only available in the nightly build.
+Execute the following commands to create the config file:
 
 ```bash
-$ rustup install nightly
-```
-
-Run the benchmarks:
 
 ```bash
-$ cargo +nightly bench
+[ ! -d "~/.config/solana/cli" ] && mkdir -p ~/.config/solana/cli
+cat > ~/.config/solana/cli/config.yml <<EOF
+---
+json_rpc_url: "https://powr-api.mainnet.powerledger.io"
+websocket_url: ""
+keypair_path: $HOME/keypairs/id.json
+address_labels:
+  "11111111111111111111111111111111": SystemProgram
+commitment: confirmed
+EOF
 ```
 
-# Release Process
-
-The release process for this project is described [here](RELEASE.md).
-
-# Code coverage
-
-To generate code coverage statistics:
+If your IDENTITY keypair is located in a different folder, it can be changed using the
+following command:
 
 ```bash
-$ scripts/coverage.sh
-$ open target/cov/lcov-local/index.html
+solana config set -k /PATH_TO_KEYPAIR/id.json
 ```
 
-Why coverage? While most see coverage as a code quality metric, we see it primarily as a developer
-productivity metric. When a developer makes a change to the codebase, presumably it's a *solution* to
-some problem.  Our unit-test suite is how we encode the set of *problems* the codebase solves. Running
-the test suite should indicate that your change didn't *infringe* on anyone else's solutions. Adding a
-test *protects* your solution from future changes. Say you don't understand why a line of code exists,
-try deleting it and running the unit-tests. The nearest test failure should tell you what problem
-was solved by that code. If no test fails, go ahead and submit a Pull Request that asks, "what
-problem is solved by this code?" On the other hand, if a test does fail and you can think of a
-better way to solve the same problem, a Pull Request with your solution would most certainly be
-welcome! Likewise, if rewriting a test can better communicate what code it's protecting, please
-send us that patch!
+## Create vote account
 
-# Disclaimer
+Example usage:
 
-All claims, content, designs, algorithms, estimates, roadmaps,
-specifications, and performance measurements described in this project
-are done with the Solana Labs, Inc. (“SL”) good faith efforts. It is up to
-the reader to check and validate their accuracy and truthfulness.
-Furthermore, nothing in this project constitutes a solicitation for
-investment.
+```bash
+solana create-vote-account /PATH_TO_KEYPAIR/vote-account.json /PATH_TO_KEYPAIR/id.json $(solana address -k /PATH_TO_KEYPAIR/withdraw-account.json) --commission <0-100>
+```
 
-Any content produced by SL or developer resources that SL provides are
-for educational and inspirational purposes only. SL does not encourage,
-induce or sanction the deployment, integration or use of any such
-applications (including the code comprising the Solana blockchain
-protocol) in violation of applicable laws or regulations and hereby
-prohibits any such deployment, integration or use. This includes the use of
-any such applications by the reader (a) in violation of export control
-or sanctions laws of the United States or any other applicable
-jurisdiction, (b) if the reader is located in or ordinarily resident in
-a country or territory subject to comprehensive sanctions administered
-by the U.S. Office of Foreign Assets Control (OFAC), or (c) if the
-reader is or is working on behalf of a Specially Designated National
-(SDN) or a person subject to similar blocking or denied party
-prohibitions.
+If the commission needs to be updated:
 
-The reader should be aware that U.S. export control and sanctions laws prohibit 
-U.S. persons (and other persons that are subject to such laws) from transacting 
-with persons in certain countries and territories or that are on the SDN list. 
-Accordingly, there is a risk to individuals that other persons using any of the 
-code contained in this repo, or a derivation thereof, may be sanctioned persons 
-and that transactions with such persons would be a violation of U.S. export 
-controls and sanctions law.
+```bash
+solana vote-update-commission $(solana address -k /PATH_TO_KEYPAIR/vote-account.json) <0-100> /PATH_TO_KEYPAIR/withdraw-account.json
+```
+
+## Starting you validator node
+
+IMPORTANT NOTE: You can modify the command to fit your requirements
+but the list of --known-validator(s) must be provided.
+
+### Full history node
+
+```bash
+#!/usr/bin/env bash
+
+exec <PATH TO>/solana-validator \
+--ledger <PATH TO>/ledger \
+--accounts <PATH TO>/accounts \
+--full-rpc-api \
+--private-rpc \
+--rpc-port 8899 \
+--snapshot-interval-slots 200 \
+--account-index program-id \
+--account-index spl-token-mint \
+--account-index spl-token-owner \
+--identity <PATH TO>/keypairs/id.json \
+--authorized-voter <PATH TO>/keypairs/id.json \
+--vote-account <PATH TO>/keypairs/vote-account.json \
+--expected-genesis-hash B1xJgyn5UyWw2itxwwctHL5fLxY9ZbnsDf7AG2WXbpGY \
+--known-validator 8cDZLH2Ha3v56WLcpQkH7U211uokkb6YbZ3Sc6r6WrUa \
+--known-validator 6YDqUUE3JBA9sVLNNiWYQR7moAPyNfDsBKPEvGcuEfQ2 \
+--known-validator 8oATwTdKJqUvWMkUjFDBVW23HDF5DbVRskxWCypXwRRB \
+--known-validator 6H69egwLDXs27r7tfUu5oxesbcYbi6YL8JW2D22jkBEi \
+--wal-recovery-mode skip_any_corrupted_record \
+--enable-rpc-transaction-history \
+--enable-cpi-and-log-storage \
+--entrypoint powr-entrypoint-1.mainnet.powerledger.io:8001 \
+--entrypoint powr-entrypoint-2.mainnet.powerledger.io:8001 \
+--dynamic-port-range 8000-9000 \
+--log <PATH TO>/validator.log
+```
+
+### Pruned Node
+
+```bash
+#!/usr/bin/env bash
+
+exec <PATH TO pl-solana/target/release>/solana-validator \
+--ledger <PATH TO>/ledger \
+--accounts <PATH TO>/accounts \
+--full-rpc-api \
+--private-rpc \
+--rpc-port 8899 \
+--account-index program-id \
+--account-index spl-token-mint \
+--account-index spl-token-owner \
+--identity <PATH TO>/keypairs/id.json \
+--authorized-voter <PATH TO>/keypairs/id.json \
+--vote-account <PATH TO>/keypairs/vote-account.json \
+--expected-genesis-hash B1xJgyn5UyWw2itxwwctHL5fLxY9ZbnsDf7AG2WXbpGY \
+--known-validator 8cDZLH2Ha3v56WLcpQkH7U211uokkb6YbZ3Sc6r6WrUa \
+--known-validator 6YDqUUE3JBA9sVLNNiWYQR7moAPyNfDsBKPEvGcuEfQ2 \
+--known-validator 8oATwTdKJqUvWMkUjFDBVW23HDF5DbVRskxWCypXwRRB \
+--known-validator 6H69egwLDXs27r7tfUu5oxesbcYbi6YL8JW2D22jkBEi \
+--wal-recovery-mode skip_any_corrupted_record \
+--enable-rpc-transaction-history \
+--entrypoint powr-entrypoint-1.mainnet.powerledger.io:8001 \
+--entrypoint powr-entrypoint-2.mainnet.powerledger.io:8001 \
+--dynamic-port-range 8000-9000 \
+--limit-ledger-size \
+--log <PATH TO>/validator.log
+```
+
+We HIGHLY recommend to manage the process using linux's `systemctl` command:
+
+```bash
+sudo su
+cat > /etc/systemd/system/powr.service <<EOF
+[Unit]
+Description=Powerledger Blockchain Validator Service
+Requires=network-online.target
+After=network.target
+
+[Service]
+LimitNOFILE=1000000
+Type=simple
+User=<USER>
+WorkingDirectory=/home/<USER>
+ExecStart=<PATH TO SOLANA VALIDATOR SCRIPT>
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+exit
+```
+
+## System tunning
+
+```bash
+# Increase UDP buffers
+sudo bash -c "cat >/etc/sysctl.d/20-solana-udp-buffers.conf <<EOF
+# Increase UDP buffer size
+net.core.rmem_default = 134217728
+net.core.rmem_max = 134217728
+net.core.wmem_default = 134217728
+net.core.wmem_max = 134217728
+EOF"
+sudo sysctl -p /etc/sysctl.d/20-solana-udp-buffers.conf
+```
+
+```bash
+# Increased memory mapped files limit
+sudo bash -c "cat >/etc/sysctl.d/20-solana-mmaps.conf <<EOF
+# Increase memory mapped files limit
+vm.max_map_count = 1000000
+EOF"
+sudo sysctl -p /etc/sysctl.d/20-solana-mmaps.conf
+```
+
+```bash
+# Add the following line to the [Service] section of your systemd service file, if you use one
+LimitNOFILE=1000000
+```
+
+```bash
+# Increasing max opened files limit
+sudo bash -c "cat >/etc/security/limits.d/90-solana-nofiles.conf <<EOF
+# Increase process file descriptor count limit
+* - nofile 1000000
+EOF"
+```
+
+```bash
+# Close all open sessions (log out then, in again)
+# check new limit
+ulimit -Sn
+```
+
+## Create logrotate configuration
+
+```bash
+sudo su
+cat > /etc/logrotate.d/<NAME OF THE systemctl SERVICE>.conf <<EOF
+/PATH_TO_LOGFILE/validator.log {
+    rotate 7
+    daily
+    missingok
+    postrotate
+        systemctl kill -s USR1 <NAME OF THE systemctl SERVICE>.service
+    endscript
+}
+EOF
+systemctl restart logrotate.service
+exit
+```
+
+## Withdrawing tokens from vote-account
+
+```bash
+solana withdraw-from-vote-account \
+$(solana-keygen pubkey /PATH_TO_KEYPAIR/vote-account.json) \
+<RECIPIENT ADDRESS> \
+<AMOUNT> \
+--withdraw-authority /PATH_TO_KEYPAIR/withdraw-account.json
+```
+
+## Publish additional information about the validator
+
+```bash
+solana validator-info publish -k /PATH_TO_KEYPAIR/id.json -w "<URL OF THE VALIDATOR>" "<VALIDATOR NAME>"
+```
+
+## Getting published validators metadata
+
+```bash
+solana validator-info get
+```

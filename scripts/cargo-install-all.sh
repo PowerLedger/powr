@@ -9,14 +9,7 @@ if [[ $OSTYPE == darwin* ]]; then
   # Mac OS X's version of `readlink` does not support the -f option,
   # But `greadlink` does, which you can get with `brew install coreutils`
   readlink_cmd="greadlink"
-
-  if ! command -v ${readlink_cmd} &> /dev/null
-  then
-    echo "${readlink_cmd} could not be found. You may need to install coreutils: \`brew install coreutils\`"
-    exit 1
-  fi
 fi
-
 cargo="$("${readlink_cmd}" -f "${here}/../cargo")"
 
 set -e
@@ -79,9 +72,7 @@ if [[ $CI_OS_NAME = windows ]]; then
   # yet available on windows
   BINS=(
     cargo-build-bpf
-    cargo-build-sbf
     cargo-test-bpf
-    cargo-test-sbf
     solana
     solana-install
     solana-install-init
@@ -103,6 +94,7 @@ else
     solana-ledger-tool
     solana-log-analyzer
     solana-net-shaper
+    solana-sys-tuner
     solana-validator
     rbpf-cli
   )
@@ -111,9 +103,7 @@ else
   if [[ -z "$validatorOnly" ]]; then
     BINS+=(
       cargo-build-bpf
-      cargo-build-sbf
       cargo-test-bpf
-      cargo-test-sbf
       solana-dos
       solana-install-init
       solana-stake-accounts
@@ -142,12 +132,8 @@ mkdir -p "$installDir/bin"
 
   # Exclude `spl-token` binary for net.sh builds
   if [[ -z "$validatorOnly" ]]; then
-    # the patch-related configs are needed for rust 1.69+ on Windows; see Cargo.toml
     # shellcheck disable=SC2086 # Don't want to double quote $rust_version
-    "$cargo" $maybeRustVersion \
-      --config 'patch.crates-io.ntapi.git="https://github.com/solana-labs/ntapi"' \
-      --config 'patch.crates-io.ntapi.rev="97ede981a1777883ff86d142b75024b023f04fad"' \
-      install --locked spl-token-cli --root "$installDir"
+    "$cargo" $maybeRustVersion install --locked spl-token-cli --root "$installDir" --version 2.0.17
   fi
 )
 
@@ -162,44 +148,8 @@ fi
 if [[ -z "$validatorOnly" ]]; then
   # shellcheck disable=SC2086 # Don't want to double quote $rust_version
   "$cargo" $maybeRustVersion build --manifest-path programs/bpf_loader/gen-syscall-list/Cargo.toml
-  # shellcheck disable=SC2086 # Don't want to double quote $rust_version
-  "$cargo" $maybeRustVersion run --bin gen-headers
-  mkdir -p "$installDir"/bin/sdk/sbf
-  cp -a sdk/sbf/* "$installDir"/bin/sdk/sbf
-fi
-
-# Add Solidity Compiler
-if [[ -z "$validatorOnly" ]]; then
-  base="https://github.com/hyperledger/solang/releases/download"
-  version="v0.3.2"
-  curlopt="-sSfL --retry 5 --retry-delay 2 --retry-connrefused"
-
-  case $(uname -s) in
-  "Linux")
-    if [[ $(uname -m) == "x86_64" ]]; then
-      arch="x86-64"
-    else
-      arch="arm64"
-    fi
-    # shellcheck disable=SC2086
-    curl $curlopt -o "$installDir/bin/solang" $base/$version/solang-linux-$arch
-    chmod 755 "$installDir/bin/solang"
-    ;;
-  "Darwin")
-    if [[ $(uname -m) == "x86_64" ]]; then
-      arch="intel"
-    else
-      arch="arm"
-    fi
-    # shellcheck disable=SC2086
-    curl $curlopt -o "$installDir/bin/solang" $base/$version/solang-mac-$arch
-    chmod 755 "$installDir/bin/solang"
-    ;;
-  *)
-    # shellcheck disable=SC2086
-    curl $curlopt -o "$installDir/bin/solang.exe" $base/$version/solang.exe
-    ;;
-  esac
+  mkdir -p "$installDir"/bin/sdk/bpf
+  cp -a sdk/bpf/* "$installDir"/bin/sdk/bpf
 fi
 
 (

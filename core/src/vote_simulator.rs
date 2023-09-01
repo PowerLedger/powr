@@ -1,17 +1,15 @@
 use {
     crate::{
         cluster_info_vote_listener::VoteTracker,
-        cluster_slots_service::cluster_slots::ClusterSlots,
-        consensus::{
-            fork_choice::SelectVoteAndResetForkResult,
-            heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
-            latest_validator_votes_for_frozen_banks::LatestValidatorVotesForFrozenBanks,
-            progress_map::{ForkProgress, ProgressMap},
-            Tower,
-        },
-        repair::cluster_slot_state_verifier::{
+        cluster_slot_state_verifier::{
             DuplicateSlotsTracker, EpochSlotsFrozenSlots, GossipDuplicateConfirmedSlots,
         },
+        cluster_slots::ClusterSlots,
+        consensus::Tower,
+        fork_choice::SelectVoteAndResetForkResult,
+        heaviest_subtree_fork_choice::HeaviestSubtreeForkChoice,
+        latest_validator_votes_for_frozen_banks::LatestValidatorVotesForFrozenBanks,
+        progress_map::{ForkProgress, ProgressMap},
         replay_stage::{HeaviestForkFailures, ReplayStage},
         unfrozen_gossip_verified_vote_hashes::UnfrozenGossipVerifiedVoteHashes,
     },
@@ -82,7 +80,7 @@ impl VoteSimulator {
             }
             let parent = *walk.get_parent().unwrap().data();
             let parent_bank = self.bank_forks.read().unwrap().get(parent).unwrap();
-            let new_bank = Bank::new_from_parent(parent_bank.clone(), &Pubkey::default(), slot);
+            let new_bank = Bank::new_from_parent(&parent_bank, &Pubkey::default(), slot);
             self.progress
                 .entry(slot)
                 .or_insert_with(|| ForkProgress::new(Hash::default(), None, None, 0, 0));
@@ -107,13 +105,13 @@ impl VoteSimulator {
                     let vote_account = new_bank
                         .get_vote_account(&keypairs.vote_keypair.pubkey())
                         .unwrap();
-                    let state = vote_account.vote_state();
+                    let state = vote_account.1.vote_state();
                     assert!(state
                         .as_ref()
                         .unwrap()
                         .votes
                         .iter()
-                        .any(|lockout| lockout.slot() == parent));
+                        .any(|lockout| lockout.slot == parent));
                 }
             }
             while new_bank.tick_height() < new_bank.max_tick_height() {
@@ -143,6 +141,8 @@ impl VoteSimulator {
         tower: &mut Tower,
     ) -> Vec<HeaviestForkFailures> {
         // Try to simulate the vote
+        let my_keypairs = self.validator_keypairs.get(my_pubkey).unwrap();
+        let my_vote_pubkey = my_keypairs.vote_keypair.pubkey();
         let ancestors = self.bank_forks.read().unwrap().ancestors();
         let mut frozen_banks: Vec<_> = self
             .bank_forks
@@ -195,7 +195,7 @@ impl VoteSimulator {
             return heaviest_fork_failures;
         }
 
-        let new_root = tower.record_bank_vote(&vote_bank);
+        let new_root = tower.record_bank_vote(&vote_bank, &my_vote_pubkey);
         if let Some(new_root) = new_root {
             self.set_root(new_root);
         }

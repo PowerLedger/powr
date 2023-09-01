@@ -42,21 +42,21 @@
 //! transaction nonce]_ mechanism instead of a recent blockhash to ensure unique
 //! transactions.
 //!
-//! [`RpcClient::get_latest_blockhash`]: https://docs.rs/solana-rpc-client/latest/solana_rpc_client/rpc_client/struct.RpcClient.html#method.get_latest_blockhash
+//! [`RpcClient::get_latest_blockhash`]: https://docs.rs/solana-client/latest/solana_client/rpc_client/struct.RpcClient.html#method.get_latest_blockhash
 //! [durable transaction nonce]: https://docs.solana.com/implemented-proposals/durable-tx-nonces
 //!
 //! # Examples
 //!
-//! This example uses the [`solana_rpc_client`] and [`anyhow`] crates.
+//! This example uses the [`solana_client`] and [`anyhow`] crates.
 //!
-//! [`solana_rpc_client`]: https://docs.rs/solana-rpc-client
+//! [`solana_client`]: https://docs.rs/solana-client
 //! [`anyhow`]: https://docs.rs/anyhow
 //!
 //! ```
-//! # use solana_sdk::example_mocks::solana_rpc_client;
+//! # use solana_sdk::example_mocks::solana_client;
 //! use anyhow::Result;
 //! use borsh::{BorshSerialize, BorshDeserialize};
-//! use solana_rpc_client::rpc_client::RpcClient;
+//! use solana_client::rpc_client::RpcClient;
 //! use solana_sdk::{
 //!      instruction::Instruction,
 //!      message::Message,
@@ -129,7 +129,7 @@ use {
     serde::Serialize,
     solana_program::{system_instruction::SystemInstruction, system_program},
     solana_sdk::feature_set,
-    std::result,
+    std::{result, sync::Arc},
 };
 
 mod error;
@@ -138,7 +138,7 @@ mod versioned;
 
 pub use {error::*, sanitized::*, versioned::*};
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum TransactionVerificationMode {
     HashOnly,
     HashAndVerifyPrecompiles,
@@ -206,16 +206,16 @@ impl Transaction {
     ///
     /// # Examples
     ///
-    /// This example uses the [`solana_rpc_client`] and [`anyhow`] crates.
+    /// This example uses the [`solana_client`] and [`anyhow`] crates.
     ///
-    /// [`solana_rpc_client`]: https://docs.rs/solana-rpc-client
+    /// [`solana_client`]: https://docs.rs/solana-client
     /// [`anyhow`]: https://docs.rs/anyhow
     ///
     /// ```
-    /// # use solana_sdk::example_mocks::solana_rpc_client;
+    /// # use solana_sdk::example_mocks::solana_client;
     /// use anyhow::Result;
     /// use borsh::{BorshSerialize, BorshDeserialize};
-    /// use solana_rpc_client::rpc_client::RpcClient;
+    /// use solana_client::rpc_client::RpcClient;
     /// use solana_sdk::{
     ///      instruction::Instruction,
     ///      message::Message,
@@ -285,16 +285,16 @@ impl Transaction {
     ///
     /// # Examples
     ///
-    /// This example uses the [`solana_rpc_client`] and [`anyhow`] crates.
+    /// This example uses the [`solana_client`] and [`anyhow`] crates.
     ///
-    /// [`solana_rpc_client`]: https://docs.rs/solana-rpc-client
+    /// [`solana_client`]: https://docs.rs/solana-client
     /// [`anyhow`]: https://docs.rs/anyhow
     ///
     /// ```
-    /// # use solana_sdk::example_mocks::solana_rpc_client;
+    /// # use solana_sdk::example_mocks::solana_client;
     /// use anyhow::Result;
     /// use borsh::{BorshSerialize, BorshDeserialize};
-    /// use solana_rpc_client::rpc_client::RpcClient;
+    /// use solana_client::rpc_client::RpcClient;
     /// use solana_sdk::{
     ///      instruction::Instruction,
     ///      message::Message,
@@ -346,7 +346,7 @@ impl Transaction {
     /// #
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn new<T: Signers + ?Sized>(
+    pub fn new<T: Signers>(
         from_keypairs: &T,
         message: Message,
         recent_blockhash: Hash,
@@ -364,16 +364,16 @@ impl Transaction {
     ///
     /// # Examples
     ///
-    /// This example uses the [`solana_rpc_client`] and [`anyhow`] crates.
+    /// This example uses the [`solana_client`] and [`anyhow`] crates.
     ///
-    /// [`solana_rpc_client`]: https://docs.rs/solana-rpc-client
+    /// [`solana_client`]: https://docs.rs/solana-client
     /// [`anyhow`]: https://docs.rs/anyhow
     ///
     /// ```
-    /// # use solana_sdk::example_mocks::solana_rpc_client;
+    /// # use solana_sdk::example_mocks::solana_client;
     /// use anyhow::Result;
     /// use borsh::{BorshSerialize, BorshDeserialize};
-    /// use solana_rpc_client::rpc_client::RpcClient;
+    /// use solana_client::rpc_client::RpcClient;
     /// use solana_sdk::{
     ///      instruction::Instruction,
     ///      message::Message,
@@ -440,16 +440,16 @@ impl Transaction {
     ///
     /// # Examples
     ///
-    /// This example uses the [`solana_rpc_client`] and [`anyhow`] crates.
+    /// This example uses the [`solana_client`] and [`anyhow`] crates.
     ///
-    /// [`solana_rpc_client`]: https://docs.rs/solana-rpc-client
+    /// [`solana_client`]: https://docs.rs/solana-client
     /// [`anyhow`]: https://docs.rs/anyhow
     ///
     /// ```
-    /// # use solana_sdk::example_mocks::solana_rpc_client;
+    /// # use solana_sdk::example_mocks::solana_client;
     /// use anyhow::Result;
     /// use borsh::{BorshSerialize, BorshDeserialize};
-    /// use solana_rpc_client::rpc_client::RpcClient;
+    /// use solana_client::rpc_client::RpcClient;
     /// use solana_sdk::{
     ///      instruction::Instruction,
     ///      message::Message,
@@ -501,7 +501,7 @@ impl Transaction {
     /// #
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn new_signed_with_payer<T: Signers + ?Sized>(
+    pub fn new_signed_with_payer<T: Signers>(
         instructions: &[Instruction],
         payer: Option<&Pubkey>,
         signing_keypairs: &T,
@@ -526,7 +526,7 @@ impl Transaction {
     ///
     /// Panics when signing fails. See [`Transaction::try_sign`] and for a full
     /// description of failure conditions.
-    pub fn new_with_compiled_instructions<T: Signers + ?Sized>(
+    pub fn new_with_compiled_instructions<T: Signers>(
         from_keypairs: &T,
         keys: &[Pubkey],
         recent_blockhash: Hash,
@@ -648,16 +648,16 @@ impl Transaction {
     ///
     /// # Examples
     ///
-    /// This example uses the [`solana_rpc_client`] and [`anyhow`] crates.
+    /// This example uses the [`solana_client`] and [`anyhow`] crates.
     ///
-    /// [`solana_rpc_client`]: https://docs.rs/solana-rpc-client
+    /// [`solana_client`]: https://docs.rs/solana-client
     /// [`anyhow`]: https://docs.rs/anyhow
     ///
     /// ```
-    /// # use solana_sdk::example_mocks::solana_rpc_client;
+    /// # use solana_sdk::example_mocks::solana_client;
     /// use anyhow::Result;
     /// use borsh::{BorshSerialize, BorshDeserialize};
-    /// use solana_rpc_client::rpc_client::RpcClient;
+    /// use solana_client::rpc_client::RpcClient;
     /// use solana_sdk::{
     ///      instruction::Instruction,
     ///      message::Message,
@@ -705,9 +705,9 @@ impl Transaction {
     /// #
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn sign<T: Signers + ?Sized>(&mut self, keypairs: &T, recent_blockhash: Hash) {
+    pub fn sign<T: Signers>(&mut self, keypairs: &T, recent_blockhash: Hash) {
         if let Err(e) = self.try_sign(keypairs, recent_blockhash) {
-            panic!("Transaction::sign failed with error {e:?}");
+            panic!("Transaction::sign failed with error {:?}", e);
         }
     }
 
@@ -731,9 +731,9 @@ impl Transaction {
     /// handle the error. See the documentation for
     /// [`Transaction::try_partial_sign`] for a full description of failure
     /// conditions.
-    pub fn partial_sign<T: Signers + ?Sized>(&mut self, keypairs: &T, recent_blockhash: Hash) {
+    pub fn partial_sign<T: Signers>(&mut self, keypairs: &T, recent_blockhash: Hash) {
         if let Err(e) = self.try_partial_sign(keypairs, recent_blockhash) {
-            panic!("Transaction::partial_sign failed with error {e:?}");
+            panic!("Transaction::partial_sign failed with error {:?}", e);
         }
     }
 
@@ -750,14 +750,17 @@ impl Transaction {
     ///
     /// Panics if signing fails. Use [`Transaction::try_partial_sign_unchecked`]
     /// to handle the error.
-    pub fn partial_sign_unchecked<T: Signers + ?Sized>(
+    pub fn partial_sign_unchecked<T: Signers>(
         &mut self,
         keypairs: &T,
         positions: Vec<usize>,
         recent_blockhash: Hash,
     ) {
         if let Err(e) = self.try_partial_sign_unchecked(keypairs, positions, recent_blockhash) {
-            panic!("Transaction::partial_sign_unchecked failed with error {e:?}");
+            panic!(
+                "Transaction::partial_sign_unchecked failed with error {:?}",
+                e
+            );
         }
     }
 
@@ -786,16 +789,16 @@ impl Transaction {
     ///
     /// # Examples
     ///
-    /// This example uses the [`solana_rpc_client`] and [`anyhow`] crates.
+    /// This example uses the [`solana_client`] and [`anyhow`] crates.
     ///
-    /// [`solana_rpc_client`]: https://docs.rs/solana-rpc-client
+    /// [`solana_client`]: https://docs.rs/solana-client
     /// [`anyhow`]: https://docs.rs/anyhow
     ///
     /// ```
-    /// # use solana_sdk::example_mocks::solana_rpc_client;
+    /// # use solana_sdk::example_mocks::solana_client;
     /// use anyhow::Result;
     /// use borsh::{BorshSerialize, BorshDeserialize};
-    /// use solana_rpc_client::rpc_client::RpcClient;
+    /// use solana_client::rpc_client::RpcClient;
     /// use solana_sdk::{
     ///      instruction::Instruction,
     ///      message::Message,
@@ -843,7 +846,7 @@ impl Transaction {
     /// #
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn try_sign<T: Signers + ?Sized>(
+    pub fn try_sign<T: Signers>(
         &mut self,
         keypairs: &T,
         recent_blockhash: Hash,
@@ -906,7 +909,7 @@ impl Transaction {
     /// [`PresignerError::VerificationFailure`]: crate::signer::presigner::PresignerError::VerificationFailure
     /// [`solana-remote-wallet`]: https://docs.rs/solana-remote-wallet/latest/
     /// [`RemoteKeypair`]: https://docs.rs/solana-remote-wallet/latest/solana_remote_wallet/remote_keypair/struct.RemoteKeypair.html
-    pub fn try_partial_sign<T: Signers + ?Sized>(
+    pub fn try_partial_sign<T: Signers>(
         &mut self,
         keypairs: &T,
         recent_blockhash: Hash,
@@ -932,7 +935,7 @@ impl Transaction {
     /// # Errors
     ///
     /// Returns an error if signing fails.
-    pub fn try_partial_sign_unchecked<T: Signers + ?Sized>(
+    pub fn try_partial_sign_unchecked<T: Signers>(
         &mut self,
         keypairs: &T,
         positions: Vec<usize>,
@@ -1011,7 +1014,7 @@ impl Transaction {
     }
 
     /// Verify the precompiled programs in this transaction.
-    pub fn verify_precompiles(&self, feature_set: &feature_set::FeatureSet) -> Result<()> {
+    pub fn verify_precompiles(&self, feature_set: &Arc<feature_set::FeatureSet>) -> Result<()> {
         for instruction in &self.message().instructions {
             // The Transaction may not be sanitized at this point
             if instruction.program_id_index as usize >= self.message().account_keys.len() {
@@ -1092,7 +1095,7 @@ pub fn uses_durable_nonce(tx: &Transaction) -> Option<&CompiledInstruction> {
             )
             // Nonce account is writable
             && matches!(
-                instruction.accounts.first(),
+                instruction.accounts.get(0),
                 Some(index) if message.is_writable(*index as usize)
             )
         })
@@ -1103,7 +1106,7 @@ pub fn get_nonce_pubkey_from_instruction<'a>(
     ix: &CompiledInstruction,
     tx: &'a Transaction,
 ) -> Option<&'a Pubkey> {
-    ix.accounts.first().and_then(|idx| {
+    ix.accounts.get(0).and_then(|idx| {
         let idx = *idx as usize;
         tx.message().account_keys.get(idx)
     })
@@ -1264,18 +1267,18 @@ mod tests {
 
     fn create_sample_transaction() -> Transaction {
         let keypair = Keypair::from_bytes(&[
-            255, 101, 36, 24, 124, 23, 167, 21, 132, 204, 155, 5, 185, 58, 121, 75, 156, 227, 116,
-            193, 215, 38, 142, 22, 8, 14, 229, 239, 119, 93, 5, 218, 36, 100, 158, 252, 33, 161,
-            97, 185, 62, 89, 99, 195, 250, 249, 187, 189, 171, 118, 241, 90, 248, 14, 68, 219, 231,
-            62, 157, 5, 142, 27, 210, 117,
+            48, 83, 2, 1, 1, 48, 5, 6, 3, 43, 101, 112, 4, 34, 4, 32, 255, 101, 36, 24, 124, 23,
+            167, 21, 132, 204, 155, 5, 185, 58, 121, 75, 156, 227, 116, 193, 215, 38, 142, 22, 8,
+            14, 229, 239, 119, 93, 5, 218, 161, 35, 3, 33, 0, 36, 100, 158, 252, 33, 161, 97, 185,
+            62, 89, 99,
         ])
         .unwrap();
-        let to = Pubkey::from([
+        let to = Pubkey::new(&[
             1, 1, 1, 4, 5, 6, 7, 8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 8, 7, 6, 5, 4,
             1, 1, 1,
         ]);
 
-        let program_id = Pubkey::from([
+        let program_id = Pubkey::new(&[
             2, 2, 2, 4, 5, 6, 7, 8, 9, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 8, 7, 6, 5, 4,
             2, 2, 2,
         ]);
@@ -1286,9 +1289,7 @@ mod tests {
         let instruction =
             Instruction::new_with_bincode(program_id, &(1u8, 2u8, 3u8), account_metas);
         let message = Message::new(&[instruction], Some(&keypair.pubkey()));
-        let tx = Transaction::new(&[&keypair], message, Hash::default());
-        tx.verify().expect("valid sample transaction signatures");
-        tx
+        Transaction::new(&[&keypair], message, Hash::default())
     }
 
     #[test]
@@ -1356,16 +1357,16 @@ mod tests {
         assert_eq!(
             serialize(&create_sample_transaction()).unwrap(),
             vec![
-                1, 120, 138, 162, 185, 59, 209, 241, 157, 71, 157, 74, 131, 4, 87, 54, 28, 38, 180,
-                222, 82, 64, 62, 61, 62, 22, 46, 17, 203, 187, 136, 62, 43, 11, 38, 235, 17, 239,
-                82, 240, 139, 130, 217, 227, 214, 9, 242, 141, 223, 94, 29, 184, 110, 62, 32, 87,
-                137, 63, 139, 100, 221, 20, 137, 4, 5, 1, 0, 1, 3, 36, 100, 158, 252, 33, 161, 97,
-                185, 62, 89, 99, 195, 250, 249, 187, 189, 171, 118, 241, 90, 248, 14, 68, 219, 231,
-                62, 157, 5, 142, 27, 210, 117, 1, 1, 1, 4, 5, 6, 7, 8, 9, 9, 9, 9, 9, 9, 9, 9, 9,
-                9, 9, 9, 9, 9, 9, 9, 8, 7, 6, 5, 4, 1, 1, 1, 2, 2, 2, 4, 5, 6, 7, 8, 9, 1, 1, 1, 1,
-                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 8, 7, 6, 5, 4, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 2, 0, 1,
-                3, 1, 2, 3
+                1, 71, 59, 9, 187, 190, 129, 150, 165, 21, 33, 158, 72, 87, 110, 144, 120, 79, 238,
+                132, 134, 105, 39, 102, 116, 209, 29, 229, 154, 36, 105, 44, 172, 118, 131, 22,
+                124, 131, 179, 142, 176, 27, 117, 160, 89, 102, 224, 204, 1, 252, 141, 2, 136, 0,
+                37, 218, 225, 129, 92, 154, 250, 59, 97, 178, 10, 1, 0, 1, 3, 156, 227, 116, 193,
+                215, 38, 142, 22, 8, 14, 229, 239, 119, 93, 5, 218, 161, 35, 3, 33, 0, 36, 100,
+                158, 252, 33, 161, 97, 185, 62, 89, 99, 1, 1, 1, 4, 5, 6, 7, 8, 9, 9, 9, 9, 9, 9,
+                9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 8, 7, 6, 5, 4, 1, 1, 1, 2, 2, 2, 4, 5, 6, 7, 8, 9, 1,
+                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 8, 7, 6, 5, 4, 2, 2, 2, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2,
+                2, 0, 1, 3, 1, 2, 3
             ]
         );
     }
@@ -1669,23 +1670,5 @@ mod tests {
             .try_partial_sign(&[&from_keypair, &unused_keypair], Hash::default())
             .unwrap_err();
         assert_eq!(err, SignerError::KeypairPubkeyMismatch);
-    }
-
-    #[test]
-    fn test_unsized_signers() {
-        fn instructions_to_tx(
-            instructions: &[Instruction],
-            signers: Box<dyn Signers>,
-        ) -> Transaction {
-            let pubkeys = signers.pubkeys();
-            let first_signer = pubkeys.first().expect("should exist");
-            let message = Message::new(instructions, Some(first_signer));
-            Transaction::new(signers.as_ref(), message, Hash::default())
-        }
-
-        let signer: Box<dyn Signer> = Box::new(Keypair::new());
-        let tx = instructions_to_tx(&[], Box::new(vec![signer]));
-
-        assert!(tx.is_signed());
     }
 }

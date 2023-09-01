@@ -1,6 +1,6 @@
 #![allow(clippy::integer_arithmetic)]
 
-#[cfg(target_os = "solana")]
+#[cfg(target_arch = "bpf")]
 #[macro_use]
 extern crate matches;
 

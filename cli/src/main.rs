@@ -15,10 +15,9 @@ use {
         display::{println_name_value, println_name_value_or},
         OutputFormat,
     },
+    solana_client::rpc_config::RpcSendTransactionConfig,
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
-    solana_rpc_client_api::config::RpcSendTransactionConfig,
-    solana_tpu_client::tpu_client::DEFAULT_TPU_ENABLE_UDP,
-    std::{collections::HashMap, error, path::PathBuf, rc::Rc, time::Duration},
+    std::{collections::HashMap, error, path::PathBuf, sync::Arc, time::Duration},
 };
 
 fn parse_settings(matches: &ArgMatches<'_>) -> Result<bool, Box<dyn error::Error>> {
@@ -64,7 +63,7 @@ fn parse_settings(matches: &ArgMatches<'_>) -> Result<bool, Box<dyn error::Error
                             ),
                             _ => unreachable!(),
                         };
-                        println_name_value_or(&format!("{field_name}:"), &value, setting_type);
+                        println_name_value_or(&format!("{}:", field_name), &value, setting_type);
                     } else {
                         println_name_value("Config File:", config_file);
                         println_name_value_or("RPC URL:", &json_rpc_url, url_setting_type);
@@ -124,12 +123,12 @@ fn parse_settings(matches: &ArgMatches<'_>) -> Result<bool, Box<dyn error::Error
                     let filename = value_t_or_exit!(subcommand_matches, "filename", PathBuf);
                     config.import_address_labels(&filename)?;
                     config.save(config_file)?;
-                    println!("Address labels imported from {filename:?}");
+                    println!("Address labels imported from {:?}", filename);
                 }
                 ("export-address-labels", Some(subcommand_matches)) => {
                     let filename = value_t_or_exit!(subcommand_matches, "filename", PathBuf);
                     config.export_address_labels(&filename)?;
-                    println!("Address labels exported to {filename:?}");
+                    println!("Address labels exported to {:?}", filename);
                 }
                 _ => unreachable!(),
             }
@@ -142,7 +141,7 @@ fn parse_settings(matches: &ArgMatches<'_>) -> Result<bool, Box<dyn error::Error
 
 pub fn parse_args<'a>(
     matches: &ArgMatches<'_>,
-    wallet_manager: &mut Option<Rc<RemoteWalletManager>>,
+    wallet_manager: &mut Option<Arc<RemoteWalletManager>>,
 ) -> Result<(CliConfig<'a>, CliSigners), Box<dyn error::Error>> {
     let config = if let Some(config_file) = matches.value_of("config_file") {
         Config::load(config_file).unwrap_or_default()
@@ -203,14 +202,6 @@ pub fn parse_args<'a>(
         config.address_labels
     };
 
-    let use_quic = if matches.is_present("use_quic") {
-        true
-    } else if matches.is_present("use_udp") {
-        false
-    } else {
-        !DEFAULT_TPU_ENABLE_UDP
-    };
-
     Ok((
         CliConfig {
             command,
@@ -229,7 +220,6 @@ pub fn parse_args<'a>(
             },
             confirm_transaction_initial_timeout,
             address_labels,
-            use_quic,
         },
         signers,
     ))
@@ -254,7 +244,7 @@ fn do_main(matches: &ArgMatches<'_>) -> Result<(), Box<dyn error::Error>> {
         let (mut config, signers) = parse_args(matches, &mut wallet_manager)?;
         config.signers = signers.iter().map(|s| s.as_ref()).collect();
         let result = process_command(&config)?;
-        println!("{result}");
+        println!("{}", result);
     };
     Ok(())
 }

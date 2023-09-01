@@ -6,9 +6,11 @@ use {
         spend_utils::SpendAmount,
     },
     solana_cli_output::{parse_sign_only_reply_string, OutputFormat},
+    solana_client::{
+        blockhash_query::{self, BlockhashQuery},
+        rpc_client::RpcClient,
+    },
     solana_faucet::faucet::run_local_faucet,
-    solana_rpc_client::rpc_client::RpcClient,
-    solana_rpc_client_nonce_utils::blockhash_query::{self, BlockhashQuery},
     solana_sdk::{
         account_utils::StateMut,
         commitment_config::CommitmentConfig,
@@ -56,7 +58,6 @@ fn test_vote_authorize_and_withdraw() {
         nonce_authority: 0,
         memo: None,
         fee_payer: 0,
-        compute_unit_price: None,
     };
     process_command(&config).unwrap();
     let vote_account = rpc_client
@@ -88,7 +89,6 @@ fn test_vote_authorize_and_withdraw() {
         fee_payer: 0,
         derived_address_seed: None,
         derived_address_program_id: None,
-        compute_unit_price: None,
     };
     process_command(&config).unwrap();
     let expected_balance = expected_balance + 10_000;
@@ -110,7 +110,6 @@ fn test_vote_authorize_and_withdraw() {
         fee_payer: 0,
         authorized: 0,
         new_authorized: None,
-        compute_unit_price: None,
     };
     process_command(&config).unwrap();
     let vote_account = rpc_client
@@ -136,7 +135,6 @@ fn test_vote_authorize_and_withdraw() {
         fee_payer: 0,
         authorized: 1,
         new_authorized: Some(1),
-        compute_unit_price: None,
     };
     process_command(&config).unwrap_err(); // unsigned by new authority should fail
     config.signers = vec![
@@ -157,7 +155,6 @@ fn test_vote_authorize_and_withdraw() {
         fee_payer: 0,
         authorized: 1,
         new_authorized: Some(2),
-        compute_unit_price: None,
     };
     process_command(&config).unwrap();
     let vote_account = rpc_client
@@ -182,7 +179,6 @@ fn test_vote_authorize_and_withdraw() {
         nonce_authority: 0,
         memo: None,
         fee_payer: 0,
-        compute_unit_price: None,
     };
     process_command(&config).unwrap();
     let expected_balance = expected_balance - 1_000;
@@ -203,7 +199,6 @@ fn test_vote_authorize_and_withdraw() {
         nonce_authority: 0,
         memo: None,
         fee_payer: 0,
-        compute_unit_price: None,
     };
     process_command(&config).unwrap();
 
@@ -216,7 +211,6 @@ fn test_vote_authorize_and_withdraw() {
         destination_account_pubkey: destination_account,
         memo: None,
         fee_payer: 0,
-        compute_unit_price: None,
     };
     process_command(&config).unwrap();
     check_balance!(0, &rpc_client, &vote_account_pubkey);
@@ -283,7 +277,6 @@ fn test_offline_vote_authorize_and_withdraw() {
         nonce_authority: 0,
         memo: None,
         fee_payer: 0,
-        compute_unit_price: None,
     };
     process_command(&config_payer).unwrap();
     let vote_account = rpc_client
@@ -315,7 +308,6 @@ fn test_offline_vote_authorize_and_withdraw() {
         fee_payer: 0,
         derived_address_seed: None,
         derived_address_program_id: None,
-        compute_unit_price: None,
     };
     process_command(&config_payer).unwrap();
     let expected_balance = expected_balance + 10_000;
@@ -337,7 +329,6 @@ fn test_offline_vote_authorize_and_withdraw() {
         fee_payer: 0,
         authorized: 0,
         new_authorized: None,
-        compute_unit_price: None,
     };
     config_offline.output_format = OutputFormat::JsonCompact;
     let sig_response = process_command(&config_offline).unwrap();
@@ -360,7 +351,6 @@ fn test_offline_vote_authorize_and_withdraw() {
         fee_payer: 0,
         authorized: 0,
         new_authorized: None,
-        compute_unit_price: None,
     };
     process_command(&config_payer).unwrap();
     let vote_account = rpc_client
@@ -387,7 +377,6 @@ fn test_offline_vote_authorize_and_withdraw() {
         nonce_authority: 0,
         memo: None,
         fee_payer: 0,
-        compute_unit_price: None,
     };
     config_offline.output_format = OutputFormat::JsonCompact;
     let sig_response = process_command(&config_offline).unwrap();
@@ -408,7 +397,6 @@ fn test_offline_vote_authorize_and_withdraw() {
         nonce_authority: 0,
         memo: None,
         fee_payer: 0,
-        compute_unit_price: None,
     };
     process_command(&config_payer).unwrap();
     let expected_balance = expected_balance - 1_000;
@@ -435,7 +423,6 @@ fn test_offline_vote_authorize_and_withdraw() {
         nonce_authority: 0,
         memo: None,
         fee_payer: 0,
-        compute_unit_price: None,
     };
     process_command(&config_offline).unwrap();
     config_offline.output_format = OutputFormat::JsonCompact;
@@ -456,7 +443,6 @@ fn test_offline_vote_authorize_and_withdraw() {
         nonce_authority: 0,
         memo: None,
         fee_payer: 0,
-        compute_unit_price: None,
     };
     process_command(&config_payer).unwrap();
 
@@ -476,7 +462,6 @@ fn test_offline_vote_authorize_and_withdraw() {
         nonce_authority: 0,
         memo: None,
         fee_payer: 0,
-        compute_unit_price: None,
     };
     process_command(&config_offline).unwrap();
     config_offline.output_format = OutputFormat::JsonCompact;
@@ -498,7 +483,6 @@ fn test_offline_vote_authorize_and_withdraw() {
         nonce_authority: 0,
         memo: None,
         fee_payer: 0,
-        compute_unit_price: None,
     };
     process_command(&config_payer).unwrap();
     check_balance!(0, &rpc_client, &vote_account_pubkey);

@@ -1,9 +1,6 @@
 use {
-    solana_rpc_client::rpc_client::RpcClient,
-    solana_sdk::{
-        clock::{Epoch, DEFAULT_MS_PER_SLOT},
-        commitment_config::CommitmentConfig,
-    },
+    solana_client::rpc_client::RpcClient,
+    solana_sdk::{clock::DEFAULT_MS_PER_SLOT, commitment_config::CommitmentConfig},
     std::{thread::sleep, time::Duration},
 };
 
@@ -36,26 +33,5 @@ pub fn check_ready(rpc_client: &RpcClient) {
         < 5
     {
         sleep(Duration::from_millis(DEFAULT_MS_PER_SLOT));
-    }
-}
-
-pub fn wait_for_next_epoch_plus_n_slots(rpc_client: &RpcClient, n: u64) -> (Epoch, u64) {
-    let current_epoch = rpc_client.get_epoch_info().unwrap().epoch;
-    let next_epoch = current_epoch + 1;
-    println!("waiting for epoch {next_epoch} plus {n} slots");
-    loop {
-        sleep(Duration::from_millis(DEFAULT_MS_PER_SLOT));
-
-        let next_epoch = rpc_client.get_epoch_info().unwrap().epoch;
-        if next_epoch > current_epoch {
-            let slot = rpc_client.get_slot().unwrap();
-            loop {
-                sleep(Duration::from_millis(DEFAULT_MS_PER_SLOT));
-                let new_slot = rpc_client.get_slot().unwrap();
-                if new_slot - slot > n {
-                    return (next_epoch, new_slot);
-                }
-            }
-        }
     }
 }

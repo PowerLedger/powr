@@ -23,9 +23,11 @@ use {
 
 /// Reasons the runtime might have rejected an instruction.
 ///
-/// Members of this enum must not be removed, but new ones can be added.
-/// Also, it is crucial that meta-information if any that comes along with
-/// an error be consistent across software versions.  For example, it is
+/// Instructions errors are included in the bank hashes and therefore are
+/// included as part of the transaction results when determining consensus.
+/// Because of this, members of this enum must not be removed, but new ones can
+/// be added.  Also, it is crucial that meta-information if any that comes along
+/// with an error be consistent across software versions.  For example, it is
 /// dangerous to include error strings from 3rd party crates because they could
 /// change at any time and changes to them are difficult to detect.
 #[derive(
@@ -247,21 +249,13 @@ pub enum InstructionError {
     #[error("Provided owner is not allowed")]
     IllegalOwner,
 
-    /// Accounts data allocations exceeded the maximum allowed per transaction
-    #[error("Accounts data allocations exceeded the maximum allowed per transaction")]
-    MaxAccountsDataAllocationsExceeded,
+    /// Account data allocation exceeded the maximum accounts data size limit
+    #[error("Account data allocation exceeded the maximum accounts data size limit")]
+    MaxAccountsDataSizeExceeded,
 
-    /// Max accounts exceeded
-    #[error("Max accounts exceeded")]
-    MaxAccountsExceeded,
-
-    /// Max instruction trace length exceeded
-    #[error("Max instruction trace length exceeded")]
-    MaxInstructionTraceLengthExceeded,
-
-    /// Builtin programs must consume compute units
-    #[error("Builtin programs must consume compute units")]
-    BuiltinProgramsMustConsumeComputeUnits,
+    /// Active vote account close
+    #[error("Cannot close vote account unless it stopped voting at least one full epoch ago")]
+    ActiveVoteAccountClose,
     // Note: For any new error added here an equivalent ProgramError and its
     // conversions must also be added
 }
@@ -326,7 +320,7 @@ pub enum InstructionError {
 /// should be specified as signers during `Instruction` construction. The
 /// program must still validate during execution that the account is a signer.
 #[wasm_bindgen]
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct Instruction {
     /// Pubkey of the program that executes this instruction.
     #[wasm_bindgen(skip)]
@@ -535,7 +529,7 @@ pub fn checked_add(a: u64, b: u64) -> Result<u64, InstructionError> {
 /// a minor hazard: use [`AccountMeta::new_readonly`] to specify that an account
 /// is not writable.
 #[repr(C)]
-#[derive(Debug, Default, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Clone, Serialize, Deserialize)]
 pub struct AccountMeta {
     /// An account's public key.
     pub pubkey: Pubkey,
@@ -667,12 +661,12 @@ impl CompiledInstruction {
 /// Use to query and convey information about the sibling instruction components
 /// when calling the `sol_get_processed_sibling_instruction` syscall.
 #[repr(C)]
-#[derive(Default, Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct ProcessedSiblingInstruction {
     /// Length of the instruction data
-    pub data_len: u64,
+    pub data_len: usize,
     /// Number of AccountMeta structures
-    pub accounts_len: u64,
+    pub accounts_len: usize,
 }
 
 /// Returns a sibling instruction from the processed sibling instruction list.
@@ -688,13 +682,23 @@ pub struct ProcessedSiblingInstruction {
 /// Then B's processed sibling instruction list is: `[A]`
 /// Then F's processed sibling instruction list is: `[E, C]`
 pub fn get_processed_sibling_instruction(index: usize) -> Option<Instruction> {
-    #[cfg(target_os = "solana")]
+    #[cfg(target_arch = "bpf")]
     {
+        extern "C" {
+            fn sol_get_processed_sibling_instruction(
+                index: u64,
+                meta: *mut ProcessedSiblingInstruction,
+                program_id: *mut Pubkey,
+                data: *mut u8,
+                accounts: *mut AccountMeta,
+            ) -> u64;
+        }
+
         let mut meta = ProcessedSiblingInstruction::default();
         let mut program_id = Pubkey::default();
 
         if 1 == unsafe {
-            crate::syscalls::sol_get_processed_sibling_instruction(
+            sol_get_processed_sibling_instruction(
                 index as u64,
                 &mut meta,
                 &mut program_id,
@@ -704,11 +708,11 @@ pub fn get_processed_sibling_instruction(index: usize) -> Option<Instruction> {
         } {
             let mut data = Vec::new();
             let mut accounts = Vec::new();
-            data.resize_with(meta.data_len as usize, u8::default);
-            accounts.resize_with(meta.accounts_len as usize, AccountMeta::default);
+            data.resize_with(meta.data_len, u8::default);
+            accounts.resize_with(meta.accounts_len, AccountMeta::default);
 
             let _ = unsafe {
-                crate::syscalls::sol_get_processed_sibling_instruction(
+                sol_get_processed_sibling_instruction(
                     index as u64,
                     &mut meta,
                     &mut program_id,
@@ -723,7 +727,7 @@ pub fn get_processed_sibling_instruction(index: usize) -> Option<Instruction> {
         }
     }
 
-    #[cfg(not(target_os = "solana"))]
+    #[cfg(not(target_arch = "bpf"))]
     crate::program_stubs::sol_get_processed_sibling_instruction(index)
 }
 
@@ -734,12 +738,16 @@ pub const TRANSACTION_LEVEL_STACK_HEIGHT: usize = 1;
 /// TRANSACTION_LEVEL_STACK_HEIGHT, fist invoked inner instruction is height
 /// TRANSACTION_LEVEL_STACK_HEIGHT + 1, etc...
 pub fn get_stack_height() -> usize {
-    #[cfg(target_os = "solana")]
-    unsafe {
-        crate::syscalls::sol_get_stack_height() as usize
+    #[cfg(target_arch = "bpf")]
+    {
+        extern "C" {
+            fn sol_get_stack_height() -> u64;
+        }
+
+        unsafe { sol_get_stack_height() as usize }
     }
 
-    #[cfg(not(target_os = "solana"))]
+    #[cfg(not(target_arch = "bpf"))]
     {
         crate::program_stubs::sol_get_stack_height() as usize
     }
@@ -747,7 +755,7 @@ pub fn get_stack_height() -> usize {
 
 #[test]
 fn test_account_meta_layout() {
-    #[derive(Debug, Default, PartialEq, Eq, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Default, PartialEq, Clone, Serialize, Deserialize)]
     struct AccountMetaRust {
         pub pubkey: Pubkey,
         pub is_signer: bool,

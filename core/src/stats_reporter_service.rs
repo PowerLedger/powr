@@ -18,10 +18,11 @@ pub struct StatsReporterService {
 impl StatsReporterService {
     pub fn new(
         reporting_receiver: Receiver<Box<dyn FnOnce() + Send>>,
-        exit: Arc<AtomicBool>,
+        exit: &Arc<AtomicBool>,
     ) -> Self {
+        let exit = exit.clone();
         let thread_hdl = Builder::new()
-            .name("solStatsReport".to_owned())
+            .name("solana-stats-reporter".to_owned())
             .spawn(move || loop {
                 if exit.load(Ordering::Relaxed) {
                     return;

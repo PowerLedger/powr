@@ -1,0 +1,19 @@
+name: Size and Send
+
+on:
+  pull_request:
+    types: [ opened, ready_for_review ]
+
+jobs:
+  size-and-send:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v2
+      - uses: PowerLedger/powerledger-tools-documentation/github-actions/size-and-send@main
+        with:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+          TELEGRAM_BOT_TOKEN: ${{secrets.TELEGRAM_BOT_TOKEN}}
+          TELEGRAM_BOT_CHAT_ID: ${{ vars.TELEGRAM_NOTIFICATION_CHANNEL }}
+          TELEGRAM_BOT_MESSAGE_THREAD_ID: ${{ vars.TELEGRAM_NOTIFICATION_TOPIC }}

@@ -276,8 +276,8 @@ mod tests {
 
         let lamports = genesis_config
             .accounts
-            .values()
-            .map(|account| account.lamports)
+            .iter()
+            .map(|(_, account)| account.lamports)
             .sum::<u64>();
 
         assert_eq!(500_000_000 * LAMPORTS_PER_SOL, lamports);

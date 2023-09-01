@@ -1,12 +1,10 @@
 //! The `sendmmsg` module provides sendmmsg() API implementation
 
 #[cfg(target_os = "linux")]
-#[allow(deprecated)]
-use nix::sys::socket::InetAddr;
-#[cfg(target_os = "linux")]
 use {
     itertools::izip,
     libc::{iovec, mmsghdr, sockaddr_in, sockaddr_in6, sockaddr_storage},
+    nix::sys::socket::InetAddr,
     std::os::unix::io::AsRawFd,
 };
 use {
@@ -29,7 +27,7 @@ pub enum SendPktsError {
 
 impl From<SendPktsError> for TransportError {
     fn from(err: SendPktsError) -> Self {
-        Self::Custom(format!("{err:?}"))
+        Self::Custom(format!("{:?}", err))
     }
 }
 
@@ -76,7 +74,6 @@ fn mmsghdr_for_packet(
     hdr.msg_hdr.msg_iovlen = 1;
     hdr.msg_hdr.msg_name = addr as *mut _ as *mut _;
 
-    #[allow(deprecated)]
     match InetAddr::from_std(dest) {
         InetAddr::V4(dest) => {
             unsafe {
@@ -134,8 +131,7 @@ where
 {
     let size = packets.len();
     #[allow(clippy::uninit_assumed_init)]
-    let iovec = std::mem::MaybeUninit::<iovec>::uninit();
-    let mut iovs = vec![unsafe { iovec.assume_init() }; size];
+    let mut iovs = vec![unsafe { std::mem::MaybeUninit::uninit().assume_init() }; size];
     let mut addrs = vec![unsafe { std::mem::zeroed() }; size];
     let mut hdrs = vec![unsafe { std::mem::zeroed() }; size];
     for ((pkt, dest), hdr, iov, addr) in izip!(packets, &mut hdrs, &mut iovs, &mut addrs) {
@@ -166,7 +162,6 @@ mod tests {
             recvmmsg::recv_mmsg,
             sendmmsg::{batch_send, multi_target_send, SendPktsError},
         },
-        assert_matches::assert_matches,
         solana_sdk::packet::PACKET_DATA_SIZE,
         std::{
             io::ErrorKind,
@@ -310,7 +305,7 @@ mod tests {
         if let Err(SendPktsError::IoError(ioerror, num_failed)) =
             batch_send(&sender, &packet_refs[..])
         {
-            assert_matches!(ioerror.kind(), ErrorKind::PermissionDenied);
+            assert!(matches!(ioerror.kind(), ErrorKind::PermissionDenied));
             assert_eq!(num_failed, 2);
         }
 
@@ -325,7 +320,7 @@ mod tests {
         if let Err(SendPktsError::IoError(ioerror, num_failed)) =
             batch_send(&sender, &packet_refs[..])
         {
-            assert_matches!(ioerror.kind(), ErrorKind::PermissionDenied);
+            assert!(matches!(ioerror.kind(), ErrorKind::PermissionDenied));
             assert_eq!(num_failed, 3);
         }
 
@@ -340,7 +335,7 @@ mod tests {
         if let Err(SendPktsError::IoError(ioerror, num_failed)) =
             batch_send(&sender, &packet_refs[..])
         {
-            assert_matches!(ioerror.kind(), ErrorKind::PermissionDenied);
+            assert!(matches!(ioerror.kind(), ErrorKind::PermissionDenied));
             assert_eq!(num_failed, 2);
         }
 
@@ -355,7 +350,7 @@ mod tests {
         if let Err(SendPktsError::IoError(ioerror, num_failed)) =
             multi_target_send(&sender, &packets[0], &dest_refs)
         {
-            assert_matches!(ioerror.kind(), ErrorKind::PermissionDenied);
+            assert!(matches!(ioerror.kind(), ErrorKind::PermissionDenied));
             assert_eq!(num_failed, 2);
         }
 
@@ -370,7 +365,7 @@ mod tests {
         if let Err(SendPktsError::IoError(ioerror, num_failed)) =
             multi_target_send(&sender, &packets[0], &dest_refs)
         {
-            assert_matches!(ioerror.kind(), ErrorKind::PermissionDenied);
+            assert!(matches!(ioerror.kind(), ErrorKind::PermissionDenied));
             assert_eq!(num_failed, 3);
         }
     }

@@ -215,9 +215,9 @@ atomic_example_impls! { AtomicI64 }
 atomic_example_impls! { AtomicIsize }
 atomic_example_impls! { AtomicBool }
 
-#[cfg(not(target_os = "solana"))]
+#[cfg(not(target_arch = "bpf"))]
 use generic_array::{ArrayLength, GenericArray};
-#[cfg(not(target_os = "solana"))]
+#[cfg(not(target_arch = "bpf"))]
 impl<T: Default, U: ArrayLength<T>> AbiExample for GenericArray<T, U> {
     fn example() -> Self {
         Self::default()
@@ -266,9 +266,15 @@ impl<T: Default + Serialize> TypeErasedExample<T> for Placeholder {
         let normalized_type_name = normalize_type_name(original_type_name);
 
         if normalized_type_name.starts_with("solana") {
-            panic!("derive or implement AbiExample/AbiEnumVisitor for {original_type_name}");
+            panic!(
+                "derive or implement AbiExample/AbiEnumVisitor for {}",
+                original_type_name
+            );
         } else {
-            panic!("new unrecognized type for ABI digest!: {original_type_name}")
+            panic!(
+                "new unrecognized type for ABI digest!: {}",
+                original_type_name
+            )
         }
     }
 }
@@ -318,7 +324,7 @@ impl<T: AbiExample> AbiExample for Box<[T]> {
 impl<T: AbiExample> AbiExample for std::marker::PhantomData<T> {
     fn example() -> Self {
         info!("AbiExample for (PhantomData<T>): {}", type_name::<Self>());
-        std::marker::PhantomData::<T>
+        <std::marker::PhantomData<T>>::default()
     }
 }
 
@@ -366,7 +372,7 @@ impl<
     }
 }
 
-#[cfg(not(target_os = "solana"))]
+#[cfg(not(target_arch = "bpf"))]
 impl<
         T: Clone + std::cmp::Eq + std::hash::Hash + AbiExample,
         S: Clone + AbiExample,
@@ -405,7 +411,7 @@ lazy_static! {
 impl AbiExample for &Vec<u8> {
     fn example() -> Self {
         info!("AbiExample for (&Vec<u8>): {}", type_name::<Self>());
-        &VEC_U8
+        &*VEC_U8
     }
 }
 
@@ -443,14 +449,14 @@ impl<T: std::cmp::Ord + AbiExample> AbiExample for BTreeSet<T> {
     }
 }
 
-#[cfg(not(target_os = "solana"))]
+#[cfg(not(target_arch = "bpf"))]
 impl AbiExample for memmap2::MmapMut {
     fn example() -> Self {
         memmap2::MmapMut::map_anon(1).expect("failed to map the data file")
     }
 }
 
-#[cfg(not(target_os = "solana"))]
+#[cfg(not(target_arch = "bpf"))]
 impl AbiExample for std::path::PathBuf {
     fn example() -> Self {
         std::path::PathBuf::from(String::example())
@@ -460,13 +466,7 @@ impl AbiExample for std::path::PathBuf {
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 impl AbiExample for SocketAddr {
     fn example() -> Self {
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
-    }
-}
-
-impl AbiExample for IpAddr {
-    fn example() -> Self {
-        IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)
     }
 }
 
@@ -553,11 +553,5 @@ impl<O: AbiEnumVisitor, E: AbiEnumVisitor> AbiEnumVisitor for Result<O, E> {
         variant.serialize(digester.create_enum_child()?)?;
 
         digester.create_child()
-    }
-}
-
-impl<T: AbiExample> AbiExample for once_cell::sync::OnceCell<T> {
-    fn example() -> Self {
-        Self::with_value(T::example())
     }
 }

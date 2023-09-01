@@ -144,27 +144,11 @@ pub enum TransactionError {
     #[error("Transaction contains a duplicate instruction ({0}) that is not allowed")]
     DuplicateInstruction(u8),
 
-    /// Transaction results in an account with insufficient funds for rent
+    /// Transaction results in an account without insufficient funds for rent
     #[error(
-        "Transaction results in an account ({account_index}) with insufficient funds for rent"
+        "Transaction results in an account ({account_index}) without insufficient funds for rent"
     )]
     InsufficientFundsForRent { account_index: u8 },
-
-    /// Transaction exceeded max loaded accounts data size cap
-    #[error("Transaction exceeded max loaded accounts data size cap")]
-    MaxLoadedAccountsDataSizeExceeded,
-
-    /// LoadedAccountsDataSizeLimit set for transaction must be greater than 0.
-    #[error("LoadedAccountsDataSizeLimit set for transaction must be greater than 0.")]
-    InvalidLoadedAccountsDataSizeLimit,
-
-    /// Sanitized transaction differed before/after feature activiation. Needs to be resanitized.
-    #[error("ResanitizationNeeded")]
-    ResanitizationNeeded,
-
-    /// Program execution is temporarily restricted on an account.
-    #[error("Execution of the program referenced by account at index {account_index} is temporarily restricted.")]
-    ProgramExecutionTemporarilyRestricted { account_index: u8 },
 }
 
 impl From<SanitizeError> for TransactionError {

@@ -7,7 +7,7 @@
 //!
 //! [`legacy`]: crate::message::legacy
 //! [`v0`]: crate::message::v0
-//! [future message format]: https://docs.solana.com/proposals/versioned-transactions
+//! [future message format]: https://docs.solana.com/proposals/transactions-v2
 
 #![allow(clippy::integer_arithmetic)]
 
@@ -16,7 +16,7 @@ use {
         bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable,
         hash::Hash,
         instruction::{CompiledInstruction, Instruction},
-        message::{compiled_keys::CompiledKeys, MessageHeader},
+        message::{CompiledKeys, MessageHeader},
         pubkey::Pubkey,
         sanitize::{Sanitize, SanitizeError},
         short_vec, system_instruction, system_program, sysvar, wasm_bindgen,
@@ -42,27 +42,6 @@ lazy_static! {
             bpf_loader_upgradeable::id(),
         ]
     };
-}
-
-lazy_static! {
-    // Each element of a key is a u8. We use key[0] as an index into this table of 256 boolean
-    // elements, to store whether or not the first element of any key is present in the static
-    // lists of built-in-program keys or system ids. By using this lookup table, we can very
-    // quickly determine that a key under consideration cannot be in either of these lists (if
-    // the value is "false"), or might be in one of these lists (if the value is "true")
-    pub static ref MAYBE_BUILTIN_KEY_OR_SYSVAR: [bool; 256] = {
-        let mut temp_table: [bool; 256] = [false; 256];
-        BUILTIN_PROGRAMS_KEYS.iter().for_each(|key| temp_table[key.0[0] as usize] = true);
-        sysvar::ALL_IDS.iter().for_each(|key| temp_table[key.0[0] as usize] = true);
-        temp_table
-    };
-}
-
-pub fn is_builtin_key_or_sysvar(key: &Pubkey) -> bool {
-    if MAYBE_BUILTIN_KEY_OR_SYSVAR[key.0[0] as usize] {
-        return sysvar::is_sysvar_id(key) || BUILTIN_PROGRAMS_KEYS.contains(key);
-    }
-    false
 }
 
 fn position(keys: &[Pubkey], key: &Pubkey) -> u8 {
@@ -169,23 +148,23 @@ impl Message {
     ///
     /// # Examples
     ///
-    /// This example uses the [`solana_sdk`], [`solana_rpc_client`] and [`anyhow`] crates.
+    /// This example uses the [`solana_sdk`], [`solana_client`] and [`anyhow`] crates.
     ///
     /// [`solana_sdk`]: https://docs.rs/solana-sdk
-    /// [`solana_rpc_client`]: https://docs.rs/solana-rpc-client
+    /// [`solana_client`]: https://docs.rs/solana-client
     /// [`anyhow`]: https://docs.rs/anyhow
     ///
     /// ```
     /// # use solana_program::example_mocks::solana_sdk;
-    /// # use solana_program::example_mocks::solana_rpc_client;
+    /// # use solana_program::example_mocks::solana_client;
     /// use anyhow::Result;
     /// use borsh::{BorshSerialize, BorshDeserialize};
-    /// use solana_rpc_client::rpc_client::RpcClient;
+    /// use solana_client::rpc_client::RpcClient;
     /// use solana_sdk::{
     ///     instruction::Instruction,
     ///     message::Message,
     ///     pubkey::Pubkey,
-    ///     signature::{Keypair, Signer},
+    ///     signature::Keypair,
     ///     transaction::Transaction,
     /// };
     ///
@@ -240,23 +219,23 @@ impl Message {
     ///
     /// # Examples
     ///
-    /// This example uses the [`solana_sdk`], [`solana_rpc_client`] and [`anyhow`] crates.
+    /// This example uses the [`solana_sdk`], [`solana_client`] and [`anyhow`] crates.
     ///
     /// [`solana_sdk`]: https://docs.rs/solana-sdk
-    /// [`solana_rpc_client`]: https://docs.rs/solana-rpc-client
+    /// [`solana_client`]: https://docs.rs/solana-client
     /// [`anyhow`]: https://docs.rs/anyhow
     ///
     /// ```
     /// # use solana_program::example_mocks::solana_sdk;
-    /// # use solana_program::example_mocks::solana_rpc_client;
+    /// # use solana_program::example_mocks::solana_client;
     /// use anyhow::Result;
     /// use borsh::{BorshSerialize, BorshDeserialize};
-    /// use solana_rpc_client::rpc_client::RpcClient;
+    /// use solana_client::rpc_client::RpcClient;
     /// use solana_sdk::{
     ///     instruction::Instruction,
     ///     message::Message,
     ///     pubkey::Pubkey,
-    ///     signature::{Keypair, Signer},
+    ///     signature::Keypair,
     ///     transaction::Transaction,
     /// };
     ///
@@ -336,25 +315,25 @@ impl Message {
     ///
     /// # Examples
     ///
-    /// This example uses the [`solana_sdk`], [`solana_rpc_client`] and [`anyhow`] crates.
+    /// This example uses the [`solana_sdk`], [`solana_client`] and [`anyhow`] crates.
     ///
     /// [`solana_sdk`]: https://docs.rs/solana-sdk
-    /// [`solana_rpc_client`]: https://docs.rs/solana-client
+    /// [`solana_client`]: https://docs.rs/solana-client
     /// [`anyhow`]: https://docs.rs/anyhow
     ///
     /// ```
     /// # use solana_program::example_mocks::solana_sdk;
-    /// # use solana_program::example_mocks::solana_rpc_client;
+    /// # use solana_program::example_mocks::solana_client;
     /// use anyhow::Result;
     /// use borsh::{BorshSerialize, BorshDeserialize};
-    /// use solana_rpc_client::rpc_client::RpcClient;
+    /// use solana_client::rpc_client::RpcClient;
     /// use solana_sdk::{
     ///     hash::Hash,
     ///     instruction::Instruction,
     ///     message::Message,
     ///     nonce,
     ///     pubkey::Pubkey,
-    ///     signature::{Keypair, Signer},
+    ///     signature::Keypair,
     ///     system_instruction,
     ///     transaction::Transaction,
     /// };
@@ -465,14 +444,14 @@ impl Message {
     }
 
     /// Compute the blake3 hash of this transaction's message.
-    #[cfg(not(target_os = "solana"))]
+    #[cfg(not(target_arch = "bpf"))]
     pub fn hash(&self) -> Hash {
         let message_bytes = self.serialize();
         Self::hash_raw_message(&message_bytes)
     }
 
     /// Compute the blake3 hash of a raw transaction message.
-    #[cfg(not(target_os = "solana"))]
+    #[cfg(not(target_arch = "bpf"))]
     pub fn hash_raw_message(message_bytes: &[u8]) -> Hash {
         use blake3::traits::digest::Digest;
         let mut hasher = blake3::Hasher::new();
@@ -541,18 +520,19 @@ impl Message {
         self.program_position(i).is_some()
     }
 
-    pub fn demote_program_id(&self, i: usize) -> bool {
-        self.is_key_called_as_program(i) && !self.is_upgradeable_loader_present()
-    }
-
     pub fn is_writable(&self, i: usize) -> bool {
+        let demote_program_id =
+            self.is_key_called_as_program(i) && !self.is_upgradeable_loader_present();
         (i < (self.header.num_required_signatures - self.header.num_readonly_signed_accounts)
             as usize
             || (i >= self.header.num_required_signatures as usize
                 && i < self.account_keys.len()
                     - self.header.num_readonly_unsigned_accounts as usize))
-            && !is_builtin_key_or_sysvar(&self.account_keys[i])
-            && !self.demote_program_id(i)
+            && !{
+                let key = self.account_keys[i];
+                sysvar::is_sysvar_id(&key) || BUILTIN_PROGRAMS_KEYS.contains(&key)
+            }
+            && !demote_program_id
     }
 
     pub fn is_signer(&self, i: usize) -> bool {
@@ -627,7 +607,7 @@ mod tests {
         let keys: HashSet<Pubkey> = BUILTIN_PROGRAMS_KEYS.iter().copied().collect();
         assert_eq!(keys.len(), 10);
         for k in keys {
-            let k = format!("{k}");
+            let k = format!("{}", k);
             assert!(k.ends_with("11111111111111111111111"));
         }
     }

@@ -4,8 +4,6 @@ pub mod config_processor;
 pub mod date_instruction;
 
 pub use solana_sdk::config::program::id;
-#[allow(deprecated)]
-use solana_sdk::stake::config::Config as StakeConfig;
 use {
     bincode::{deserialize, serialize, serialized_size},
     serde_derive::{Deserialize, Serialize},
@@ -13,6 +11,7 @@ use {
         account::{Account, AccountSharedData},
         pubkey::Pubkey,
         short_vec,
+        stake::config::Config as StakeConfig,
     },
 };
 
@@ -22,7 +21,6 @@ pub trait ConfigState: serde::Serialize + Default {
 }
 
 // TODO move ConfigState into `solana_program` to implement trait locally
-#[allow(deprecated)]
 impl ConfigState for StakeConfig {
     fn max_space() -> u64 {
         serialized_size(&StakeConfig::default()).unwrap()

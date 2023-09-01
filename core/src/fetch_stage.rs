@@ -1,24 +1,27 @@
 //! The `fetch_stage` batches input from a UDP socket and sends it to a channel.
 
 use {
-    crate::result::{Error, Result},
+    crate::{
+        banking_stage::HOLD_TRANSACTIONS_SLOT_OFFSET,
+        result::{Error, Result},
+    },
     crossbeam_channel::{unbounded, RecvTimeoutError},
+    solana_client::connection_cache::DEFAULT_TPU_ENABLE_UDP,
     solana_metrics::{inc_new_counter_debug, inc_new_counter_info},
     solana_perf::{packet::PacketBatchRecycler, recycler::Recycler},
     solana_poh::poh_recorder::PohRecorder,
     solana_sdk::{
-        clock::{DEFAULT_TICKS_PER_SLOT, HOLD_TRANSACTIONS_SLOT_OFFSET},
+        clock::DEFAULT_TICKS_PER_SLOT,
         packet::{Packet, PacketFlags},
     },
     solana_streamer::streamer::{
         self, PacketBatchReceiver, PacketBatchSender, StreamerReceiveStats,
     },
-    solana_tpu_client::tpu_client::DEFAULT_TPU_ENABLE_UDP,
     std::{
         net::UdpSocket,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, RwLock,
+            Arc, Mutex,
         },
         thread::{self, sleep, Builder, JoinHandle},
         time::Duration,
@@ -30,13 +33,14 @@ pub struct FetchStage {
 }
 
 impl FetchStage {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         sockets: Vec<UdpSocket>,
         tpu_forwards_sockets: Vec<UdpSocket>,
         tpu_vote_sockets: Vec<UdpSocket>,
-        exit: Arc<AtomicBool>,
-        poh_recorder: &Arc<RwLock<PohRecorder>>,
-        coalesce: Duration,
+        exit: &Arc<AtomicBool>,
+        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        coalesce_ms: u64,
     ) -> (Self, PacketBatchReceiver, PacketBatchReceiver) {
         let (sender, receiver) = unbounded();
         let (vote_sender, vote_receiver) = unbounded();
@@ -52,7 +56,7 @@ impl FetchStage {
                 &forward_sender,
                 forward_receiver,
                 poh_recorder,
-                coalesce,
+                coalesce_ms,
                 None,
                 DEFAULT_TPU_ENABLE_UDP,
             ),
@@ -66,13 +70,13 @@ impl FetchStage {
         sockets: Vec<UdpSocket>,
         tpu_forwards_sockets: Vec<UdpSocket>,
         tpu_vote_sockets: Vec<UdpSocket>,
-        exit: Arc<AtomicBool>,
+        exit: &Arc<AtomicBool>,
         sender: &PacketBatchSender,
         vote_sender: &PacketBatchSender,
         forward_sender: &PacketBatchSender,
         forward_receiver: PacketBatchReceiver,
-        poh_recorder: &Arc<RwLock<PohRecorder>>,
-        coalesce: Duration,
+        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        coalesce_ms: u64,
         in_vote_only_mode: Option<Arc<AtomicBool>>,
         tpu_enable_udp: bool,
     ) -> Self {
@@ -89,7 +93,7 @@ impl FetchStage {
             forward_sender,
             forward_receiver,
             poh_recorder,
-            coalesce,
+            coalesce_ms,
             in_vote_only_mode,
             tpu_enable_udp,
         )
@@ -98,10 +102,10 @@ impl FetchStage {
     fn handle_forwarded_packets(
         recvr: &PacketBatchReceiver,
         sendr: &PacketBatchSender,
-        poh_recorder: &Arc<RwLock<PohRecorder>>,
+        poh_recorder: &Arc<Mutex<PohRecorder>>,
     ) -> Result<()> {
         let mark_forwarded = |packet: &mut Packet| {
-            packet.meta_mut().flags |= PacketFlags::FORWARDED;
+            packet.meta.flags |= PacketFlags::FORWARDED;
         };
 
         let mut packet_batch = recvr.recv()?;
@@ -119,7 +123,7 @@ impl FetchStage {
         }
 
         if poh_recorder
-            .read()
+            .lock()
             .unwrap()
             .would_be_leader(HOLD_TRANSACTIONS_SLOT_OFFSET.saturating_mul(DEFAULT_TICKS_PER_SLOT))
         {
@@ -142,13 +146,13 @@ impl FetchStage {
         tpu_sockets: Vec<Arc<UdpSocket>>,
         tpu_forwards_sockets: Vec<Arc<UdpSocket>>,
         tpu_vote_sockets: Vec<Arc<UdpSocket>>,
-        exit: Arc<AtomicBool>,
+        exit: &Arc<AtomicBool>,
         sender: &PacketBatchSender,
         vote_sender: &PacketBatchSender,
         forward_sender: &PacketBatchSender,
         forward_receiver: PacketBatchReceiver,
-        poh_recorder: &Arc<RwLock<PohRecorder>>,
-        coalesce: Duration,
+        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        coalesce_ms: u64,
         in_vote_only_mode: Option<Arc<AtomicBool>>,
         tpu_enable_udp: bool,
     ) -> Self {
@@ -166,7 +170,7 @@ impl FetchStage {
                         sender.clone(),
                         recycler.clone(),
                         tpu_stats.clone(),
-                        coalesce,
+                        coalesce_ms,
                         true,
                         in_vote_only_mode.clone(),
                     )
@@ -187,7 +191,7 @@ impl FetchStage {
                         forward_sender.clone(),
                         recycler.clone(),
                         tpu_forward_stats.clone(),
-                        coalesce,
+                        coalesce_ms,
                         true,
                         in_vote_only_mode.clone(),
                     )
@@ -207,7 +211,7 @@ impl FetchStage {
                     vote_sender.clone(),
                     recycler.clone(),
                     tpu_vote_stats.clone(),
-                    coalesce,
+                    coalesce_ms,
                     true,
                     None,
                 )
@@ -218,7 +222,7 @@ impl FetchStage {
         let poh_recorder = poh_recorder.clone();
 
         let fwd_thread_hdl = Builder::new()
-            .name("solFetchStgFwRx".to_string())
+            .name("solana-fetch-stage-fwd-rcvr".to_string())
             .spawn(move || loop {
                 if let Err(e) =
                     Self::handle_forwarded_packets(&forward_receiver, &sender, &poh_recorder)
@@ -234,8 +238,9 @@ impl FetchStage {
             })
             .unwrap();
 
+        let exit = exit.clone();
         let metrics_thread_hdl = Builder::new()
-            .name("solFetchStgMetr".to_string())
+            .name("solana-fetch-stage-metrics".to_string())
             .spawn(move || loop {
                 sleep(Duration::from_secs(1));
 

@@ -4,7 +4,7 @@ use solana_entry::entry::{self, create_ticks, init_poh, EntrySlice, VerifyRecycl
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 use solana_entry::entry::{create_ticks, init_poh, EntrySlice, VerifyRecyclers};
 use {
-    clap::{crate_description, crate_name, Arg, Command},
+    clap::{crate_description, crate_name, value_t, App, Arg},
     solana_measure::measure::Measure,
     solana_perf::perf_libs,
     solana_sdk::hash::hash,
@@ -13,63 +13,61 @@ use {
 fn main() {
     solana_logger::setup();
 
-    let matches = Command::new(crate_name!())
+    let matches = App::new(crate_name!())
         .about(crate_description!())
         .version(solana_version::version!())
         .arg(
-            Arg::new("max_num_entries")
+            Arg::with_name("max_num_entries")
                 .long("max-num-entries")
                 .takes_value(true)
                 .value_name("SIZE")
                 .help("Number of entries."),
         )
         .arg(
-            Arg::new("start_num_entries")
+            Arg::with_name("start_num_entries")
                 .long("start-num-entries")
                 .takes_value(true)
                 .value_name("SIZE")
                 .help("Packets per chunk"),
         )
         .arg(
-            Arg::new("hashes_per_tick")
+            Arg::with_name("hashes_per_tick")
                 .long("hashes-per-tick")
                 .takes_value(true)
                 .value_name("SIZE")
                 .help("hashes per tick"),
         )
         .arg(
-            Arg::new("num_transactions_per_entry")
+            Arg::with_name("num_transactions_per_entry")
                 .long("num-transactions-per-entry")
                 .takes_value(true)
                 .value_name("NUM")
                 .help("Skip transaction sanity execution"),
         )
         .arg(
-            Arg::new("iterations")
+            Arg::with_name("iterations")
                 .long("iterations")
                 .takes_value(true)
                 .help("Number of iterations"),
         )
         .arg(
-            Arg::new("num_threads")
+            Arg::with_name("num_threads")
                 .long("num-threads")
                 .takes_value(true)
                 .help("Number of threads"),
         )
         .arg(
-            Arg::new("cuda")
+            Arg::with_name("cuda")
                 .long("cuda")
                 .takes_value(false)
                 .help("Use cuda"),
         )
         .get_matches();
 
-    let max_num_entries: u64 = matches.value_of_t("max_num_entries").unwrap_or(64);
-    let start_num_entries: u64 = matches
-        .value_of_t("start_num_entries")
-        .unwrap_or(max_num_entries);
-    let iterations: usize = matches.value_of_t("iterations").unwrap_or(10);
-    let hashes_per_tick: u64 = matches.value_of_t("hashes_per_tick").unwrap_or(10_000);
+    let max_num_entries = value_t!(matches, "max_num_entries", u64).unwrap_or(64);
+    let start_num_entries = value_t!(matches, "start_num_entries", u64).unwrap_or(max_num_entries);
+    let iterations = value_t!(matches, "iterations", usize).unwrap_or(10);
+    let hashes_per_tick = value_t!(matches, "hashes_per_tick", u64).unwrap_or(10_000);
     let start_hash = hash(&[1, 2, 3, 4]);
     let ticks = create_ticks(max_num_entries, hashes_per_tick, start_hash);
     let mut num_entries = start_num_entries as usize;

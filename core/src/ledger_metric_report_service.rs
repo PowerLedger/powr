@@ -13,9 +13,7 @@ use {
     },
 };
 
-// Determines how often we report blockstore metrics under
-// LedgerMetricReportService.  Note that there're other blockstore
-// metrics that are reported outside LedgerMetricReportService.
+// Determines how often we report blockstore metrics.
 const BLOCKSTORE_METRICS_REPORT_PERIOD_MILLIS: u64 = 10000;
 
 pub struct LedgerMetricReportService {
@@ -23,11 +21,12 @@ pub struct LedgerMetricReportService {
 }
 
 impl LedgerMetricReportService {
-    pub fn new(blockstore: Arc<Blockstore>, exit: Arc<AtomicBool>) -> Self {
+    pub fn new(blockstore: Arc<Blockstore>, exit: &Arc<AtomicBool>) -> Self {
+        let exit_signal = exit.clone();
         let t_cf_metric = Builder::new()
-            .name("solRocksCfMtrcs".to_string())
+            .name("metric_report_rocksdb_cf_metrics".to_string())
             .spawn(move || loop {
-                if exit.load(Ordering::Relaxed) {
+                if exit_signal.load(Ordering::Relaxed) {
                     break;
                 }
                 thread::sleep(Duration::from_millis(

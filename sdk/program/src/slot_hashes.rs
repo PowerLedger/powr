@@ -1,39 +1,33 @@
-//! A type to hold data for the [`SlotHashes` sysvar][sv].
+//! named accounts for synthesized data accounts for bank state, etc.
 //!
-//! [sv]: https://docs.solana.com/developing/runtime-facilities/sysvars#slothashes
+//! this account carries the Bank's most recent bank hashes for some N parents
 //!
-//! The sysvar ID is declared in [`sysvar::slot_hashes`].
-//!
-//! [`sysvar::slot_hashes`]: crate::sysvar::slot_hashes
-
 pub use crate::clock::Slot;
 use {
     crate::hash::Hash,
-    std::{
-        iter::FromIterator,
-        ops::Deref,
-        sync::atomic::{AtomicUsize, Ordering},
-    },
+    std::{iter::FromIterator, ops::Deref},
 };
 
 pub const MAX_ENTRIES: usize = 512; // about 2.5 minutes to get your vote in
 
 // This is to allow tests with custom slot hash expiry to avoid having to generate
 // 512 blocks for such tests.
-static NUM_ENTRIES: AtomicUsize = AtomicUsize::new(MAX_ENTRIES);
+static mut NUM_ENTRIES: usize = MAX_ENTRIES;
 
 pub fn get_entries() -> usize {
-    NUM_ENTRIES.load(Ordering::Relaxed)
+    unsafe { NUM_ENTRIES }
 }
 
-pub fn set_entries_for_tests_only(entries: usize) {
-    NUM_ENTRIES.store(entries, Ordering::Relaxed);
+pub fn set_entries_for_tests_only(_entries: usize) {
+    unsafe {
+        NUM_ENTRIES = _entries;
+    }
 }
 
 pub type SlotHash = (Slot, Hash);
 
 #[repr(C)]
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Default)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Default)]
 pub struct SlotHashes(Vec<SlotHash>);
 
 impl SlotHashes {

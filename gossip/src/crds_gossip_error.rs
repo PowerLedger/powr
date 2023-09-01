@@ -1,4 +1,4 @@
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Debug)]
 pub enum CrdsGossipError {
     NoPeers,
     PushMessageTimeout,

@@ -19,7 +19,7 @@ pub(crate) enum ShredSource {
 }
 
 bitflags! {
-    #[derive(Copy, Clone, Default)]
+    #[derive(Default)]
     struct SlotFlags: u8 {
         const DEAD   = 0b00000001;
         const FULL   = 0b00000010;
@@ -39,10 +39,10 @@ pub struct SlotStats {
 impl SlotStats {
     pub fn get_min_index_count(&self) -> usize {
         self.turbine_fec_set_index_counts
-            .values()
+            .iter()
+            .map(|(_, cnt)| *cnt)
             .min()
-            .copied()
-            .unwrap_or_default()
+            .unwrap_or(0)
     }
 
     fn report(&self, slot: Slot) {
@@ -99,7 +99,7 @@ impl SlotsStats {
     ) {
         let mut slot_full_reporting_info = None;
         let mut stats = self.stats.lock().unwrap();
-        let (slot_stats, evicted) = Self::get_or_default_with_eviction_check(&mut stats, slot);
+        let (mut slot_stats, evicted) = Self::get_or_default_with_eviction_check(&mut stats, slot);
         match source {
             ShredSource::Recovered => slot_stats.num_recovered += 1,
             ShredSource::Repaired => slot_stats.num_repaired += 1,

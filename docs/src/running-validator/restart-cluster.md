@@ -1,25 +1,13 @@
 ## Restarting a cluster
 
-### Step 1. Identify the latest optimistically confirmed slot for the cluster
+### Step 1. Identify the slot that the cluster will be restarted at
 
-In Solana 1.14 or greater, run the following command to output the latest
-optimistically confirmed slot your validator observed:
-```bash
-solana-ledger-tool -l ledger latest-optimistic-slots
-```
-
-In Solana 1.13 or less, the latest optimistically confirmed can be found by looking for the more recent occurrence of
+The highest optimistically confirmed slot is the best slot to start from, which
+can be found by looking for
 [this](https://github.com/solana-labs/solana/blob/0264147d42d506fb888f5c4c021a998e231a3e74/core/src/optimistic_confirmation_verifier.rs#L71)
-metrics datapoint.
+metrics datapoint. Otherwise use the last root.
 
 Call this slot `SLOT_X`
-
-Note that it's possible that some validators observed an optimistically
-confirmed slot that's greater than others before the outage.  Survey the other
-validators on the cluster to ensure that a greater optimistically confirmed slot
-does not exist before proceeding. If a greater slot value is found use it
-instead.
-
 
 ### Step 2. Stop the validator(s)
 
@@ -28,10 +16,10 @@ instead.
 ### Step 4. Create a new snapshot for slot `SLOT_X` with a hard fork at slot `SLOT_X`
 
 ```bash
-$ solana-ledger-tool -l <LEDGER_PATH> --snapshot-archive-path <SNAPSHOTS_PATH> --incremental-snapshot-archive-path <INCREMENTAL_SNAPSHOTS_PATH> create-snapshot SLOT_X <SNAPSHOTS_PATH> --hard-fork SLOT_X
+$ solana-ledger-tool -l ledger create-snapshot SLOT_X ledger --hard-fork SLOT_X
 ```
 
-The snapshots directory should now contain the new snapshot.
+The ledger directory should now contain the new snapshot.
 `solana-ledger-tool create-snapshot` will also output the new shred version, and bank hash value,
 call this NEW_SHRED_VERSION and NEW_BANK_HASH respectively.
 

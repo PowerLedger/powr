@@ -6,7 +6,7 @@ use {
     gethostname::gethostname,
     lazy_static::lazy_static,
     log::*,
-    solana_sdk::{genesis_config::ClusterType, hash::hash},
+    solana_sdk::hash::hash,
     std::{
         cmp,
         collections::HashMap,
@@ -17,33 +17,12 @@ use {
         thread,
         time::{Duration, Instant, UNIX_EPOCH},
     },
-    thiserror::Error,
 };
 
 type CounterMap = HashMap<(&'static str, u64), CounterPoint>;
 
-#[derive(Debug, Error)]
-pub enum MetricsError {
-    #[error(transparent)]
-    VarError(#[from] std::env::VarError),
-    #[error(transparent)]
-    ReqwestError(#[from] reqwest::Error),
-    #[error("SOLANA_METRICS_CONFIG is invalid: '{0}'")]
-    ConfigInvalid(String),
-    #[error("SOLANA_METRICS_CONFIG is incomplete")]
-    ConfigIncomplete,
-    #[error("SOLANA_METRICS_CONFIG database mismatch: {0}")]
-    DbMismatch(String),
-}
-
-impl From<MetricsError> for String {
-    fn from(error: MetricsError) -> Self {
-        error.to_string()
-    }
-}
-
-impl From<&CounterPoint> for DataPoint {
-    fn from(counter_point: &CounterPoint) -> Self {
+impl From<CounterPoint> for DataPoint {
+    fn from(counter_point: CounterPoint) -> Self {
         let mut point = Self::new(counter_point.name);
         point.timestamp = counter_point.timestamp;
         point.add_field_i64("count", counter_point.count);
@@ -79,7 +58,7 @@ impl InfluxDbMetricsWriter {
         }
     }
 
-    fn build_write_url() -> Result<String, MetricsError> {
+    fn build_write_url() -> Result<String, String> {
         let config = get_metrics_config().map_err(|err| {
             info!("metrics disabled: {}", err);
             err
@@ -108,9 +87,6 @@ pub fn serialize_points(points: &Vec<DataPoint>, host_id: &str) -> String {
         for (name, value) in &point.fields {
             len += name.len() + value.len() + EXTRA_LEN;
         }
-        for (name, value) in &point.tags {
-            len += name.len() + value.len() + EXTRA_LEN;
-        }
         len += point.name.len();
         len += TIMESTAMP_LEN;
         len += host_id.len() + HOST_ID_LEN;
@@ -118,9 +94,6 @@ pub fn serialize_points(points: &Vec<DataPoint>, host_id: &str) -> String {
     let mut line = String::with_capacity(len);
     for point in points {
         let _ = write!(line, "{},host_id={}", &point.name, host_id);
-        for (name, value) in point.tags.iter() {
-            let _ = write!(line, ",{name}={value}");
-        }
 
         let mut first = true;
         for (name, value) in point.fields.iter() {
@@ -129,7 +102,7 @@ pub fn serialize_points(points: &Vec<DataPoint>, host_id: &str) -> String {
         }
         let timestamp = point.timestamp.duration_since(UNIX_EPOCH);
         let nanos = timestamp.unwrap().as_nanos();
-        let _ = writeln!(line, " {nanos}");
+        let _ = writeln!(line, " {}", nanos);
     }
     line
 }
@@ -137,7 +110,7 @@ pub fn serialize_points(points: &Vec<DataPoint>, host_id: &str) -> String {
 impl MetricsWriter for InfluxDbMetricsWriter {
     fn write(&self, points: Vec<DataPoint>) {
         if let Some(ref write_url) = self.write_url {
-            debug!("submitting {} points", points.len());
+            info!("submitting {} points", points.len());
 
             let host_id = HOST_ID.read().unwrap();
 
@@ -194,19 +167,17 @@ impl MetricsAgent {
         max_points_per_sec: usize,
     ) -> Self {
         let (sender, receiver) = unbounded::<MetricsCommand>();
-
-        thread::Builder::new()
-            .name("solMetricsAgent".into())
-            .spawn(move || Self::run(&receiver, &writer, write_frequency, max_points_per_sec))
-            .unwrap();
+        thread::spawn(move || Self::run(&receiver, &writer, write_frequency, max_points_per_sec));
 
         Self { sender }
     }
 
     fn collect_points(points: &mut Vec<DataPoint>, counters: &mut CounterMap) -> Vec<DataPoint> {
-        let mut ret = std::mem::take(points);
-        ret.extend(counters.values().map(|v| v.into()));
-        counters.clear();
+        let mut ret: Vec<DataPoint> = Vec::default();
+        std::mem::swap(&mut ret, points);
+        for (_, v) in counters.drain() {
+            ret.push(v.into());
+        }
         ret
     }
 
@@ -347,12 +318,16 @@ impl Drop for MetricsAgent {
     }
 }
 
-fn get_singleton_agent() -> &'static MetricsAgent {
-    lazy_static! {
-        static ref AGENT: MetricsAgent = MetricsAgent::default();
-    };
-
-    &AGENT
+fn get_singleton_agent() -> Arc<Mutex<MetricsAgent>> {
+    static INIT: Once = Once::new();
+    static mut AGENT: Option<Arc<Mutex<MetricsAgent>>> = None;
+    unsafe {
+        INIT.call_once(|| AGENT = Some(Arc::new(Mutex::new(MetricsAgent::default()))));
+        match AGENT {
+            Some(ref agent) => agent.clone(),
+            None => panic!("Failed to initialize metrics agent"),
+        }
+    }
 }
 
 lazy_static! {
@@ -374,14 +349,16 @@ pub fn set_host_id(host_id: String) {
 /// Submits a new point from any thread.  Note that points are internally queued
 /// and transmitted periodically in batches.
 pub fn submit(point: DataPoint, level: log::Level) {
-    let agent = get_singleton_agent();
+    let agent_mutex = get_singleton_agent();
+    let agent = agent_mutex.lock().unwrap();
     agent.submit(point, level);
 }
 
 /// Submits a new counter or updates an existing counter from any thread.  Note that points are
 /// internally queued and transmitted periodically in batches.
 pub(crate) fn submit_counter(point: CounterPoint, level: log::Level, bucket: u64) {
-    let agent = get_singleton_agent();
+    let agent_mutex = get_singleton_agent();
+    let agent = agent_mutex.lock().unwrap();
     agent.submit_counter(point, level, bucket);
 }
 
@@ -402,14 +379,16 @@ impl MetricsConfig {
     }
 }
 
-fn get_metrics_config() -> Result<MetricsConfig, MetricsError> {
+fn get_metrics_config() -> Result<MetricsConfig, String> {
     let mut config = MetricsConfig::default();
-    let config_var = env::var("SOLANA_METRICS_CONFIG")?;
+
+    let config_var = env::var("SOLANA_METRICS_CONFIG")
+        .map_err(|err| format!("SOLANA_METRICS_CONFIG: {}", err))?;
 
     for pair in config_var.split(',') {
         let nv: Vec<_> = pair.split('=').collect();
         if nv.len() != 2 {
-            return Err(MetricsError::ConfigInvalid(pair.to_string()));
+            return Err(format!("SOLANA_METRICS_CONFIG is invalid: '{}'", pair));
         }
         let v = nv[1].to_string();
         match nv[0] {
@@ -417,42 +396,27 @@ fn get_metrics_config() -> Result<MetricsConfig, MetricsError> {
             "db" => config.db = v,
             "u" => config.username = v,
             "p" => config.password = v,
-            _ => return Err(MetricsError::ConfigInvalid(pair.to_string())),
+            _ => return Err(format!("SOLANA_METRICS_CONFIG is invalid: '{}'", pair)),
         }
     }
 
     if !config.complete() {
-        return Err(MetricsError::ConfigIncomplete);
+        return Err("SOLANA_METRICS_CONFIG is incomplete".to_string());
     }
-
     Ok(config)
 }
 
-pub fn metrics_config_sanity_check(cluster_type: ClusterType) -> Result<(), MetricsError> {
-    let config = match get_metrics_config() {
-        Ok(config) => config,
-        Err(MetricsError::VarError(std::env::VarError::NotPresent)) => return Ok(()),
-        Err(e) => return Err(e),
-    };
-    match &config.db[..] {
-        "mainnet-beta" if cluster_type != ClusterType::MainnetBeta => (),
-        "tds" if cluster_type != ClusterType::Testnet => (),
-        "devnet" if cluster_type != ClusterType::Devnet => (),
-        _ => return Ok(()),
-    };
-    let (host, db) = (&config.host, &config.db);
-    let msg = format!("cluster_type={cluster_type:?} host={host} database={db}");
-    Err(MetricsError::DbMismatch(msg))
-}
-
-pub fn query(q: &str) -> Result<String, MetricsError> {
-    let config = get_metrics_config()?;
+pub fn query(q: &str) -> Result<String, String> {
+    let config = get_metrics_config().map_err(|err| err)?;
     let query_url = format!(
         "{}/query?u={}&p={}&q={}",
         &config.host, &config.username, &config.password, &q
     );
 
-    let response = reqwest::blocking::get(query_url.as_str())?.text()?;
+    let response = reqwest::blocking::get(query_url.as_str())
+        .map_err(|err| err.to_string())?
+        .text()
+        .map_err(|err| err.to_string())?;
 
     Ok(response)
 }
@@ -460,7 +424,8 @@ pub fn query(q: &str) -> Result<String, MetricsError> {
 /// Blocks until all pending points from previous calls to `submit` have been
 /// transmitted.
 pub fn flush() {
-    let agent = get_singleton_agent();
+    let agent_mutex = get_singleton_agent();
+    let agent = agent_mutex.lock().unwrap();
     agent.flush();
 }
 
@@ -527,7 +492,10 @@ pub mod test_mocks {
             assert!(!points.is_empty());
 
             let new_points = points.len();
-            self.points_written.lock().unwrap().extend(points);
+            self.points_written
+                .lock()
+                .unwrap()
+                .extend(points.into_iter());
 
             info!(
                 "Writing {} points ({} total)",

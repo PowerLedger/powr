@@ -19,7 +19,7 @@ pub trait BloomHashIndex {
     fn hash_at_index(&self, hash_index: u64) -> u64;
 }
 
-#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Eq, AbiExample)]
+#[derive(Serialize, Deserialize, Default, Clone, PartialEq, AbiExample)]
 pub struct Bloom<T: BloomHashIndex> {
     pub keys: Vec<u64>,
     pub bits: BitVec<u64>,
@@ -69,7 +69,7 @@ impl<T: BloomHashIndex> Bloom<T> {
             keys,
             bits,
             num_bits_set: 0,
-            _phantom: PhantomData,
+            _phantom: PhantomData::default(),
         }
     }
     /// Create filter optimal for num size given the `FALSE_RATE`.
@@ -101,9 +101,7 @@ impl<T: BloomHashIndex> Bloom<T> {
         }
     }
     fn pos(&self, key: &T, k: u64) -> u64 {
-        key.hash_at_index(k)
-            .checked_rem(self.bits.len())
-            .unwrap_or(0)
+        key.hash_at_index(k).wrapping_rem(self.bits.len())
     }
     pub fn clear(&mut self) {
         self.bits = BitVec::new_fill(false, self.bits.len());
@@ -159,17 +157,14 @@ impl<T: BloomHashIndex> From<Bloom<T>> for AtomicBloom<T> {
                 .iter()
                 .map(|&x| AtomicU64::new(x))
                 .collect(),
-            _phantom: PhantomData,
+            _phantom: PhantomData::default(),
         }
     }
 }
 
 impl<T: BloomHashIndex> AtomicBloom<T> {
     fn pos(&self, key: &T, hash_index: u64) -> (usize, u64) {
-        let pos = key
-            .hash_at_index(hash_index)
-            .checked_rem(self.num_bits)
-            .unwrap_or(0);
+        let pos = key.hash_at_index(hash_index).wrapping_rem(self.num_bits);
         // Divide by 64 to figure out which of the
         // AtomicU64 bit chunks we need to modify.
         let index = pos.wrapping_shr(6);
@@ -204,6 +199,19 @@ impl<T: BloomHashIndex> AtomicBloom<T> {
             bit.store(0u64, Ordering::Relaxed);
         });
     }
+
+    // Only for tests and simulations.
+    pub fn mock_clone(&self) -> Self {
+        Self {
+            keys: self.keys.clone(),
+            bits: self
+                .bits
+                .iter()
+                .map(|v| AtomicU64::new(v.load(Ordering::Relaxed)))
+                .collect(),
+            ..*self
+        }
+    }
 }
 
 impl<T: BloomHashIndex> From<AtomicBloom<T>> for Bloom<T> {
@@ -220,7 +228,7 @@ impl<T: BloomHashIndex> From<AtomicBloom<T>> for Bloom<T> {
             keys: atomic_bloom.keys,
             bits,
             num_bits_set,
-            _phantom: PhantomData,
+            _phantom: PhantomData::default(),
         }
     }
 }
@@ -300,7 +308,7 @@ mod test {
         let mut b: Bloom<Hash> = Bloom::new(3, vec![100]);
         b.add(&Hash::default());
         assert_eq!(
-            format!("{b:?}"),
+            format!("{:?}", b),
             "Bloom { keys.len: 1 bits.len: 3 num_set: 1 bits: 001 }"
         );
 
@@ -308,21 +316,15 @@ mod test {
         b.add(&Hash::default());
         b.add(&hash(&[1, 2]));
         assert_eq!(
-            format!("{b:?}"),
+            format!("{:?}", b),
             "Bloom { keys.len: 1 bits.len: 1000 num_set: 2 bits: 0000000000.. }"
         );
     }
 
-    fn generate_random_hash() -> Hash {
-        let mut rng = rand::thread_rng();
-        let mut hash = [0u8; solana_sdk::hash::HASH_BYTES];
-        rng.fill(&mut hash);
-        Hash::new_from_array(hash)
-    }
-
     #[test]
     fn test_atomic_bloom() {
-        let hash_values: Vec<_> = std::iter::repeat_with(generate_random_hash)
+        let mut rng = rand::thread_rng();
+        let hash_values: Vec<_> = std::iter::repeat_with(|| solana_sdk::hash::new_rand(&mut rng))
             .take(1200)
             .collect();
         let bloom: AtomicBloom<_> = Bloom::<Hash>::random(1287, 0.1, 7424).into();
@@ -339,11 +341,11 @@ mod test {
         for hash_value in hash_values {
             assert!(bloom.contains(&hash_value));
         }
-        let false_positive = std::iter::repeat_with(generate_random_hash)
+        let false_positive = std::iter::repeat_with(|| solana_sdk::hash::new_rand(&mut rng))
             .take(10_000)
             .filter(|hash_value| bloom.contains(hash_value))
             .count();
-        assert!(false_positive < 2_000, "false_positive: {false_positive}");
+        assert!(false_positive < 2_000, "false_positive: {}", false_positive);
     }
 
     #[test]
@@ -351,14 +353,14 @@ mod test {
         let mut rng = rand::thread_rng();
         let keys: Vec<_> = std::iter::repeat_with(|| rng.gen()).take(5).collect();
         let mut bloom = Bloom::<Hash>::new(9731, keys.clone());
-        let hash_values: Vec<_> = std::iter::repeat_with(generate_random_hash)
+        let hash_values: Vec<_> = std::iter::repeat_with(|| solana_sdk::hash::new_rand(&mut rng))
             .take(1000)
             .collect();
         for hash_value in &hash_values {
             bloom.add(hash_value);
         }
         let num_bits_set = bloom.num_bits_set;
-        assert!(num_bits_set > 2000, "# bits set: {num_bits_set}");
+        assert!(num_bits_set > 2000, "# bits set: {}", num_bits_set);
         // Round-trip with no inserts.
         let bloom: AtomicBloom<_> = bloom.into();
         assert_eq!(bloom.num_bits, 9731);
@@ -386,9 +388,10 @@ mod test {
             assert!(bloom.contains(hash_value));
         }
         // Round trip, inserting new hash values.
-        let more_hash_values: Vec<_> = std::iter::repeat_with(generate_random_hash)
-            .take(1000)
-            .collect();
+        let more_hash_values: Vec<_> =
+            std::iter::repeat_with(|| solana_sdk::hash::new_rand(&mut rng))
+                .take(1000)
+                .collect();
         let bloom: AtomicBloom<_> = bloom.into();
         assert_eq!(bloom.num_bits, 9731);
         assert_eq!(bloom.bits.len(), (9731 + 63) / 64);
@@ -401,11 +404,11 @@ mod test {
         for hash_value in &more_hash_values {
             assert!(bloom.contains(hash_value));
         }
-        let false_positive = std::iter::repeat_with(generate_random_hash)
+        let false_positive = std::iter::repeat_with(|| solana_sdk::hash::new_rand(&mut rng))
             .take(10_000)
             .filter(|hash_value| bloom.contains(hash_value))
             .count();
-        assert!(false_positive < 2000, "false_positive: {false_positive}");
+        assert!(false_positive < 2000, "false_positive: {}", false_positive);
         let bloom: Bloom<_> = bloom.into();
         assert_eq!(bloom.bits.len(), 9731);
         assert!(bloom.num_bits_set > num_bits_set);
@@ -420,11 +423,11 @@ mod test {
         for hash_value in &more_hash_values {
             assert!(bloom.contains(hash_value));
         }
-        let false_positive = std::iter::repeat_with(generate_random_hash)
+        let false_positive = std::iter::repeat_with(|| solana_sdk::hash::new_rand(&mut rng))
             .take(10_000)
             .filter(|hash_value| bloom.contains(hash_value))
             .count();
-        assert!(false_positive < 2000, "false_positive: {false_positive}");
+        assert!(false_positive < 2000, "false_positive: {}", false_positive);
         // Assert that the bits vector precisely match if no atomic ops were
         // used.
         let bits = bloom.bits;

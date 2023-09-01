@@ -10,7 +10,7 @@ use {
     },
 };
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum RpcHealthStatus {
     Ok,
     Behind { num_slots: Slot }, // Validator is behind its known validators
@@ -22,7 +22,6 @@ pub struct RpcHealth {
     known_validators: Option<HashSet<Pubkey>>,
     health_check_slot_distance: u64,
     override_health_check: Arc<AtomicBool>,
-    startup_verification_complete: Arc<AtomicBool>,
     #[cfg(test)]
     stub_health_status: std::sync::RwLock<Option<RpcHealthStatus>>,
 }
@@ -33,14 +32,12 @@ impl RpcHealth {
         known_validators: Option<HashSet<Pubkey>>,
         health_check_slot_distance: u64,
         override_health_check: Arc<AtomicBool>,
-        startup_verification_complete: Arc<AtomicBool>,
     ) -> Self {
         Self {
             cluster_info,
             known_validators,
             health_check_slot_distance,
             override_health_check,
-            startup_verification_complete,
             #[cfg(test)]
             stub_health_status: std::sync::RwLock::new(None),
         }
@@ -52,10 +49,6 @@ impl RpcHealth {
             if let Some(stub_health_status) = *self.stub_health_status.read().unwrap() {
                 return stub_health_status;
             }
-        }
-
-        if !self.startup_verification_complete.load(Ordering::Acquire) {
-            return RpcHealthStatus::Unknown;
         }
 
         if self.override_health_check.load(Ordering::Relaxed) {
@@ -128,13 +121,19 @@ impl RpcHealth {
 
     #[cfg(test)]
     pub(crate) fn stub() -> Arc<Self> {
-        use crate::rpc::tests::new_test_cluster_info;
+        use {
+            solana_gossip::contact_info::ContactInfo, solana_sdk::signer::keypair::Keypair,
+            solana_streamer::socket::SocketAddrSpace,
+        };
         Arc::new(Self::new(
-            Arc::new(new_test_cluster_info()),
+            Arc::new(ClusterInfo::new(
+                ContactInfo::default(),
+                Arc::new(Keypair::new()),
+                SocketAddrSpace::Unspecified,
+            )),
             None,
             42,
             Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(true)),
         ))
     }
 

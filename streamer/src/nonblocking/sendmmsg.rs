@@ -54,13 +54,12 @@ mod tests {
     use {
         crate::{
             nonblocking::{
-                recvmmsg::{recv_mmsg, recv_mmsg_exact},
+                recvmmsg::recv_mmsg,
                 sendmmsg::{batch_send, multi_target_send},
             },
             packet::Packet,
             sendmmsg::SendPktsError,
         },
-        assert_matches::assert_matches,
         solana_sdk::packet::PACKET_DATA_SIZE,
         std::{
             io::ErrorKind,
@@ -82,7 +81,7 @@ mod tests {
         assert_eq!(sent, Some(()));
 
         let mut packets = vec![Packet::default(); 32];
-        let recv = recv_mmsg_exact(&reader, &mut packets[..]).await.unwrap();
+        let recv = recv_mmsg(&reader, &mut packets[..]).await.unwrap();
         assert_eq!(32, recv);
     }
 
@@ -112,12 +111,12 @@ mod tests {
         let sent = batch_send(&sender, &packet_refs[..]).await.ok();
         assert_eq!(sent, Some(()));
 
-        let mut packets = vec![Packet::default(); 16];
-        let recv = recv_mmsg_exact(&reader, &mut packets[..]).await.unwrap();
+        let mut packets = vec![Packet::default(); 32];
+        let recv = recv_mmsg(&reader, &mut packets[..]).await.unwrap();
         assert_eq!(16, recv);
 
-        let mut packets = vec![Packet::default(); 16];
-        let recv = recv_mmsg_exact(&reader2, &mut packets[..]).await.unwrap();
+        let mut packets = vec![Packet::default(); 32];
+        let recv = recv_mmsg(&reader2, &mut packets[..]).await.unwrap();
         assert_eq!(16, recv);
     }
 
@@ -208,7 +207,7 @@ mod tests {
         if let Err(SendPktsError::IoError(ioerror, num_failed)) =
             batch_send(&sender, &packet_refs[..]).await
         {
-            assert_matches!(ioerror.kind(), ErrorKind::PermissionDenied);
+            assert!(matches!(ioerror.kind(), ErrorKind::PermissionDenied));
             assert_eq!(num_failed, 2);
         }
 
@@ -223,7 +222,7 @@ mod tests {
         if let Err(SendPktsError::IoError(ioerror, num_failed)) =
             batch_send(&sender, &packet_refs[..]).await
         {
-            assert_matches!(ioerror.kind(), ErrorKind::PermissionDenied);
+            assert!(matches!(ioerror.kind(), ErrorKind::PermissionDenied));
             assert_eq!(num_failed, 3);
         }
 
@@ -238,7 +237,7 @@ mod tests {
         if let Err(SendPktsError::IoError(ioerror, num_failed)) =
             batch_send(&sender, &packet_refs[..]).await
         {
-            assert_matches!(ioerror.kind(), ErrorKind::PermissionDenied);
+            assert!(matches!(ioerror.kind(), ErrorKind::PermissionDenied));
             assert_eq!(num_failed, 2);
         }
 
@@ -253,7 +252,7 @@ mod tests {
         if let Err(SendPktsError::IoError(ioerror, num_failed)) =
             multi_target_send(&sender, &packets[0], &dest_refs).await
         {
-            assert_matches!(ioerror.kind(), ErrorKind::PermissionDenied);
+            assert!(matches!(ioerror.kind(), ErrorKind::PermissionDenied));
             assert_eq!(num_failed, 2);
         }
 
@@ -268,7 +267,7 @@ mod tests {
         if let Err(SendPktsError::IoError(ioerror, num_failed)) =
             multi_target_send(&sender, &packets[0], &dest_refs).await
         {
-            assert_matches!(ioerror.kind(), ErrorKind::PermissionDenied);
+            assert!(matches!(ioerror.kind(), ErrorKind::PermissionDenied));
             assert_eq!(num_failed, 3);
         }
     }

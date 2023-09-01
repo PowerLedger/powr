@@ -6,7 +6,6 @@ use {
     },
     solana_sdk::{
         deserialize_utils::default_on_eof, message::v0::LoadedAddresses, transaction::Result,
-        transaction_context::TransactionReturnData,
     },
     solana_transaction_status::{
         InnerInstructions, Reward, RewardType, TransactionStatusMeta, TransactionTokenBalance,
@@ -174,10 +173,6 @@ pub struct StoredTransactionStatusMeta {
     pub post_token_balances: Option<Vec<StoredTransactionTokenBalance>>,
     #[serde(deserialize_with = "default_on_eof")]
     pub rewards: Option<Vec<StoredExtendedReward>>,
-    #[serde(deserialize_with = "default_on_eof")]
-    pub return_data: Option<TransactionReturnData>,
-    #[serde(deserialize_with = "default_on_eof")]
-    pub compute_units_consumed: Option<u64>,
 }
 
 impl From<StoredTransactionStatusMeta> for TransactionStatusMeta {
@@ -192,8 +187,6 @@ impl From<StoredTransactionStatusMeta> for TransactionStatusMeta {
             pre_token_balances,
             post_token_balances,
             rewards,
-            return_data,
-            compute_units_consumed,
         } = value;
         Self {
             status,
@@ -209,8 +202,6 @@ impl From<StoredTransactionStatusMeta> for TransactionStatusMeta {
             rewards: rewards
                 .map(|rewards| rewards.into_iter().map(|reward| reward.into()).collect()),
             loaded_addresses: LoadedAddresses::default(),
-            return_data,
-            compute_units_consumed,
         }
     }
 }
@@ -229,8 +220,6 @@ impl TryFrom<TransactionStatusMeta> for StoredTransactionStatusMeta {
             post_token_balances,
             rewards,
             loaded_addresses,
-            return_data,
-            compute_units_consumed,
         } = value;
 
         if !loaded_addresses.is_empty() {
@@ -254,8 +243,6 @@ impl TryFrom<TransactionStatusMeta> for StoredTransactionStatusMeta {
                 .map(|balances| balances.into_iter().map(|balance| balance.into()).collect()),
             rewards: rewards
                 .map(|rewards| rewards.into_iter().map(|reward| reward.into()).collect()),
-            return_data,
-            compute_units_consumed,
         })
     }
 }

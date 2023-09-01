@@ -9,9 +9,9 @@ base_dir=$(realpath --strip "$(dirname "$0")/..")
 
 _() {
   if [[ $(pwd) = $base_dir ]]; then
-    echo "--- $*" > /dev/stderr
+    echo "--- $*"
   else
-    echo "--- $* (wd: $(pwd))" > /dev/stderr
+    echo "--- $* (wd: $(pwd))"
   fi
   "$@"
 }

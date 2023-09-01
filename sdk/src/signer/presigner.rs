@@ -28,7 +28,7 @@ impl Presigner {
     }
 }
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error, PartialEq)]
 pub enum PresignerError {
     #[error("pre-generated signature cannot verify data")]
     VerificationFailure,

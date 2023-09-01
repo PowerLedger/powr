@@ -1,11 +1,7 @@
-//! A type to hold data for the [`StakeHistory` sysvar][sv].
+//! named accounts for synthesized data accounts for bank state, etc.
 //!
-//! [sv]: https://docs.solana.com/developing/runtime-facilities/sysvars#stakehistory
+//! this account carries history about stake activations and de-activations
 //!
-//! The sysvar ID is declared in [`sysvar::stake_history`].
-//!
-//! [`sysvar::stake_history`]: crate::sysvar::stake_history
-
 pub use crate::clock::Epoch;
 use std::ops::Deref;
 

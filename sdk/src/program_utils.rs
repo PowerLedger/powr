@@ -1,7 +1,3 @@
-//! Contains a single utility function for deserializing from [bincode].
-//!
-//! [bincode]: https://docs.rs/bincode
-
 use crate::instruction::InstructionError;
 
 /// Deserialize with a limit based the maximum amount of data a program can expect to get.

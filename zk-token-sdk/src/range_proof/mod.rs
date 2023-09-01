@@ -1,4 +1,4 @@
-#[cfg(not(target_os = "solana"))]
+#[cfg(not(target_arch = "bpf"))]
 use {
     crate::encryption::pedersen::{Pedersen, PedersenCommitment, PedersenOpening},
     curve25519_dalek::traits::MultiscalarMul,
@@ -8,7 +8,6 @@ use {
 use {
     crate::{
         encryption::pedersen::{G, H},
-        errors::ProofVerificationError,
         range_proof::{
             errors::RangeProofError, generators::BulletproofGens, inner_product::InnerProductProof,
         },
@@ -53,7 +52,7 @@ impl RangeProof {
     ///
     /// The sum of the bit-lengths of the commitments amounts must be a power-of-two
     #[allow(clippy::many_single_char_names)]
-    #[cfg(not(target_os = "solana"))]
+    #[cfg(not(target_arch = "bpf"))]
     pub fn new(
         amounts: Vec<u64>,
         bit_lengths: Vec<usize>,
@@ -233,7 +232,7 @@ impl RangeProof {
         let bp_gens = BulletproofGens::new(nm);
 
         if !nm.is_power_of_two() {
-            return Err(ProofVerificationError::InvalidBitSize.into());
+            return Err(RangeProofError::InvalidBitsize);
         }
 
         // append proof data to transcript and derive appropriate challenge scalars
@@ -278,6 +277,7 @@ impl RangeProof {
 
         let gs = s.iter().map(|s_i| minus_z - a * s_i);
         let hs = s_inv
+            .clone()
             .zip(util::exp_iter(y.invert()))
             .zip(concat_z_and_2.iter())
             .map(|((s_i_inv, exp_y_inv), z_and_2)| z + exp_y_inv * (zz * z_and_2 - b * s_i_inv));
@@ -310,12 +310,12 @@ impl RangeProof {
                 .chain(bp_gens.H(nm).map(|&x| Some(x)))
                 .chain(comms.iter().map(|V| Some(*V.get_point()))),
         )
-        .ok_or(ProofVerificationError::MultiscalarMul)?;
+        .ok_or(RangeProofError::MultiscalarMul)?;
 
         if mega_check.is_identity() {
             Ok(())
         } else {
-            Err(ProofVerificationError::AlgebraicRelation.into())
+            Err(RangeProofError::AlgebraicRelation)
         }
     }
 
@@ -338,10 +338,10 @@ impl RangeProof {
     // changed.
     pub fn from_bytes(slice: &[u8]) -> Result<RangeProof, RangeProofError> {
         if slice.len() % 32 != 0 {
-            return Err(ProofVerificationError::Deserialization.into());
+            return Err(RangeProofError::Format);
         }
         if slice.len() < 7 * 32 {
-            return Err(ProofVerificationError::Deserialization.into());
+            return Err(RangeProofError::Format);
         }
 
         let A = CompressedRistretto(util::read32(&slice[0..]));
@@ -350,11 +350,11 @@ impl RangeProof {
         let T_2 = CompressedRistretto(util::read32(&slice[3 * 32..]));
 
         let t_x = Scalar::from_canonical_bytes(util::read32(&slice[4 * 32..]))
-            .ok_or(ProofVerificationError::Deserialization)?;
+            .ok_or(RangeProofError::Format)?;
         let t_x_blinding = Scalar::from_canonical_bytes(util::read32(&slice[5 * 32..]))
-            .ok_or(ProofVerificationError::Deserialization)?;
+            .ok_or(RangeProofError::Format)?;
         let e_blinding = Scalar::from_canonical_bytes(util::read32(&slice[6 * 32..]))
-            .ok_or(ProofVerificationError::Deserialization)?;
+            .ok_or(RangeProofError::Format)?;
 
         let ipp_proof = InnerProductProof::from_bytes(&slice[7 * 32..])?;
 

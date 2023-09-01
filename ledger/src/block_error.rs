@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, Debug, PartialEq)]
 pub enum BlockError {
     /// Block did not have enough ticks was not marked full
     /// and no shred with is_last was seen.

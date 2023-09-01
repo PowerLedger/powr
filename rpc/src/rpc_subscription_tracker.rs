@@ -2,8 +2,8 @@ use {
     crate::rpc_subscriptions::{NotificationEntry, RpcNotification, TimestampedNotificationEntry},
     dashmap::{mapref::entry::Entry as DashEntry, DashMap},
     solana_account_decoder::{UiAccountEncoding, UiDataSliceConfig},
+    solana_client::rpc_filter::RpcFilterType,
     solana_metrics::{CounterToken, TokenCounter},
-    solana_rpc_client_api::filter::RpcFilterType,
     solana_runtime::{
         bank::{TransactionLogCollectorConfig, TransactionLogCollectorFilter},
         bank_forks::BankForks,
@@ -13,7 +13,10 @@ use {
     },
     solana_transaction_status::{TransactionDetails, UiTransactionEncoding},
     std::{
-        collections::hash_map::{Entry, HashMap},
+        collections::{
+            hash_map::{Entry, HashMap},
+            HashSet,
+        },
         fmt,
         sync::{
             atomic::{AtomicU64, Ordering},
@@ -288,21 +291,6 @@ impl SubscriptionControl {
     }
 
     #[cfg(test)]
-    pub fn logs_subscribed(&self, pubkey: Option<&Pubkey>) -> bool {
-        self.0.subscriptions.iter().any(|item| {
-            if let SubscriptionParams::Logs(params) = item.key() {
-                let subscribed_pubkey = match &params.kind {
-                    LogsSubscriptionKind::All | LogsSubscriptionKind::AllWithVotes => None,
-                    LogsSubscriptionKind::Single(pubkey) => Some(pubkey),
-                };
-                subscribed_pubkey == pubkey
-            } else {
-                false
-            }
-        })
-    }
-
-    #[cfg(test)]
     pub fn signature_subscribed(&self, signature: &Signature) -> bool {
         self.0.subscriptions.iter().any(|item| {
             if let SubscriptionParams::Signature(params) = item.key() {
@@ -385,21 +373,20 @@ impl LogsSubscriptionsIndex {
     }
 
     fn update_config(&self) {
-        let mentioned_addresses = self.single_count.keys().copied().collect();
         let config = if self.all_with_votes_count > 0 {
             TransactionLogCollectorConfig {
                 filter: TransactionLogCollectorFilter::AllWithVotes,
-                mentioned_addresses,
+                mentioned_addresses: HashSet::new(),
             }
         } else if self.all_count > 0 {
             TransactionLogCollectorConfig {
                 filter: TransactionLogCollectorFilter::All,
-                mentioned_addresses,
+                mentioned_addresses: HashSet::new(),
             }
         } else {
             TransactionLogCollectorConfig {
                 filter: TransactionLogCollectorFilter::OnlyMentionedAddresses,
-                mentioned_addresses,
+                mentioned_addresses: self.single_count.keys().copied().collect(),
             }
         };
 
@@ -715,7 +702,7 @@ mod tests {
         assert_eq!(*info.last_notified_slot.read().unwrap(), 0);
 
         let account_params = SubscriptionParams::Account(AccountSubscriptionParams {
-            pubkey: Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(),
+            pubkey: Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap(),
             commitment: CommitmentConfig::finalized(),
             encoding: UiAccountEncoding::Base64Zstd,
             data_slice: None,
@@ -755,7 +742,7 @@ mod tests {
         assert_eq!(counts(&tracker), (0, 0, 0, 0));
 
         let account_params = SubscriptionParams::Account(AccountSubscriptionParams {
-            pubkey: Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(),
+            pubkey: Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap(),
             commitment: CommitmentConfig::finalized(),
             encoding: UiAccountEncoding::Base64Zstd,
             data_slice: None,
@@ -766,7 +753,7 @@ mod tests {
         assert_eq!(counts(&tracker), (0, 0, 0, 0));
 
         let account_params2 = SubscriptionParams::Account(AccountSubscriptionParams {
-            pubkey: Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(),
+            pubkey: Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap(),
             commitment: CommitmentConfig::confirmed(),
             encoding: UiAccountEncoding::Base64Zstd,
             data_slice: None,

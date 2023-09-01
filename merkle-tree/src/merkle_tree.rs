@@ -24,7 +24,7 @@ pub struct MerkleTree {
     nodes: Vec<Hash>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct ProofEntry<'a>(&'a Hash, Option<&'a Hash>, Option<&'a Hash>);
 
 impl<'a> ProofEntry<'a> {
@@ -33,12 +33,12 @@ impl<'a> ProofEntry<'a> {
         left_sibling: Option<&'a Hash>,
         right_sibling: Option<&'a Hash>,
     ) -> Self {
-        assert!(left_sibling.is_none() ^ right_sibling.is_none());
+        assert!((None == left_sibling) ^ (None == right_sibling));
         Self(target, left_sibling, right_sibling)
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Proof<'a>(Vec<ProofEntry<'a>>);
 
 impl<'a> Proof<'a> {
@@ -58,7 +58,7 @@ impl<'a> Proof<'a> {
                 None
             }
         });
-        result.is_some()
+        matches!(result, Some(_))
     }
 }
 
@@ -154,7 +154,7 @@ impl MerkleTree {
             let level = &self.nodes[level_start..(level_start + level_len)];
 
             let target = &level[node_index];
-            if lsib.is_some() || rsib.is_some() {
+            if lsib != None || rsib != None {
                 path.push(ProofEntry::new(target, lsib, rsib));
             }
             if node_index % 2 == 0 {
