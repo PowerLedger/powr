@@ -81,7 +81,7 @@ Execute the following commands to create the config file:
 
 ```bash
 [ ! -d "~/.config/solana/cli" ] && mkdir -p ~/.config/solana/cli
-cat > ~/.config/solana/cli/config.yml <<EOF
+cat > ~/.config/solana/cli/config.yml << 'EOF'
 ---
 json_rpc_url: "https://powr-api.mainnet.powerledger.io"
 websocket_url: ""
@@ -185,7 +185,7 @@ We HIGHLY recommend to manage the process using linux's `systemctl` command:
 
 ```bash
 sudo su
-cat > /etc/systemd/system/powr.service <<EOF
+cat > /etc/systemd/system/powr.service << 'EOF'
 [Unit]
 Description=Powerledger Blockchain Validator Service
 Requires=network-online.target
@@ -210,7 +210,7 @@ exit
 
 ```bash
 # Increase UDP buffers
-sudo bash -c "cat >/etc/sysctl.d/20-solana-udp-buffers.conf <<EOF
+sudo bash -c "cat >/etc/sysctl.d/20-solana-udp-buffers.conf << 'EOF'
 # Increase UDP buffer size
 net.core.rmem_default = 134217728
 net.core.rmem_max = 134217728
@@ -222,7 +222,7 @@ sudo sysctl -p /etc/sysctl.d/20-solana-udp-buffers.conf
 
 ```bash
 # Increased memory mapped files limit
-sudo bash -c "cat >/etc/sysctl.d/20-solana-mmaps.conf <<EOF
+sudo bash -c "cat >/etc/sysctl.d/20-solana-mmaps.conf << 'EOF'
 # Increase memory mapped files limit
 vm.max_map_count = 1000000
 EOF"
@@ -236,7 +236,7 @@ LimitNOFILE=1000000
 
 ```bash
 # Increasing max opened files limit
-sudo bash -c "cat >/etc/security/limits.d/90-solana-nofiles.conf <<EOF
+sudo bash -c "cat >/etc/security/limits.d/90-solana-nofiles.conf << 'EOF'
 # Increase process file descriptor count limit
 * - nofile 1000000
 EOF"
@@ -252,7 +252,7 @@ ulimit -Sn
 
 ```bash
 sudo su
-cat > /etc/logrotate.d/<NAME OF THE systemctl SERVICE>.conf <<EOF
+cat > /etc/logrotate.d/<NAME OF THE systemctl SERVICE>.conf << 'EOF'
 /PATH_TO_LOGFILE/validator.log {
     rotate 7
     daily
