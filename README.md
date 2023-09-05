@@ -26,8 +26,7 @@ prohibited. All Rights Reserved.
 * ┬ 3 separate storage devices:
   ├*- 250 GB of storage for the operating system
   ├*- 1 TB of storage for the accounts folder
-  └*┬ 1 TB of storage for the ledger folder (pruned nodes) , OR , 
-    └ 4 TB of storage for the ledger folder (full history nodes). 
+  └*- 4 TB of storage for the ledger folder (pruned nodes) 
 * Rust 1.59 installed
 ```
 
