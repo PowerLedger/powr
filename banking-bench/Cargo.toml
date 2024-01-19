@@ -2,30 +2,30 @@
 authors = ["Solana Maintainers <maintainers@solana.foundation>"]
 edition = "2021"
 name = "solana-banking-bench"
-version = "1.13.7"
+version = "1.14.29"
 repository = "https://github.com/solana-labs/solana"
 license = "Apache-2.0"
 homepage = "https://solana.com/"
 publish = false
 
 [dependencies]
-clap = {version = "3.1.5", features = ["derive", "cargo"]}
+clap = { version = "3.1.8", features = ["derive"] }
 crossbeam-channel = "0.5"
-log = "0.4.14"
+log = "0.4.17"
 rand = "0.7.0"
-rayon = "1.5.1"
-solana-client = { path = "../client", version = "=1.13.7" }
-solana-core = { path = "../core", version = "=1.13.7" }
-solana-gossip = { path = "../gossip", version = "=1.13.7" }
-solana-ledger = { path = "../ledger", version = "=1.13.7" }
-solana-logger = { path = "../logger", version = "=1.13.7" }
-solana-measure = { path = "../measure", version = "=1.13.7" }
-solana-perf = { path = "../perf", version = "=1.13.7" }
-solana-poh = { path = "../poh", version = "=1.13.7" }
-solana-runtime = { path = "../runtime", version = "=1.13.7" }
-solana-sdk = { path = "../sdk", version = "=1.13.7" }
-solana-streamer = { path = "../streamer", version = "=1.13.7" }
-solana-version = { path = "../version", version = "=1.13.7" }
+rayon = "1.5.3"
+solana-client = { path = "../client", version = "=1.14.29" }
+solana-core = { path = "../core", version = "=1.14.29" }
+solana-gossip = { path = "../gossip", version = "=1.14.29" }
+solana-ledger = { path = "../ledger", version = "=1.14.29" }
+solana-logger = { path = "../logger", version = "=1.14.29" }
+solana-measure = { path = "../measure", version = "=1.14.29" }
+solana-perf = { path = "../perf", version = "=1.14.29" }
+solana-poh = { path = "../poh", version = "=1.14.29" }
+solana-runtime = { path = "../runtime", version = "=1.14.29" }
+solana-sdk = { path = "../sdk", version = "=1.14.29" }
+solana-streamer = { path = "../streamer", version = "=1.14.29" }
+solana-version = { path = "../version", version = "=1.14.29" }
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]

@@ -1,5 +1,6 @@
 #![cfg_attr(RUSTC_WITH_SPECIALIZATION, feature(min_specialization))]
 #![allow(clippy::integer_arithmetic)]
+#![recursion_limit = "2048"]
 //! The `solana` library implements the Solana high-performance blockchain architecture.
 //! It includes a full Rust implementation of the architecture (see
 //! [Validator](server/struct.Validator.html)) as well as hooks to GPU implementations of its most
@@ -8,6 +9,7 @@
 //!
 
 pub mod accounts_hash_verifier;
+pub mod admin_rpc_post_init;
 pub mod ancestor_hashes_service;
 pub mod banking_stage;
 pub mod broadcast_stage;
@@ -38,6 +40,8 @@ pub mod multi_iterator_scanner;
 pub mod optimistic_confirmation_verifier;
 pub mod outstanding_requests;
 pub mod packet_threshold;
+pub mod poh_timing_report_service;
+pub mod poh_timing_reporter;
 pub mod progress_map;
 pub mod qos_service;
 pub mod repair_generic_traversal;
@@ -53,7 +57,7 @@ pub mod rewards_recorder_service;
 pub mod sample_performance_service;
 pub mod serve_repair;
 pub mod serve_repair_service;
-pub mod shred_fetch_stage;
+mod shred_fetch_stage;
 pub mod sigverify;
 pub mod sigverify_shreds;
 pub mod sigverify_stage;
@@ -76,6 +80,9 @@ pub mod vote_stake_tracker;
 pub mod voting_service;
 pub mod warm_quic_cache_service;
 pub mod window_service;
+
+#[macro_use]
+extern crate eager;
 
 #[macro_use]
 extern crate log;

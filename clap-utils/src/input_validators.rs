@@ -213,9 +213,9 @@ where
 
 pub fn normalize_to_url_if_moniker<T: AsRef<str>>(url_or_moniker: T) -> String {
     match url_or_moniker.as_ref() {
-        "m" | "mainnet-beta" => "https://plb-api.mainnet.powerledger.io",
-        "t" | "testnet" => "https://plbapi.testnet.powerledger.io",
-        "d" | "devnet" => "https://plbapi.testnet.powerledger.io",
+        "m" | "mainnet-beta" => "https://powr-api.mainnet.powerledger.io",
+        "t" | "testnet" => "https://powr-api.testnet.powerledger.io",
+        "d" | "devnet" => "https://powr-api.testnet.powerledger.io",
         "l" | "localhost" => "http://localhost:8899",
         url => url,
     }

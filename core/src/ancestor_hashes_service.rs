@@ -11,13 +11,13 @@ use {
             AncestorHashesRepairType, AncestorHashesResponse, RepairProtocol, ServeRepair,
         },
     },
-    bincode::{deserialize_from, serialize},
+    bincode::serialize,
     crossbeam_channel::{unbounded, Receiver, Sender},
     dashmap::{mapref::entry::Entry::Occupied, DashMap},
     solana_gossip::{cluster_info::ClusterInfo, ping_pong::Pong},
     solana_ledger::blockstore::Blockstore,
     solana_perf::{
-        packet::{Packet, PacketBatch},
+        packet::{deserialize_from_with_limit, Packet, PacketBatch},
         recycler::Recycler,
     },
     solana_runtime::bank::Bank,
@@ -42,7 +42,7 @@ use {
     },
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum AncestorHashesReplayUpdate {
     Dead(Slot),
     DeadDuplicateConfirmed(Slot),
@@ -215,7 +215,7 @@ impl AncestorHashesService {
         ancestor_socket: Arc<UdpSocket>,
     ) -> JoinHandle<()> {
         Builder::new()
-            .name("solana-ancestor-hashes-responses-service".to_string())
+            .name("solAncHashesSvc".to_string())
             .spawn(move || {
                 let mut last_stats_report = Instant::now();
                 let mut stats = AncestorHashesResponsesStats::default();
@@ -352,7 +352,7 @@ impl AncestorHashesService {
             }
         };
         let mut cursor = Cursor::new(packet_data);
-        let response = match deserialize_from(&mut cursor) {
+        let response = match deserialize_from_with_limit(&mut cursor) {
             Ok(response) => response,
             Err(_) => {
                 stats.invalid_packets += 1;
@@ -363,7 +363,7 @@ impl AncestorHashesService {
         match response {
             AncestorHashesResponse::Hashes(ref hashes) => {
                 // deserialize trailing nonce
-                let nonce = match deserialize_from(&mut cursor) {
+                let nonce = match deserialize_from_with_limit(&mut cursor) {
                     Ok(nonce) => nonce,
                     Err(_) => {
                         stats.invalid_packets += 1;
@@ -533,7 +533,7 @@ impl AncestorHashesService {
         // to MAX_ANCESTOR_HASHES_SLOT_REQUESTS_PER_SECOND/second
         let mut request_throttle = vec![];
         Builder::new()
-            .name("solana-manage-ancestor-requests".to_string())
+            .name("solManAncReqs".to_string())
             .spawn(move || loop {
                 if exit.load(Ordering::Relaxed) {
                     return;
@@ -760,7 +760,7 @@ mod test {
     use {
         super::*,
         crate::{
-            cluster_slot_state_verifier::DuplicateSlotsToRepair,
+            cluster_slot_state_verifier::{DuplicateSlotsToRepair, PurgeRepairSlotCounter},
             repair_service::DuplicateSlotsResetReceiver,
             replay_stage::{
                 tests::{replay_blockstore_components, ReplayBlockstoreComponents},
@@ -771,9 +771,9 @@ mod test {
         },
         solana_gossip::{
             cluster_info::{ClusterInfo, Node},
-            contact_info::ContactInfo,
+            legacy_contact_info::LegacyContactInfo as ContactInfo,
         },
-        solana_ledger::{blockstore::make_many_slot_entries, get_tmp_ledger_path},
+        solana_ledger::{blockstore::make_many_slot_entries, get_tmp_ledger_path, shred::Nonce},
         solana_runtime::{accounts_background_service::AbsRequestSender, bank_forks::BankForks},
         solana_sdk::{
             hash::Hash,
@@ -969,10 +969,8 @@ mod test {
                 Arc::new(keypair),
                 SocketAddrSpace::Unspecified,
             );
-            let responder_serve_repair = Arc::new(RwLock::new(ServeRepair::new(
-                Arc::new(cluster_info),
-                vote_simulator.bank_forks,
-            )));
+            let responder_serve_repair =
+                ServeRepair::new(Arc::new(cluster_info), vote_simulator.bank_forks);
 
             // Set up thread to give us responses
             let ledger_path = get_tmp_ledger_path!();
@@ -1010,12 +1008,11 @@ mod test {
                 false,
                 None,
             );
-            let t_listen = ServeRepair::listen(
-                responder_serve_repair,
-                Some(blockstore),
+            let t_listen = responder_serve_repair.listen(
+                blockstore,
                 requests_receiver,
                 response_sender,
-                &exit,
+                exit.clone(),
             );
 
             Self {
@@ -1135,6 +1132,26 @@ mod test {
         replay_blockstore_components
     }
 
+    fn send_ancestor_repair_request(
+        requester_serve_repair: &ServeRepair,
+        requester_cluster_info: &ClusterInfo,
+        responder_info: &ContactInfo,
+        ancestor_hashes_request_socket: &UdpSocket,
+        dead_slot: Slot,
+        nonce: Nonce,
+    ) {
+        let request_bytes = requester_serve_repair.ancestor_repair_request_bytes(
+            &requester_cluster_info.keypair(),
+            &responder_info.id,
+            dead_slot,
+            nonce,
+        );
+        if let Ok(request_bytes) = request_bytes {
+            let _ =
+                ancestor_hashes_request_socket.send_to(&request_bytes, responder_info.serve_repair);
+        }
+    }
+
     #[test]
     fn test_ancestor_hashes_service_initiate_ancestor_hashes_requests_for_duplicate_slot() {
         let dead_slot = MAX_ANCESTOR_RESPONSES as Slot;
@@ -1182,6 +1199,33 @@ mod test {
             &requester_cluster_info.keypair(),
         );
         assert!(ancestor_hashes_request_statuses.is_empty());
+
+        // Send a request to generate a ping
+        send_ancestor_repair_request(
+            &requester_serve_repair,
+            &requester_cluster_info,
+            responder_info,
+            &ancestor_hashes_request_socket,
+            dead_slot,
+            /*nonce*/ 123,
+        );
+        // Should have received valid response
+        let mut response_packet = response_receiver
+            .recv_timeout(Duration::from_millis(10_000))
+            .unwrap();
+        let packet = &mut response_packet[0];
+        packet.meta.set_socket_addr(&responder_info.serve_repair);
+        let decision = AncestorHashesService::verify_and_process_ancestor_response(
+            packet,
+            &ancestor_hashes_request_statuses,
+            &mut AncestorHashesResponsesStats::default(),
+            &outstanding_requests,
+            &requester_blockstore,
+            &requester_cluster_info.keypair(),
+            &ancestor_hashes_request_socket,
+        );
+        // should have processed a ping packet
+        assert_eq!(decision, None);
 
         // Add the responder to the eligible list for requests
         let responder_id = responder_info.id;
@@ -1532,6 +1576,33 @@ mod test {
         cluster_slots.insert_node_id(dead_slot, responder_id);
         requester_cluster_info.insert_info(responder_info.clone());
 
+        // Send a request to generate a ping
+        send_ancestor_repair_request(
+            &requester_serve_repair,
+            requester_cluster_info,
+            responder_info,
+            &ancestor_hashes_request_socket,
+            dead_slot,
+            /*nonce*/ 123,
+        );
+        // Should have received valid response
+        let mut response_packet = response_receiver
+            .recv_timeout(Duration::from_millis(10_000))
+            .unwrap();
+        let packet = &mut response_packet[0];
+        packet.meta.set_socket_addr(&responder_info.serve_repair);
+        let decision = AncestorHashesService::verify_and_process_ancestor_response(
+            packet,
+            &ancestor_hashes_request_statuses,
+            &mut AncestorHashesResponsesStats::default(),
+            &outstanding_requests,
+            &requester_blockstore,
+            &requester_cluster_info.keypair(),
+            &ancestor_hashes_request_socket,
+        );
+        // Should have processed a ping packet
+        assert_eq!(decision, None);
+
         // Simulate getting duplicate confirmed dead slot
         ancestor_hashes_replay_update_sender
             .send(AncestorHashesReplayUpdate::DeadDuplicateConfirmed(
@@ -1550,6 +1621,7 @@ mod test {
             &bank_forks,
             &requester_blockstore,
             None,
+            &mut PurgeRepairSlotCounter::default(),
         );
 
         // Simulate making a request

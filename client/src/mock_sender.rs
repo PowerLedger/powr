@@ -9,8 +9,8 @@ use {
             Response, RpcAccountBalance, RpcBlockProduction, RpcBlockProductionRange, RpcBlockhash,
             RpcConfirmedTransactionStatusWithSignature, RpcContactInfo, RpcFees, RpcIdentity,
             RpcInflationGovernor, RpcInflationRate, RpcInflationReward, RpcKeyedAccount,
-            RpcPerfSample, RpcResponseContext, RpcSimulateTransactionResult, RpcSnapshotSlotInfo,
-            RpcStakeActivation, RpcSupply, RpcVersionInfo, RpcVoteAccountInfo,
+            RpcPerfSample, RpcPrioritizationFee, RpcResponseContext, RpcSimulateTransactionResult,
+            RpcSnapshotSlotInfo, RpcStakeActivation, RpcSupply, RpcVersionInfo, RpcVoteAccountInfo,
             RpcVoteAccountStatus, StakeActivationState,
         },
         rpc_sender::*,
@@ -230,6 +230,8 @@ impl RpcSender for MockSender {
                             post_token_balances: OptionSerializer::None,
                             rewards: OptionSerializer::None,
                             loaded_addresses: OptionSerializer::Skip,
+                            return_data: OptionSerializer::Skip,
+                            compute_units_consumed: OptionSerializer::Skip,
                         }),
                 },
                 block_time: Some(1628633791),
@@ -288,6 +290,10 @@ impl RpcSender for MockSender {
                 active: 123,
                 inactive: 12,
             }),
+            "getStakeMinimumDelegation" => json!(Response {
+                context: RpcResponseContext { slot: 1, api_version: None },
+                value: 123_456_789,
+            }),
             "getSupply" => json!(Response {
                 context: RpcResponseContext { slot: 1, api_version: None },
                 value: RpcSupply {
@@ -341,6 +347,7 @@ impl RpcSender for MockSender {
                     logs: None,
                     accounts: None,
                     units_consumed: None,
+                    return_data: None,
                 },
             })?,
             "getMinimumBalanceForRentExemption" => json![20],
@@ -410,6 +417,10 @@ impl RpcSender for MockSender {
                 num_transactions: 125,
                 num_slots: 123,
                 sample_period_secs: 60,
+            }])?,
+            "getRecentPrioritizationFees" => serde_json::to_value(vec![RpcPrioritizationFee {
+                slot: 123_456_789,
+                prioritization_fee: 10_000,
             }])?,
             "getIdentity" => serde_json::to_value(RpcIdentity {
                 identity: PUBKEY.to_string(),

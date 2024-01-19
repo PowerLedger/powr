@@ -1,7 +1,7 @@
 use {
     super::*,
     solana_entry::entry::Entry,
-    solana_ledger::shred::Shredder,
+    solana_ledger::shred::{ProcessShredsStats, ReedSolomonCache, Shredder},
     solana_sdk::{hash::Hash, signature::Keypair},
 };
 
@@ -11,6 +11,7 @@ pub(super) struct BroadcastFakeShredsRun {
     partition: usize,
     shred_version: u16,
     next_code_index: u32,
+    reed_solomon_cache: Arc<ReedSolomonCache>,
 }
 
 impl BroadcastFakeShredsRun {
@@ -20,6 +21,7 @@ impl BroadcastFakeShredsRun {
             partition,
             shred_version,
             next_code_index: 0,
+            reed_solomon_cache: Arc::<ReedSolomonCache>::default(),
         }
     }
 }
@@ -60,6 +62,9 @@ impl BroadcastRun for BroadcastFakeShredsRun {
             last_tick_height == bank.max_tick_height(),
             next_shred_index,
             self.next_code_index,
+            true, // merkle_variant
+            &self.reed_solomon_cache,
+            &mut ProcessShredsStats::default(),
         );
 
         // If the last blockhash is default, a new block is being created
@@ -78,6 +83,9 @@ impl BroadcastRun for BroadcastFakeShredsRun {
             last_tick_height == bank.max_tick_height(),
             next_shred_index,
             self.next_code_index,
+            true, // merkle_variant
+            &self.reed_solomon_cache,
+            &mut ProcessShredsStats::default(),
         );
 
         if let Some(index) = coding_shreds
@@ -132,7 +140,7 @@ impl BroadcastRun for BroadcastFakeShredsRun {
                 if fake == (i <= self.partition) {
                     // Send fake shreds to the first N peers
                     data_shreds.iter().for_each(|b| {
-                        sock.send_to(&b.payload, &peer.tvu_forwards).unwrap();
+                        sock.send_to(b.payload(), peer.tvu_forwards).unwrap();
                     });
                 }
             });
@@ -151,7 +159,7 @@ impl BroadcastRun for BroadcastFakeShredsRun {
 mod tests {
     use {
         super::*,
-        solana_gossip::contact_info::ContactInfo,
+        solana_gossip::legacy_contact_info::LegacyContactInfo as ContactInfo,
         solana_streamer::socket::SocketAddrSpace,
         std::net::{IpAddr, Ipv4Addr, SocketAddr},
     };

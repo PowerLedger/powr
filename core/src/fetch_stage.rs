@@ -21,7 +21,7 @@ use {
         net::UdpSocket,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, Mutex,
+            Arc, RwLock,
         },
         thread::{self, sleep, Builder, JoinHandle},
         time::Duration,
@@ -39,7 +39,7 @@ impl FetchStage {
         tpu_forwards_sockets: Vec<UdpSocket>,
         tpu_vote_sockets: Vec<UdpSocket>,
         exit: &Arc<AtomicBool>,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
         coalesce_ms: u64,
     ) -> (Self, PacketBatchReceiver, PacketBatchReceiver) {
         let (sender, receiver) = unbounded();
@@ -75,7 +75,7 @@ impl FetchStage {
         vote_sender: &PacketBatchSender,
         forward_sender: &PacketBatchSender,
         forward_receiver: PacketBatchReceiver,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
         coalesce_ms: u64,
         in_vote_only_mode: Option<Arc<AtomicBool>>,
         tpu_enable_udp: bool,
@@ -102,7 +102,7 @@ impl FetchStage {
     fn handle_forwarded_packets(
         recvr: &PacketBatchReceiver,
         sendr: &PacketBatchSender,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
     ) -> Result<()> {
         let mark_forwarded = |packet: &mut Packet| {
             packet.meta.flags |= PacketFlags::FORWARDED;
@@ -123,7 +123,7 @@ impl FetchStage {
         }
 
         if poh_recorder
-            .lock()
+            .read()
             .unwrap()
             .would_be_leader(HOLD_TRANSACTIONS_SLOT_OFFSET.saturating_mul(DEFAULT_TICKS_PER_SLOT))
         {
@@ -151,7 +151,7 @@ impl FetchStage {
         vote_sender: &PacketBatchSender,
         forward_sender: &PacketBatchSender,
         forward_receiver: PacketBatchReceiver,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
         coalesce_ms: u64,
         in_vote_only_mode: Option<Arc<AtomicBool>>,
         tpu_enable_udp: bool,
@@ -222,7 +222,7 @@ impl FetchStage {
         let poh_recorder = poh_recorder.clone();
 
         let fwd_thread_hdl = Builder::new()
-            .name("solana-fetch-stage-fwd-rcvr".to_string())
+            .name("solFetchStgFwRx".to_string())
             .spawn(move || loop {
                 if let Err(e) =
                     Self::handle_forwarded_packets(&forward_receiver, &sender, &poh_recorder)
@@ -240,7 +240,7 @@ impl FetchStage {
 
         let exit = exit.clone();
         let metrics_thread_hdl = Builder::new()
-            .name("solana-fetch-stage-metrics".to_string())
+            .name("solFetchStgMetr".to_string())
             .spawn(move || loop {
                 sleep(Duration::from_secs(1));
 

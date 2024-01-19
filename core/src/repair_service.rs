@@ -14,15 +14,12 @@ use {
     crossbeam_channel::{Receiver as CrossbeamReceiver, Sender as CrossbeamSender},
     lru::LruCache,
     solana_gossip::cluster_info::ClusterInfo,
-    solana_ledger::{
-        blockstore::{Blockstore, SlotMeta},
-        shred::Nonce,
-    },
+    solana_ledger::blockstore::{Blockstore, SlotMeta},
     solana_measure::measure::Measure,
     solana_runtime::{bank_forks::BankForks, contains::Contains},
     solana_sdk::{
         clock::Slot, epoch_schedule::EpochSchedule, hash::Hash, pubkey::Pubkey,
-        signer::keypair::Keypair, timing::timestamp,
+        signer::keypair::Keypair,
     },
     solana_streamer::sendmmsg::{batch_send, SendPktsError},
     std::{
@@ -37,6 +34,8 @@ use {
         time::{Duration, Instant},
     },
 };
+#[cfg(test)]
+use {solana_ledger::shred::Nonce, solana_sdk::timing::timestamp};
 
 pub type DuplicateSlotsResetSender = CrossbeamSender<Vec<(Slot, Hash)>>;
 pub type DuplicateSlotsResetReceiver = CrossbeamReceiver<Vec<(Slot, Hash)>>;
@@ -213,7 +212,7 @@ impl RepairService {
             let exit = exit.clone();
             let repair_info = repair_info.clone();
             Builder::new()
-                .name("solana-repair-service".to_string())
+                .name("solRepairSvc".to_string())
                 .spawn(move || {
                     Self::run(
                         &blockstore,
@@ -381,14 +380,7 @@ impl RepairService {
                     .chain(repair_stats.highest_shred.slot_pubkeys.iter())
                     .chain(repair_stats.orphan.slot_pubkeys.iter())
                     .map(|(slot, slot_repairs)| {
-                        (
-                            slot,
-                            slot_repairs
-                                .pubkey_repairs
-                                .iter()
-                                .map(|(_key, count)| count)
-                                .sum::<u64>(),
-                        )
+                        (slot, slot_repairs.pubkey_repairs.values().sum::<u64>())
                     })
                     .collect();
                 info!("repair_stats: {:?}", slot_to_count);
@@ -577,7 +569,7 @@ impl RepairService {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn generate_duplicate_repairs_for_slot(
         blockstore: &Blockstore,
         slot: Slot,
@@ -602,7 +594,7 @@ impl RepairService {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn generate_and_send_duplicate_repairs(
         duplicate_slot_repair_statuses: &mut HashMap<Slot, DuplicateSlotRepairStatus>,
         cluster_slots: &ClusterSlots,
@@ -655,7 +647,7 @@ impl RepairService {
         })
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn serialize_and_send_request(
         repair_type: &ShredRepairType,
         repair_socket: &UdpSocket,
@@ -677,7 +669,7 @@ impl RepairService {
         Ok(())
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn update_duplicate_slot_repair_addr(
         slot: Slot,
         status: &mut DuplicateSlotRepairStatus,
@@ -699,6 +691,7 @@ impl RepairService {
         }
     }
 
+    #[cfg(test)]
     #[allow(dead_code)]
     fn initiate_repair_for_duplicate_slot(
         slot: Slot,
@@ -734,7 +727,9 @@ impl RepairService {
 mod test {
     use {
         super::*,
-        solana_gossip::{cluster_info::Node, contact_info::ContactInfo},
+        solana_gossip::{
+            cluster_info::Node, legacy_contact_info::LegacyContactInfo as ContactInfo,
+        },
         solana_ledger::{
             blockstore::{
                 make_chaining_slot_entries, make_many_slot_entries, make_slot_entries, Blockstore,
@@ -764,8 +759,8 @@ mod test {
             let blockstore = Blockstore::open(&blockstore_path).unwrap();
 
             // Create some orphan slots
-            let (mut shreds, _) = make_slot_entries(1, 0, 1);
-            let (shreds2, _) = make_slot_entries(5, 2, 1);
+            let (mut shreds, _) = make_slot_entries(1, 0, 1, /*merkle_variant:*/ true);
+            let (shreds2, _) = make_slot_entries(5, 2, 1, /*merkle_variant:*/ true);
             shreds.extend(shreds2);
             blockstore.insert_shreds(shreds, None, false).unwrap();
             let mut repair_weight = RepairWeight::new(0);
@@ -798,7 +793,7 @@ mod test {
         {
             let blockstore = Blockstore::open(&blockstore_path).unwrap();
 
-            let (shreds, _) = make_slot_entries(2, 0, 1);
+            let (shreds, _) = make_slot_entries(2, 0, 1, /*merkle_variant:*/ true);
 
             // Write this shred to slot 2, should chain to slot 0, which we haven't received
             // any shreds for
@@ -844,7 +839,11 @@ mod test {
             let mut missing_indexes_per_slot = vec![];
             for i in (0..num_shreds).rev() {
                 let index = i % num_shreds_per_slot;
-                if index % nth == 0 {
+                // get_best_repair_shreds only returns missing shreds in
+                // between shreds received; So this should either insert the
+                // last shred in each slot, or exclude missing shreds after the
+                // last inserted shred from expected repairs.
+                if index % nth == 0 || index + 1 == num_shreds_per_slot {
                     shreds_to_write.insert(0, shreds.remove(i as usize));
                 } else if i < num_shreds_per_slot {
                     missing_indexes_per_slot.insert(0, index);
@@ -908,7 +907,12 @@ mod test {
             let num_entries_per_slot = 100;
 
             // Create some shreds
-            let (mut shreds, _) = make_slot_entries(0, 0, num_entries_per_slot as u64);
+            let (mut shreds, _) = make_slot_entries(
+                0, // slot
+                0, // parent_slot
+                num_entries_per_slot as u64,
+                true, // merkle_variant
+            );
             let num_shreds_per_slot = shreds.len() as u64;
 
             // Remove last shred (which is also last in slot) so that slot is not complete
@@ -1004,7 +1008,12 @@ mod test {
             // Create some shreds in slots 0..num_slots
             for i in start..start + num_slots {
                 let parent = if i > 0 { i - 1 } else { 0 };
-                let (shreds, _) = make_slot_entries(i, parent, num_entries_per_slot as u64);
+                let (shreds, _) = make_slot_entries(
+                    i, // slot
+                    parent,
+                    num_entries_per_slot as u64,
+                    true, // merkle_variant
+                );
 
                 blockstore.insert_shreds(shreds, None, false).unwrap();
             }
@@ -1044,7 +1053,12 @@ mod test {
 
         // Insert some shreds to create a SlotMeta, should make repairs
         let num_entries_per_slot = max_ticks_per_n_shreds(1, None) + 1;
-        let (mut shreds, _) = make_slot_entries(dead_slot, dead_slot - 1, num_entries_per_slot);
+        let (mut shreds, _) = make_slot_entries(
+            dead_slot,     // slot
+            dead_slot - 1, // parent_slot
+            num_entries_per_slot,
+            true, // merkle_variant
+        );
         blockstore
             .insert_shreds(shreds[..shreds.len() - 1].to_vec(), None, false)
             .unwrap();
@@ -1083,7 +1097,12 @@ mod test {
 
         // Insert some shreds to create a SlotMeta,
         let num_entries_per_slot = max_ticks_per_n_shreds(1, None) + 1;
-        let (mut shreds, _) = make_slot_entries(dead_slot, dead_slot - 1, num_entries_per_slot);
+        let (mut shreds, _) = make_slot_entries(
+            dead_slot,
+            dead_slot - 1,
+            num_entries_per_slot,
+            true, // merkle_variant
+        );
         blockstore
             .insert_shreds(shreds[..shreds.len() - 1].to_vec(), None, false)
             .unwrap();

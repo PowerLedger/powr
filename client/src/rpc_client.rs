@@ -20,6 +20,7 @@ use {
         rpc_response::*,
         rpc_sender::*,
     },
+    serde::Serialize,
     serde_json::Value,
     solana_account_decoder::{
         parse_token::{UiTokenAccount, UiTokenAmount},
@@ -33,10 +34,10 @@ use {
         epoch_schedule::EpochSchedule,
         fee_calculator::{FeeCalculator, FeeRateGovernor},
         hash::Hash,
-        message::Message,
+        message::{v0, Message as LegacyMessage},
         pubkey::Pubkey,
         signature::Signature,
-        transaction::{self, Transaction},
+        transaction::{self, uses_durable_nonce, Transaction, VersionedTransaction},
     },
     solana_transaction_status::{
         EncodedConfirmedBlock, EncodedConfirmedTransactionWithStatusMeta, TransactionStatus,
@@ -57,6 +58,42 @@ impl RpcClientConfig {
             commitment_config,
             ..Self::default()
         }
+    }
+}
+
+/// Trait used to add support for versioned messages to RPC APIs while
+/// retaining backwards compatibility
+pub trait SerializableMessage: Serialize {}
+impl SerializableMessage for LegacyMessage {}
+impl SerializableMessage for v0::Message {}
+
+/// Trait used to add support for versioned transactions to RPC APIs while
+/// retaining backwards compatibility
+pub trait SerializableTransaction: Serialize {
+    fn get_signature(&self) -> &Signature;
+    fn get_recent_blockhash(&self) -> &Hash;
+    fn uses_durable_nonce(&self) -> bool;
+}
+impl SerializableTransaction for Transaction {
+    fn get_signature(&self) -> &Signature {
+        &self.signatures[0]
+    }
+    fn get_recent_blockhash(&self) -> &Hash {
+        &self.message.recent_blockhash
+    }
+    fn uses_durable_nonce(&self) -> bool {
+        uses_durable_nonce(self).is_some()
+    }
+}
+impl SerializableTransaction for VersionedTransaction {
+    fn get_signature(&self) -> &Signature {
+        &self.signatures[0]
+    }
+    fn get_recent_blockhash(&self) -> &Hash {
+        self.message.recent_blockhash()
+    }
+    fn uses_durable_nonce(&self) -> bool {
+        self.uses_durable_nonce()
     }
 }
 
@@ -176,7 +213,7 @@ impl RpcClient {
             rpc_client: nonblocking::rpc_client::RpcClient::new_sender(sender, config),
             runtime: Some(
                 tokio::runtime::Builder::new_current_thread()
-                    .thread_name("rpc-client")
+                    .thread_name("solRpcClient")
                     .enable_io()
                     .enable_time()
                     .build()
@@ -622,14 +659,14 @@ impl RpcClient {
     /// ```
     pub fn send_and_confirm_transaction(
         &self,
-        transaction: &Transaction,
+        transaction: &impl SerializableTransaction,
     ) -> ClientResult<Signature> {
         self.invoke(self.rpc_client.send_and_confirm_transaction(transaction))
     }
 
     pub fn send_and_confirm_transaction_with_spinner(
         &self,
-        transaction: &Transaction,
+        transaction: &impl SerializableTransaction,
     ) -> ClientResult<Signature> {
         self.invoke(
             self.rpc_client
@@ -639,7 +676,7 @@ impl RpcClient {
 
     pub fn send_and_confirm_transaction_with_spinner_and_commitment(
         &self,
-        transaction: &Transaction,
+        transaction: &impl SerializableTransaction,
         commitment: CommitmentConfig,
     ) -> ClientResult<Signature> {
         self.invoke(
@@ -650,7 +687,7 @@ impl RpcClient {
 
     pub fn send_and_confirm_transaction_with_spinner_and_config(
         &self,
-        transaction: &Transaction,
+        transaction: &impl SerializableTransaction,
         commitment: CommitmentConfig,
         config: RpcSendTransactionConfig,
     ) -> ClientResult<Signature> {
@@ -734,7 +771,10 @@ impl RpcClient {
     /// let signature = rpc_client.send_transaction(&tx)?;
     /// # Ok::<(), ClientError>(())
     /// ```
-    pub fn send_transaction(&self, transaction: &Transaction) -> ClientResult<Signature> {
+    pub fn send_transaction(
+        &self,
+        transaction: &impl SerializableTransaction,
+    ) -> ClientResult<Signature> {
         self.invoke(self.rpc_client.send_transaction(transaction))
     }
 
@@ -819,7 +859,7 @@ impl RpcClient {
     /// ```
     pub fn send_transaction_with_config(
         &self,
-        transaction: &Transaction,
+        transaction: &impl SerializableTransaction,
         config: RpcSendTransactionConfig,
     ) -> ClientResult<Signature> {
         self.invoke(
@@ -1025,7 +1065,7 @@ impl RpcClient {
     /// ```
     pub fn simulate_transaction(
         &self,
-        transaction: &Transaction,
+        transaction: &impl SerializableTransaction,
     ) -> RpcResult<RpcSimulateTransactionResult> {
         self.invoke(self.rpc_client.simulate_transaction(transaction))
     }
@@ -1102,7 +1142,7 @@ impl RpcClient {
     /// ```
     pub fn simulate_transaction_with_config(
         &self,
-        transaction: &Transaction,
+        transaction: &impl SerializableTransaction,
         config: RpcSimulateTransactionConfig,
     ) -> RpcResult<RpcSimulateTransactionResult> {
         self.invoke(
@@ -2983,6 +3023,43 @@ impl RpcClient {
         self.invoke(self.rpc_client.get_recent_performance_samples(limit))
     }
 
+    /// Returns a list of minimum prioritization fees from recent blocks.
+    /// Takes an optional vector of addresses; if any addresses are provided, the response will
+    /// reflect the minimum prioritization fee to land a transaction locking all of the provided
+    /// accounts as writable.
+    ///
+    /// Currently, a node's prioritization-fee cache stores data from up to 150 blocks.
+    ///
+    /// # RPC Reference
+    ///
+    /// This method corresponds directly to the [`getRecentPrioritizationFees`] RPC method.
+    ///
+    /// [`getRecentPrioritizationFees`]: https://docs.solana.com/developing/clients/jsonrpc-api#getrecentprioritizationfees
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use solana_client::{
+    /// #     client_error::ClientError,
+    /// #     rpc_client::RpcClient,
+    /// # };
+    /// # use solana_sdk::signature::{Keypair, Signer};
+    /// # let rpc_client = RpcClient::new_mock("succeeds".to_string());
+    /// # let alice = Keypair::new();
+    /// # let bob = Keypair::new();
+    /// let addresses = vec![alice.pubkey(), bob.pubkey()];
+    /// let prioritization_fees = rpc_client.get_recent_prioritization_fees(
+    ///     &addresses,
+    /// )?;
+    /// # Ok::<(), ClientError>(())
+    /// ```
+    pub fn get_recent_prioritization_fees(
+        &self,
+        addresses: &[Pubkey],
+    ) -> ClientResult<Vec<RpcPrioritizationFee>> {
+        self.invoke(self.rpc_client.get_recent_prioritization_fees(addresses))
+    }
+
     /// Returns the identity pubkey for the current node.
     ///
     /// # RPC Reference
@@ -3712,6 +3789,60 @@ impl RpcClient {
         )
     }
 
+    /// Returns the stake minimum delegation, in lamports.
+    ///
+    /// # RPC Reference
+    ///
+    /// This method corresponds directly to the [`getStakeMinimumDelegation`] RPC method.
+    ///
+    /// [`getStakeMinimumDelegation`]: https://docs.solana.com/developing/clients/jsonrpc-api#getstakeminimumdelegation
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use solana_client::{
+    /// #     rpc_client::RpcClient,
+    /// #     client_error::ClientError,
+    /// # };
+    /// # let rpc_client = RpcClient::new_mock("succeeds".to_string());
+    /// let stake_minimum_delegation = rpc_client.get_stake_minimum_delegation()?;
+    /// # Ok::<(), ClientError>(())
+    /// ```
+    pub fn get_stake_minimum_delegation(&self) -> ClientResult<u64> {
+        self.invoke(self.rpc_client.get_stake_minimum_delegation())
+    }
+
+    /// Returns the stake minimum delegation, in lamports, based on the commitment level.
+    ///
+    /// # RPC Reference
+    ///
+    /// This method corresponds directly to the [`getStakeMinimumDelegation`] RPC method.
+    ///
+    /// [`getStakeMinimumDelegation`]: https://docs.solana.com/developing/clients/jsonrpc-api#getstakeminimumdelegation
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use solana_client::{
+    /// #     rpc_client::RpcClient,
+    /// #     client_error::ClientError,
+    /// # };
+    /// # use solana_sdk::commitment_config::CommitmentConfig;
+    /// # let rpc_client = RpcClient::new_mock("succeeds".to_string());
+    /// let stake_minimum_delegation =
+    /// rpc_client.get_stake_minimum_delegation_with_commitment(CommitmentConfig::confirmed())?;
+    /// # Ok::<(), ClientError>(())
+    /// ```
+    pub fn get_stake_minimum_delegation_with_commitment(
+        &self,
+        commitment_config: CommitmentConfig,
+    ) -> ClientResult<u64> {
+        self.invoke(
+            self.rpc_client
+                .get_stake_minimum_delegation_with_commitment(commitment_config),
+        )
+    }
+
     /// Request the transaction count.
     pub fn get_transaction_count(&self) -> ClientResult<u64> {
         self.invoke(self.rpc_client.get_transaction_count())
@@ -4035,7 +4166,7 @@ impl RpcClient {
     }
 
     #[allow(deprecated)]
-    pub fn get_fee_for_message(&self, message: &Message) -> ClientResult<u64> {
+    pub fn get_fee_for_message(&self, message: &impl SerializableMessage) -> ClientResult<u64> {
         self.invoke(self.rpc_client.get_fee_for_message(message))
     }
 
@@ -4316,6 +4447,26 @@ mod tests {
         #[allow(deprecated)]
         let is_err = rpc_client.get_latest_blockhash().is_err();
         assert!(is_err);
+    }
+
+    #[test]
+    fn test_get_stake_minimum_delegation() {
+        let expected_minimum_delegation: u64 = 123_456_789;
+        let rpc_client = RpcClient::new_mock("succeeds".to_string());
+
+        // Test: without commitment
+        {
+            let actual_minimum_delegation = rpc_client.get_stake_minimum_delegation().unwrap();
+            assert_eq!(expected_minimum_delegation, actual_minimum_delegation);
+        }
+
+        // Test: with commitment
+        {
+            let actual_minimum_delegation = rpc_client
+                .get_stake_minimum_delegation_with_commitment(CommitmentConfig::confirmed())
+                .unwrap();
+            assert_eq!(expected_minimum_delegation, actual_minimum_delegation);
+        }
     }
 
     #[test]

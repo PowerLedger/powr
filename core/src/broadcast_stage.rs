@@ -14,7 +14,10 @@ use {
     },
     crossbeam_channel::{unbounded, Receiver, RecvError, RecvTimeoutError, Sender},
     itertools::Itertools,
-    solana_gossip::cluster_info::{ClusterInfo, ClusterInfoError, DATA_PLANE_FANOUT},
+    solana_gossip::{
+        cluster_info::{ClusterInfo, ClusterInfoError},
+        legacy_contact_info::LegacyContactInfo as ContactInfo,
+    },
     solana_ledger::{blockstore::Blockstore, shred::Shred},
     solana_measure::measure::Measure,
     solana_metrics::{inc_new_counter_error, inc_new_counter_info},
@@ -32,7 +35,6 @@ use {
     },
     std::{
         collections::{HashMap, HashSet},
-        iter::repeat,
         net::UdpSocket,
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -64,7 +66,7 @@ pub enum BroadcastStageReturnType {
     ChannelDisconnected,
 }
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub enum BroadcastStageType {
     Standard,
     FailEntryVerification,
@@ -253,7 +255,7 @@ impl BroadcastStage {
             let blockstore = blockstore.clone();
             let cluster_info = cluster_info.clone();
             Builder::new()
-                .name("solana-broadcaster".to_string())
+                .name("solBroadcast".to_string())
                 .spawn(move || {
                     let _finalizer = Finalizer::new(exit);
                     Self::run(
@@ -275,7 +277,7 @@ impl BroadcastStage {
             let cluster_info = cluster_info.clone();
             let bank_forks = bank_forks.clone();
             let t = Builder::new()
-                .name("solana-broadcaster-transmit".to_string())
+                .name("solBroadcastTx".to_string())
                 .spawn(move || loop {
                     let res =
                         bs_transmit.transmit(&socket_receiver, &cluster_info, &sock, &bank_forks);
@@ -293,7 +295,7 @@ impl BroadcastStage {
             let mut bs_record = broadcast_stage_run.clone();
             let btree = blockstore.clone();
             let t = Builder::new()
-                .name("solana-broadcaster-record".to_string())
+                .name("solBroadcastRec".to_string())
                 .spawn(move || loop {
                     let res = bs_record.record(&blockstore_receiver, &btree);
                     let res = Self::handle_error(res, "solana-broadcaster-record");
@@ -306,7 +308,7 @@ impl BroadcastStage {
         }
 
         let retransmit_thread = Builder::new()
-            .name("solana-broadcaster-retransmit".to_string())
+            .name("solBroadcastRtx".to_string())
             .spawn(move || loop {
                 if let Some(res) = Self::handle_error(
                     Self::check_retransmit_signals(
@@ -383,8 +385,8 @@ fn update_peer_stats(
     }
 }
 
-/// broadcast messages from the leader to layer 1 nodes
-/// # Remarks
+/// Broadcasts shreds from the leader (i.e. this node) to the root of the
+/// turbine retransmit tree for each shred.
 pub fn broadcast_shreds(
     s: &UdpSocket,
     shreds: &[Shred],
@@ -409,14 +411,10 @@ pub fn broadcast_shreds(
             let cluster_nodes =
                 cluster_nodes_cache.get(slot, &root_bank, &working_bank, cluster_info);
             update_peer_stats(&cluster_nodes, last_datapoint_submit);
-            let root_bank = root_bank.clone();
             shreds.flat_map(move |shred| {
-                repeat(&shred.payload).zip(cluster_nodes.get_broadcast_addrs(
-                    shred,
-                    &root_bank,
-                    DATA_PLANE_FANOUT,
-                    socket_addr_space,
-                ))
+                let node = cluster_nodes.get_broadcast_peer(&shred.id())?;
+                ContactInfo::is_valid_address(&node.tvu, socket_addr_space)
+                    .then(|| (shred.payload(), node.tvu))
             })
         })
         .collect();
@@ -442,10 +440,10 @@ pub mod test {
         solana_entry::entry::create_ticks,
         solana_gossip::cluster_info::{ClusterInfo, Node},
         solana_ledger::{
-            blockstore::{make_slot_entries, Blockstore},
+            blockstore::Blockstore,
             genesis_utils::{create_genesis_config, GenesisConfigInfo},
             get_tmp_ledger_path,
-            shred::{max_ticks_per_n_shreds, ProcessShredsStats, Shredder},
+            shred::{max_ticks_per_n_shreds, ProcessShredsStats, ReedSolomonCache, Shredder},
         },
         solana_runtime::bank::Bank,
         solana_sdk::{
@@ -472,16 +470,21 @@ pub mod test {
         Vec<Arc<Vec<Shred>>>,
     ) {
         let num_entries = max_ticks_per_n_shreds(num, None);
-        let (data_shreds, _) = make_slot_entries(slot, 0, num_entries);
-        let keypair = Keypair::new();
-        let coding_shreds = Shredder::data_shreds_to_coding_shreds(
-            &keypair,
-            &data_shreds[0..],
-            true, // is_last_in_slot
-            0,    // next_code_index
-            &mut ProcessShredsStats::default(),
+        let entries = create_ticks(num_entries, /*hashes_per_tick:*/ 0, Hash::default());
+        let shredder = Shredder::new(
+            slot, /*parent_slot:*/ 0, /*reference_tick:*/ 0, /*version:*/ 0,
         )
         .unwrap();
+        let (data_shreds, coding_shreds) = shredder.entries_to_shreds(
+            &Keypair::new(),
+            &entries,
+            true, // is_last_in_slot
+            0,    // next_shred_index,
+            0,    // next_code_index
+            true, // merkle_variant
+            &ReedSolomonCache::default(),
+            &mut ProcessShredsStats::default(),
+        );
         (
             data_shreds.clone(),
             coding_shreds.clone(),

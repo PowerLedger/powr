@@ -32,7 +32,7 @@ use {
         convert::TryFrom,
         io,
         net::{Ipv4Addr, SocketAddr},
-        sync::{Arc, RwLock},
+        sync::{atomic::AtomicBool, Arc, RwLock},
         thread::Builder,
         time::Duration,
     },
@@ -105,7 +105,7 @@ impl BanksServer {
         }
         let server_bank_forks = bank_forks.clone();
         Builder::new()
-            .name("solana-bank-forks-client".to_string())
+            .name("solBankForksCli".to_string())
             .spawn(move || Self::run(server_bank_forks, transaction_receiver))
             .unwrap();
         Self::new(
@@ -159,6 +159,38 @@ fn verify_transaction(
         Err(err)
     } else {
         Ok(())
+    }
+}
+
+fn simulate_transaction(
+    bank: &Bank,
+    transaction: Transaction,
+) -> BanksTransactionResultWithSimulation {
+    let sanitized_transaction = match SanitizedTransaction::try_from_legacy_transaction(transaction)
+    {
+        Err(err) => {
+            return BanksTransactionResultWithSimulation {
+                result: Some(Err(err)),
+                simulation_details: None,
+            };
+        }
+        Ok(tx) => tx,
+    };
+    let TransactionSimulationResult {
+        result,
+        logs,
+        post_simulation_accounts: _,
+        units_consumed,
+        return_data,
+    } = bank.simulate_transaction_unchecked(sanitized_transaction);
+    let simulation_details = TransactionSimulationDetails {
+        logs,
+        units_consumed,
+        return_data,
+    };
+    BanksTransactionResultWithSimulation {
+        result: Some(result),
+        simulation_details: Some(simulation_details),
     }
 }
 
@@ -253,39 +285,25 @@ impl Banks for BanksServer {
         transaction: Transaction,
         commitment: CommitmentLevel,
     ) -> BanksTransactionResultWithSimulation {
-        let sanitized_transaction =
-            match SanitizedTransaction::try_from_legacy_transaction(transaction.clone()) {
-                Err(err) => {
-                    return BanksTransactionResultWithSimulation {
-                        result: Some(Err(err)),
-                        simulation_details: None,
-                    };
-                }
-                Ok(tx) => tx,
-            };
-        if let TransactionSimulationResult {
-            result: Err(err),
-            logs,
-            post_simulation_accounts: _,
-            units_consumed,
-        } = self
-            .bank(commitment)
-            .simulate_transaction_unchecked(sanitized_transaction)
-        {
-            return BanksTransactionResultWithSimulation {
-                result: Some(Err(err)),
-                simulation_details: Some(TransactionSimulationDetails {
-                    logs,
-                    units_consumed,
-                }),
-            };
-        }
-        BanksTransactionResultWithSimulation {
-            result: self
+        let mut simulation_result =
+            simulate_transaction(&self.bank(commitment), transaction.clone());
+        // Simulation was ok, so process the real transaction and replace the
+        // simulation's result with the real transaction result
+        if let Some(Ok(_)) = simulation_result.result {
+            simulation_result.result = self
                 .process_transaction_with_commitment_and_context(ctx, transaction, commitment)
-                .await,
-            simulation_details: None,
+                .await;
         }
+        simulation_result
+    }
+
+    async fn simulate_transaction_with_commitment_and_context(
+        self,
+        _: Context,
+        transaction: Transaction,
+        commitment: CommitmentLevel,
+    ) -> BanksTransactionResultWithSimulation {
+        simulate_transaction(&self.bank(commitment), transaction)
     }
 
     async fn process_transaction_with_commitment_and_context(
@@ -377,6 +395,7 @@ pub async fn start_tcp_server(
     bank_forks: Arc<RwLock<BankForks>>,
     block_commitment_cache: Arc<RwLock<BlockCommitmentCache>>,
     connection_cache: Arc<ConnectionCache>,
+    exit: Arc<AtomicBool>,
 ) -> io::Result<()> {
     // Note: These settings are copied straight from the tarpc example.
     let server = tcp::listen(listen_addr, Bincode::default)
@@ -404,6 +423,7 @@ pub async fn start_tcp_server(
                 &connection_cache,
                 5_000,
                 0,
+                exit.clone(),
             );
 
             let server = BanksServer::new(

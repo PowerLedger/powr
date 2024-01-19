@@ -39,6 +39,7 @@ async fn start_abortable_tcp_server(
         bank_forks.clone(),
         block_commitment_cache.clone(),
         connection_cache,
+        exit.clone(),
     )
     .fuse();
     let interval = IntervalStream::new(time::interval(Duration::from_millis(100))).fuse();
@@ -88,7 +89,7 @@ impl RpcBanksService {
         let connection_cache = connection_cache.clone();
         let exit = exit.clone();
         let thread_hdl = Builder::new()
-            .name("solana-rpc-banks".to_string())
+            .name("solRpcBanksSvc".to_string())
             .spawn(move || {
                 Self::run(
                     listen_addr,

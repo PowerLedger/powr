@@ -12,7 +12,7 @@ use {
     },
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Source {
     Cluster,
     NonceAccount(Pubkey),
@@ -107,7 +107,7 @@ impl Source {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum BlockhashQuery {
     None(Hash),
     FeeCalculator(Source, Hash),
@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn test_blockhash_query_new_ok() {
         let blockhash = hash(&[1u8]);
-        let nonce_pubkey = Pubkey::new(&[1u8; 32]);
+        let nonce_pubkey = Pubkey::from([1u8; 32]);
 
         assert_eq!(
             BlockhashQuery::new(Some(blockhash), true, None),
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_blockhash_query_new_nonce_fail() {
-        let nonce_pubkey = Pubkey::new(&[1u8; 32]);
+        let nonce_pubkey = Pubkey::from([1u8; 32]);
         BlockhashQuery::new(None, true, Some(nonce_pubkey));
     }
 
@@ -287,7 +287,7 @@ mod tests {
             BlockhashQuery::All(blockhash_query::Source::Cluster),
         );
 
-        let nonce_pubkey = Pubkey::new(&[1u8; 32]);
+        let nonce_pubkey = Pubkey::from([1u8; 32]);
         let nonce_string = nonce_pubkey.to_string();
         let matches = test_commands.clone().get_matches_from(vec![
             "blockhash_query_test",
@@ -341,7 +341,7 @@ mod tests {
             // We can really only hit this case if the arg requirements
             // are broken, so unset the requires() to recreate that condition
             .arg(sign_only_arg().requires(""));
-        let nonce_pubkey = Pubkey::new(&[1u8; 32]);
+        let nonce_pubkey = Pubkey::from([1u8; 32]);
         let nonce_string = nonce_pubkey.to_string();
 
         let matches = test_commands.clone().get_matches_from(vec![
@@ -416,26 +416,22 @@ mod tests {
             .get_blockhash_and_fee_calculator(&rpc_client, CommitmentConfig::default())
             .is_err());
 
-        let durable_nonce =
-            DurableNonce::from_blockhash(&Hash::new(&[2u8; 32]), /*separate_domains:*/ true);
+        let durable_nonce = DurableNonce::from_blockhash(&Hash::new(&[2u8; 32]));
         let nonce_blockhash = *durable_nonce.as_hash();
         let nonce_fee_calc = FeeCalculator::new(4242);
         let data = nonce::state::Data {
-            authority: Pubkey::new(&[3u8; 32]),
+            authority: Pubkey::from([3u8; 32]),
             durable_nonce,
             fee_calculator: nonce_fee_calc,
         };
         let nonce_account = Account::new_data_with_space(
             42,
-            &nonce::state::Versions::new(
-                nonce::State::Initialized(data),
-                true, // separate_domains
-            ),
+            &nonce::state::Versions::new(nonce::State::Initialized(data)),
             nonce::State::size(),
             &system_program::id(),
         )
         .unwrap();
-        let nonce_pubkey = Pubkey::new(&[4u8; 32]);
+        let nonce_pubkey = Pubkey::from([4u8; 32]);
         let rpc_nonce_account = UiAccount::encode(
             &nonce_pubkey,
             &nonce_account,

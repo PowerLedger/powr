@@ -1,5 +1,5 @@
 //! The `banking_stage` processes Transaction messages. It is intended to be used
-//! to contruct a software pipeline. The stage uses all available CPU cores and
+//! to construct a software pipeline. The stage uses all available CPU cores and
 //! can do its processing in parallel with signature verification on the GPU.
 
 use {
@@ -24,11 +24,13 @@ use {
     min_max_heap::MinMaxHeap,
     solana_client::{connection_cache::ConnectionCache, tpu_connection::TpuConnection},
     solana_entry::entry::hash_transactions,
-    solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
+    solana_gossip::{
+        cluster_info::ClusterInfo, legacy_contact_info::LegacyContactInfo as ContactInfo,
+    },
     solana_ledger::{
         blockstore_processor::TransactionStatusSender, token_balances::collect_token_balances,
     },
-    solana_measure::measure::Measure,
+    solana_measure::{measure, measure::Measure},
     solana_metrics::inc_new_counter_info,
     solana_perf::{
         data_budget::DataBudget,
@@ -40,7 +42,7 @@ use {
     solana_runtime::{
         bank::{
             Bank, CommitTransactionCounts, LoadAndExecuteTransactionsOutput,
-            TransactionBalancesSet, TransactionCheckResult, TransactionExecutionResult,
+            TransactionBalancesSet, TransactionCheckResult,
         },
         bank_forks::BankForks,
         bank_utils,
@@ -57,7 +59,7 @@ use {
         pubkey::Pubkey,
         saturating_add_assign,
         timing::{duration_as_ms, timestamp, AtomicInterval},
-        transaction::{self, SanitizedTransaction, TransactionError},
+        transaction::{self, SanitizedTransaction, TransactionError, VersionedTransaction},
         transport::TransportError,
     },
     solana_streamer::sendmmsg::batch_send,
@@ -70,7 +72,7 @@ use {
         rc::Rc,
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
-            Arc, Mutex, RwLock,
+            Arc, RwLock,
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
@@ -109,12 +111,12 @@ struct RecordTransactionsSummary {
     // Metrics describing how time was spent recording transactions
     record_transactions_timings: RecordTransactionsTimings,
     // Result of trying to record the transactions into the PoH stream
-    result: Result<usize, PohRecorderError>,
-    // Transactions that failed record, and are retryable
-    retryable_indexes: Vec<usize>,
+    result: Result<(), PohRecorderError>,
+    // Index in the slot of the first transaction recorded
+    starting_transaction_index: Option<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CommitTransactionDetails {
     Committed { compute_units: u64 },
     NotCommitted,
@@ -209,7 +211,7 @@ impl BankingStageStats {
     }
 
     fn report(&mut self, report_interval_ms: u64) {
-        // skip repoting metrics if stats is empty
+        // skip reporting metrics if stats is empty
         if self.is_empty() {
             return;
         }
@@ -400,13 +402,14 @@ impl BankingStage {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         cluster_info: &Arc<ClusterInfo>,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
         verified_receiver: BankingPacketReceiver,
         tpu_verified_vote_receiver: BankingPacketReceiver,
         verified_vote_receiver: BankingPacketReceiver,
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: ReplayVoteSender,
         cost_model: Arc<RwLock<CostModel>>,
+        log_messages_bytes_limit: Option<usize>,
         connection_cache: Arc<ConnectionCache>,
         bank_forks: Arc<RwLock<BankForks>>,
     ) -> Self {
@@ -420,6 +423,7 @@ impl BankingStage {
             transaction_status_sender,
             gossip_vote_sender,
             cost_model,
+            log_messages_bytes_limit,
             connection_cache,
             bank_forks,
         )
@@ -428,7 +432,7 @@ impl BankingStage {
     #[allow(clippy::too_many_arguments)]
     pub fn new_num_threads(
         cluster_info: &Arc<ClusterInfo>,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
         verified_receiver: BankingPacketReceiver,
         tpu_verified_vote_receiver: BankingPacketReceiver,
         verified_vote_receiver: BankingPacketReceiver,
@@ -436,6 +440,7 @@ impl BankingStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: ReplayVoteSender,
         cost_model: Arc<RwLock<CostModel>>,
+        log_messages_bytes_limit: Option<usize>,
         connection_cache: Arc<ConnectionCache>,
         bank_forks: Arc<RwLock<BankForks>>,
     ) -> Self {
@@ -472,7 +477,7 @@ impl BankingStage {
                 let connection_cache = connection_cache.clone();
                 let bank_forks = bank_forks.clone();
                 Builder::new()
-                    .name(format!("solana-banking-stage-tx-{}", i))
+                    .name(format!("solBanknStgTx{:02}", i))
                     .spawn(move || {
                         Self::process_loop(
                             &verified_receiver,
@@ -486,6 +491,7 @@ impl BankingStage {
                             gossip_vote_sender,
                             &data_budget,
                             cost_model,
+                            log_messages_bytes_limit,
                             connection_cache,
                             &bank_forks,
                         );
@@ -534,6 +540,14 @@ impl BankingStage {
             result
         };
 
+        // Iterates buffered packets from high priority to low, places each packet into
+        // forwarding account buckets by calling `forward_packet_batches_by_accounts.add_packet()`.
+        // Iteration stops as soon as `add_packet()` returns false when a packet fails to fit into
+        // buckets, ignoring remaining lower priority packets that could fit.
+        // The motivation of this is during bot spamming, buffer is likely to be filled with
+        // transactions have higher priority and write to same account(s), other lower priority
+        // transactions will not make into buffer, therefore it shall exit as soon as first
+        // transaction failed to fit in forwarding buckets.
         buffered_packet_batches.iter_desc(filter_forwardable_packet);
 
         inc_new_counter_info!(
@@ -554,7 +568,7 @@ impl BankingStage {
         connection_cache: &ConnectionCache,
         forward_option: &ForwardOption,
         cluster_info: &ClusterInfo,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
         socket: &UdpSocket,
         forwardable_packets: impl Iterator<Item = &'a Packet>,
         data_budget: &DataBudget,
@@ -578,7 +592,8 @@ impl BankingStage {
         };
 
         const INTERVAL_MS: u64 = 100;
-        const MAX_BYTES_PER_SECOND: usize = 10_000 * 1200;
+        // 12 MB outbound limit per second
+        const MAX_BYTES_PER_SECOND: usize = 12_000_000;
         const MAX_BYTES_PER_INTERVAL: usize = MAX_BYTES_PER_SECOND * INTERVAL_MS as usize / 1000;
         const MAX_BYTES_BUDGET: usize = MAX_BYTES_PER_INTERVAL * 5;
         data_budget.update(INTERVAL_MS, |bytes| {
@@ -646,7 +661,7 @@ impl BankingStage {
     pub fn consume_buffered_packets(
         _my_pubkey: &Pubkey,
         max_tx_ingestion_ns: u128,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
         buffered_packet_batches: &mut UnprocessedPacketBatches,
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: &ReplayVoteSender,
@@ -655,30 +670,30 @@ impl BankingStage {
         recorder: &TransactionRecorder,
         qos_service: &QosService,
         slot_metrics_tracker: &mut LeaderSlotMetricsTracker,
+        log_messages_bytes_limit: Option<usize>,
     ) {
         let mut rebuffered_packet_count = 0;
         let mut consumed_buffered_packets_count = 0;
         let buffered_packets_len = buffered_packet_batches.len();
         let mut proc_start = Measure::start("consume_buffered_process");
         let mut reached_end_of_slot = false;
+        let original_capacity = buffered_packet_batches.capacity();
+        let mut retryable_packets = {
+            std::mem::replace(
+                &mut buffered_packet_batches.packet_priority_queue,
+                MinMaxHeap::new(),
+            )
+        };
 
-        let (bank_start, poh_recorder_lock_time) = Measure::this(
-            |_| poh_recorder.lock().unwrap().bank_start(),
-            (),
-            "poh_recorder_lock",
+        let (bank_start, poh_recorder_lock_time) = measure!(
+            poh_recorder.read().unwrap().bank_start(),
+            "poh_recorder.read",
         );
         slot_metrics_tracker.increment_consume_buffered_packets_poh_recorder_lock_us(
             poh_recorder_lock_time.as_us(),
         );
 
-        let mut retryable_packets = MinMaxHeap::new();
-        std::mem::swap(
-            &mut retryable_packets,
-            &mut buffered_packet_batches.packet_priority_queue,
-        );
-        let original_capacity = retryable_packets.capacity();
-
-        let mut new_retryable_packets: MinMaxHeap<_> = if let Some(BankStart {
+        let new_retryable_packets: MinMaxHeap<_> = if let Some(BankStart {
             working_bank,
             bank_creation_time,
         }) = bank_start
@@ -730,28 +745,27 @@ impl BankingStage {
                 );
 
                 let (process_transactions_summary, process_packets_transactions_time) =
-                    Measure::this(
-                        |_| {
-                            Self::process_packets_transactions(
-                                &working_bank,
-                                &bank_creation_time,
-                                recorder,
-                                &payload.sanitized_transactions,
-                                transaction_status_sender.clone(),
-                                gossip_vote_sender,
-                                banking_stage_stats,
-                                qos_service,
-                                payload.slot_metrics_tracker,
-                            )
-                        },
-                        (),
-                        "process_packets_transactions",
-                    );
+                    measure!(Self::process_packets_transactions(
+                        &working_bank,
+                        &bank_creation_time,
+                        recorder,
+                        &payload.sanitized_transactions,
+                        transaction_status_sender.clone(),
+                        gossip_vote_sender,
+                        banking_stage_stats,
+                        qos_service,
+                        payload.slot_metrics_tracker,
+                        log_messages_bytes_limit
+                    ));
                 payload
                     .slot_metrics_tracker
                     .increment_process_packets_transactions_us(
                         process_packets_transactions_time.as_us(),
                     );
+
+                // reset batch locks and transactions for next iterate call
+                payload.write_accounts.clear();
+                payload.sanitized_transactions.clear();
 
                 let ProcessTransactionsSummary {
                     reached_max_poh_height,
@@ -759,32 +773,13 @@ impl BankingStage {
                     ..
                 } = process_transactions_summary;
 
-                // reset batch locks and transactions for next iterate call
-                payload.write_accounts.clear();
-                payload.sanitized_transactions.clear();
-
                 if reached_max_poh_height
                     || !Bank::should_bank_still_be_processing_txs(
                         &bank_creation_time,
                         max_tx_ingestion_ns,
                     )
                 {
-                    let poh_recorder_lock_time = {
-                        let (_poh_recorder_locked, poh_recorder_lock_time) = Measure::this(
-                            |_| poh_recorder.lock().unwrap(),
-                            (),
-                            "poh_recorder.lock",
-                        );
-
-                        payload.reached_end_of_slot = true;
-                        poh_recorder_lock_time
-                    };
-
-                    payload
-                        .slot_metrics_tracker
-                        .increment_consume_buffered_packets_poh_recorder_lock_us(
-                            poh_recorder_lock_time.as_us(),
-                        );
+                    payload.reached_end_of_slot = true;
                 }
 
                 // The difference between all transactions passed to execution and the ones that
@@ -846,10 +841,7 @@ impl BankingStage {
             retryable_packets
         };
 
-        std::mem::swap(
-            &mut new_retryable_packets,
-            &mut buffered_packet_batches.packet_priority_queue,
-        );
+        buffered_packet_batches.packet_priority_queue = new_retryable_packets;
 
         if reached_end_of_slot {
             slot_metrics_tracker
@@ -869,7 +861,8 @@ impl BankingStage {
             (consumed_buffered_packets_count as f32) / (proc_start.as_s())
         );
 
-        // Assert unprocessed queue is still consistent
+        // Assert unprocessed queue is still consistent and maintains original capacity
+        assert_eq!(buffered_packet_batches.capacity(), original_capacity);
         assert_eq!(
             buffered_packet_batches.packet_priority_queue.len(),
             buffered_packet_batches.message_hash_to_transaction.len()
@@ -915,17 +908,13 @@ impl BankingStage {
         }
 
         // Try to deserialize the packet
-        let (maybe_sanitized_transaction, sanitization_time) = Measure::this(
-            |_| {
-                unprocessed_packet_batches::transaction_from_deserialized_packet(
-                    packet,
-                    &working_bank.feature_set,
-                    working_bank.vote_only_bank(),
-                    working_bank,
-                )
-            },
-            (),
-            "sanitization_time",
+        let (maybe_sanitized_transaction, sanitization_time) = measure!(
+            unprocessed_packet_batches::transaction_from_deserialized_packet(
+                packet,
+                &working_bank.feature_set,
+                working_bank.vote_only_bank(),
+                working_bank,
+            )
         );
 
         let sanitization_time_us = sanitization_time.as_us();
@@ -1011,7 +1000,7 @@ impl BankingStage {
     fn process_buffered_packets(
         my_pubkey: &Pubkey,
         socket: &UdpSocket,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
         cluster_info: &ClusterInfo,
         buffered_packet_batches: &mut UnprocessedPacketBatches,
         forward_option: &ForwardOption,
@@ -1022,12 +1011,13 @@ impl BankingStage {
         data_budget: &DataBudget,
         qos_service: &QosService,
         slot_metrics_tracker: &mut LeaderSlotMetricsTracker,
+        log_messages_bytes_limit: Option<usize>,
         connection_cache: &ConnectionCache,
         tracer_packet_stats: &mut TracerPacketStats,
         bank_forks: &Arc<RwLock<BankForks>>,
     ) {
-        let (decision, make_decision_time) = Measure::this(
-            |_| {
+        let ((metrics_action, decision), make_decision_time) = measure!(
+            {
                 let bank_start;
                 let (
                     leader_at_slot_offset,
@@ -1035,7 +1025,7 @@ impl BankingStage {
                     would_be_leader,
                     would_be_leader_shortly,
                 ) = {
-                    let poh = poh_recorder.lock().unwrap();
+                    let poh = poh_recorder.read().unwrap();
                     bank_start = poh.bank_start();
                     (
                         poh.leader_after_n_slots(FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET),
@@ -1047,89 +1037,93 @@ impl BankingStage {
                         ),
                     )
                 };
-                slot_metrics_tracker.update_on_leader_slot_boundary(&bank_start);
-                Self::consume_or_forward_packets(
-                    my_pubkey,
-                    leader_at_slot_offset,
-                    bank_still_processing_txs,
-                    would_be_leader,
-                    would_be_leader_shortly,
+
+                (
+                    slot_metrics_tracker.check_leader_slot_boundary(&bank_start),
+                    Self::consume_or_forward_packets(
+                        my_pubkey,
+                        leader_at_slot_offset,
+                        bank_still_processing_txs,
+                        would_be_leader,
+                        would_be_leader_shortly,
+                    ),
                 )
             },
-            (),
             "make_decision",
         );
         slot_metrics_tracker.increment_make_decision_us(make_decision_time.as_us());
 
         match decision {
             BufferedPacketsDecision::Consume(max_tx_ingestion_ns) => {
-                let (_, consume_buffered_packets_time) = Measure::this(
-                    |_| {
-                        Self::consume_buffered_packets(
-                            my_pubkey,
-                            max_tx_ingestion_ns,
-                            poh_recorder,
-                            buffered_packet_batches,
-                            transaction_status_sender,
-                            gossip_vote_sender,
-                            None::<Box<dyn Fn()>>,
-                            banking_stage_stats,
-                            recorder,
-                            qos_service,
-                            slot_metrics_tracker,
-                        )
-                    },
-                    (),
+                // Take metrics action before consume packets (potentially resetting the
+                // slot metrics tracker to the next slot) so that we don't count the
+                // packet processing metrics from the next slot towards the metrics
+                // of the previous slot
+                slot_metrics_tracker.apply_action(metrics_action);
+                let (_, consume_buffered_packets_time) = measure!(
+                    Self::consume_buffered_packets(
+                        my_pubkey,
+                        max_tx_ingestion_ns,
+                        poh_recorder,
+                        buffered_packet_batches,
+                        transaction_status_sender,
+                        gossip_vote_sender,
+                        None::<Box<dyn Fn()>>,
+                        banking_stage_stats,
+                        recorder,
+                        qos_service,
+                        slot_metrics_tracker,
+                        log_messages_bytes_limit
+                    ),
                     "consume_buffered_packets",
                 );
                 slot_metrics_tracker
                     .increment_consume_buffered_packets_us(consume_buffered_packets_time.as_us());
             }
             BufferedPacketsDecision::Forward => {
-                let (_, forward_time) = Measure::this(
-                    |_| {
-                        Self::handle_forwarding(
-                            forward_option,
-                            cluster_info,
-                            buffered_packet_batches,
-                            poh_recorder,
-                            socket,
-                            false,
-                            data_budget,
-                            slot_metrics_tracker,
-                            banking_stage_stats,
-                            connection_cache,
-                            tracer_packet_stats,
-                            bank_forks,
-                        )
-                    },
-                    (),
+                let (_, forward_time) = measure!(
+                    Self::handle_forwarding(
+                        forward_option,
+                        cluster_info,
+                        buffered_packet_batches,
+                        poh_recorder,
+                        socket,
+                        false,
+                        data_budget,
+                        slot_metrics_tracker,
+                        banking_stage_stats,
+                        connection_cache,
+                        tracer_packet_stats,
+                        bank_forks,
+                    ),
                     "forward",
                 );
                 slot_metrics_tracker.increment_forward_us(forward_time.as_us());
+                // Take metrics action after forwarding packets to include forwarded
+                // metrics into current slot
+                slot_metrics_tracker.apply_action(metrics_action);
             }
             BufferedPacketsDecision::ForwardAndHold => {
-                let (_, forward_and_hold_time) = Measure::this(
-                    |_| {
-                        Self::handle_forwarding(
-                            forward_option,
-                            cluster_info,
-                            buffered_packet_batches,
-                            poh_recorder,
-                            socket,
-                            true,
-                            data_budget,
-                            slot_metrics_tracker,
-                            banking_stage_stats,
-                            connection_cache,
-                            tracer_packet_stats,
-                            bank_forks,
-                        )
-                    },
-                    (),
+                let (_, forward_and_hold_time) = measure!(
+                    Self::handle_forwarding(
+                        forward_option,
+                        cluster_info,
+                        buffered_packet_batches,
+                        poh_recorder,
+                        socket,
+                        true,
+                        data_budget,
+                        slot_metrics_tracker,
+                        banking_stage_stats,
+                        connection_cache,
+                        tracer_packet_stats,
+                        bank_forks,
+                    ),
                     "forward_and_hold",
                 );
                 slot_metrics_tracker.increment_forward_and_hold_us(forward_and_hold_time.as_us());
+                // Take metrics action after forwarding packets
+                slot_metrics_tracker.apply_action(metrics_action);
             }
             _ => (),
         }
@@ -1140,7 +1134,7 @@ impl BankingStage {
         forward_option: &ForwardOption,
         cluster_info: &ClusterInfo,
         buffered_packet_batches: &mut UnprocessedPacketBatches,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
         socket: &UdpSocket,
         hold: bool,
         data_budget: &DataBudget,
@@ -1226,7 +1220,7 @@ impl BankingStage {
     #[allow(clippy::too_many_arguments)]
     fn process_loop(
         verified_receiver: &BankingPacketReceiver,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
         cluster_info: &ClusterInfo,
         recv_start: &mut Instant,
         forward_option: ForwardOption,
@@ -1236,10 +1230,11 @@ impl BankingStage {
         gossip_vote_sender: ReplayVoteSender,
         data_budget: &DataBudget,
         cost_model: Arc<RwLock<CostModel>>,
+        log_messages_bytes_limit: Option<usize>,
         connection_cache: Arc<ConnectionCache>,
         bank_forks: &Arc<RwLock<BankForks>>,
     ) {
-        let recorder = poh_recorder.lock().unwrap().recorder();
+        let recorder = poh_recorder.read().unwrap().recorder();
         let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
         let mut buffered_packet_batches = UnprocessedPacketBatches::with_capacity(batch_limit);
         let mut banking_stage_stats = BankingStageStats::new(id);
@@ -1254,54 +1249,34 @@ impl BankingStage {
             if !buffered_packet_batches.is_empty()
                 || last_metrics_update.elapsed() >= SLOT_BOUNDARY_CHECK_PERIOD
             {
-                let (_, process_buffered_packets_time) = Measure::this(
-                    |_| {
-                        Self::process_buffered_packets(
-                            &my_pubkey,
-                            &socket,
-                            poh_recorder,
-                            cluster_info,
-                            &mut buffered_packet_batches,
-                            &forward_option,
-                            transaction_status_sender.clone(),
-                            &gossip_vote_sender,
-                            &banking_stage_stats,
-                            &recorder,
-                            data_budget,
-                            &qos_service,
-                            &mut slot_metrics_tracker,
-                            &connection_cache,
-                            &mut tracer_packet_stats,
-                            bank_forks,
-                        )
-                    },
-                    (),
+                let (_, process_buffered_packets_time) = measure!(
+                    Self::process_buffered_packets(
+                        &my_pubkey,
+                        &socket,
+                        poh_recorder,
+                        cluster_info,
+                        &mut buffered_packet_batches,
+                        &forward_option,
+                        transaction_status_sender.clone(),
+                        &gossip_vote_sender,
+                        &banking_stage_stats,
+                        &recorder,
+                        data_budget,
+                        &qos_service,
+                        &mut slot_metrics_tracker,
+                        log_messages_bytes_limit,
+                        &connection_cache,
+                        &mut tracer_packet_stats,
+                        bank_forks,
+                    ),
                     "process_buffered_packets",
                 );
                 slot_metrics_tracker
                     .increment_process_buffered_packets_us(process_buffered_packets_time.as_us());
+                last_metrics_update = Instant::now();
             }
 
             tracer_packet_stats.report(1000);
-
-            if last_metrics_update.elapsed() >= SLOT_BOUNDARY_CHECK_PERIOD {
-                let (_, slot_metrics_checker_check_slot_boundary_time) = Measure::this(
-                    |_| {
-                        let current_poh_bank = {
-                            let poh = poh_recorder.lock().unwrap();
-                            poh.bank_start()
-                        };
-                        slot_metrics_tracker.update_on_leader_slot_boundary(&current_poh_bank);
-                    },
-                    (),
-                    "slot_metrics_checker_check_slot_boundary",
-                );
-                slot_metrics_tracker.increment_slot_metrics_check_slot_boundary_us(
-                    slot_metrics_checker_check_slot_boundary_time.as_us(),
-                );
-
-                last_metrics_update = Instant::now();
-            }
 
             let recv_timeout = if !buffered_packet_batches.is_empty() {
                 // If there are buffered packets, run the equivalent of try_recv to try reading more
@@ -1314,20 +1289,17 @@ impl BankingStage {
                 Duration::from_millis(100)
             };
 
-            let (res, receive_and_buffer_packets_time) = Measure::this(
-                |_| {
-                    Self::receive_and_buffer_packets(
-                        verified_receiver,
-                        recv_start,
-                        recv_timeout,
-                        id,
-                        &mut buffered_packet_batches,
-                        &mut banking_stage_stats,
-                        &mut tracer_packet_stats,
-                        &mut slot_metrics_tracker,
-                    )
-                },
-                (),
+            let (res, receive_and_buffer_packets_time) = measure!(
+                Self::receive_and_buffer_packets(
+                    verified_receiver,
+                    recv_start,
+                    recv_timeout,
+                    id,
+                    &mut buffered_packet_batches,
+                    &mut banking_stage_stats,
+                    &mut tracer_packet_stats,
+                    &mut slot_metrics_tracker,
+                ),
                 "receive_and_buffer_packets",
             );
             slot_metrics_tracker
@@ -1353,71 +1325,38 @@ impl BankingStage {
     #[allow(clippy::match_wild_err_arm)]
     fn record_transactions(
         bank_slot: Slot,
-        txs: &[SanitizedTransaction],
-        execution_results: &[TransactionExecutionResult],
+        transactions: Vec<VersionedTransaction>,
         recorder: &TransactionRecorder,
     ) -> RecordTransactionsSummary {
         let mut record_transactions_timings = RecordTransactionsTimings::default();
-        let (
-            (processed_transactions, processed_transactions_indexes),
-            execution_results_to_transactions_time,
-        ): ((Vec<_>, Vec<_>), Measure) = Measure::this(
-            |_| {
-                execution_results
-                    .iter()
-                    .zip(txs)
-                    .enumerate()
-                    .filter_map(|(i, (execution_result, tx))| {
-                        if execution_result.was_executed() {
-                            Some((tx.to_versioned_transaction(), i))
-                        } else {
-                            None
-                        }
-                    })
-                    .unzip()
-            },
-            (),
-            " execution_results_to_transactions",
-        );
-        record_transactions_timings.execution_results_to_transactions_us =
-            execution_results_to_transactions_time.as_us();
+        let mut starting_transaction_index = None;
 
-        let num_to_commit = processed_transactions.len();
-        debug!("num_to_commit: {} ", num_to_commit);
-        // unlock all the accounts with errors which are filtered by the above `filter_map`
-        if !processed_transactions.is_empty() {
+        if !transactions.is_empty() {
+            let num_to_record = transactions.len();
             inc_new_counter_info!("banking_stage-record_count", 1);
-            inc_new_counter_info!("banking_stage-record_transactions", num_to_commit);
+            inc_new_counter_info!("banking_stage-record_transactions", num_to_record);
 
-            let (hash, hash_time) = Measure::this(
-                |_| hash_transactions(&processed_transactions[..]),
-                (),
-                "hash",
-            );
+            let (hash, hash_time) = measure!(hash_transactions(&transactions), "hash");
             record_transactions_timings.hash_us = hash_time.as_us();
 
-            // record and unlock will unlock all the successful transactions
-            let (res, poh_record_time) = Measure::this(
-                |_| recorder.record(bank_slot, hash, processed_transactions),
-                (),
-                "hash",
-            );
+            let (res, poh_record_time) =
+                measure!(recorder.record(bank_slot, hash, transactions), "hash");
             record_transactions_timings.poh_record_us = poh_record_time.as_us();
 
             match res {
-                Ok(()) => (),
+                Ok(starting_index) => {
+                    starting_transaction_index = starting_index;
+                }
                 Err(PohRecorderError::MaxHeightReached) => {
                     inc_new_counter_info!("banking_stage-max_height_reached", 1);
                     inc_new_counter_info!(
                         "banking_stage-max_height_reached_num_to_commit",
-                        num_to_commit
+                        num_to_record
                     );
-                    // If record errors, add all the committable transactions (the ones
-                    // we just attempted to record) as retryable
                     return RecordTransactionsSummary {
                         record_transactions_timings,
                         result: Err(PohRecorderError::MaxHeightReached),
-                        retryable_indexes: processed_transactions_indexes,
+                        starting_transaction_index: None,
                     };
                 }
                 Err(e) => panic!("Poh recorder returned unexpected error: {:?}", e),
@@ -1426,8 +1365,8 @@ impl BankingStage {
 
         RecordTransactionsSummary {
             record_transactions_timings,
-            result: (Ok(num_to_commit)),
-            retryable_indexes: vec![],
+            result: Ok(()),
+            starting_transaction_index,
         }
     }
 
@@ -1437,12 +1376,13 @@ impl BankingStage {
         batch: &TransactionBatch,
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: &ReplayVoteSender,
+        log_messages_bytes_limit: Option<usize>,
     ) -> ExecuteAndCommitTransactionsOutput {
         let mut execute_and_commit_timings = LeaderExecuteAndCommitTimings::default();
         let mut mint_decimals: HashMap<Pubkey, u8> = HashMap::new();
 
-        let ((pre_balances, pre_token_balances), collect_balances_time) = Measure::this(
-            |_| {
+        let ((pre_balances, pre_token_balances), collect_balances_time) = measure!(
+            {
                 // Use a shorter maximum age when adding transactions into the pipeline.  This will reduce
                 // the likelihood of any single thread getting starved and processing old ids.
                 // TODO: Banking stage threads should be prioritized to complete faster then this queue
@@ -1461,23 +1401,21 @@ impl BankingStage {
 
                 (pre_balances, pre_token_balances)
             },
-            (),
             "collect_balances",
         );
         execute_and_commit_timings.collect_balances_us = collect_balances_time.as_us();
 
-        let (load_and_execute_transactions_output, load_execute_time) = Measure::this(
-            |_| {
-                bank.load_and_execute_transactions(
-                    batch,
-                    MAX_PROCESSING_AGE,
-                    transaction_status_sender.is_some(),
-                    transaction_status_sender.is_some(),
-                    &mut execute_and_commit_timings.execute_timings,
-                    None, // account_overrides
-                )
-            },
-            (),
+        let (load_and_execute_transactions_output, load_execute_time) = measure!(
+            bank.load_and_execute_transactions(
+                batch,
+                MAX_PROCESSING_AGE,
+                transaction_status_sender.is_some(),
+                transaction_status_sender.is_some(),
+                transaction_status_sender.is_some(),
+                &mut execute_and_commit_timings.execute_timings,
+                None, // account_overrides
+                log_messages_bytes_limit
+            ),
             "load_execute",
         );
         execute_and_commit_timings.load_execute_us = load_execute_time.as_us();
@@ -1493,106 +1431,105 @@ impl BankingStage {
             ..
         } = load_and_execute_transactions_output;
 
-        let mut transactions_execute_and_record_status: Vec<_> = execution_results
-            .iter()
-            .map(|execution_result| match execution_result {
-                TransactionExecutionResult::Executed { details, .. } => {
-                    CommitTransactionDetails::Committed {
-                        compute_units: details.executed_units,
+        let transactions_attempted_execution_count = execution_results.len();
+        let (executed_transactions, execution_results_to_transactions_time): (Vec<_>, Measure) = measure!(
+            execution_results
+                .iter()
+                .zip(batch.sanitized_transactions())
+                .filter_map(|(execution_result, tx)| {
+                    if execution_result.was_executed() {
+                        Some(tx.to_versioned_transaction())
+                    } else {
+                        None
                     }
-                }
-                TransactionExecutionResult::NotExecuted { .. } => {
-                    CommitTransactionDetails::NotCommitted
-                }
-            })
-            .collect();
+                })
+                .collect(),
+            "execution_results_to_transactions",
+        );
 
         let (last_blockhash, lamports_per_signature) =
             bank.last_blockhash_and_lamports_per_signature();
-        let (freeze_lock, freeze_lock_time) =
-            Measure::this(|_| bank.freeze_lock(), (), "freeze_lock");
+        let (freeze_lock, freeze_lock_time) = measure!(bank.freeze_lock(), "freeze_lock");
         execute_and_commit_timings.freeze_lock_us = freeze_lock_time.as_us();
 
-        let (record_transactions_summary, record_time) = Measure::this(
-            |_| {
-                Self::record_transactions(
-                    bank.slot(),
-                    batch.sanitized_transactions(),
-                    &execution_results,
-                    poh,
-                )
-            },
-            (),
+        let (record_transactions_summary, record_time) = measure!(
+            Self::record_transactions(bank.slot(), executed_transactions, poh),
             "record_transactions",
         );
         execute_and_commit_timings.record_us = record_time.as_us();
 
         let RecordTransactionsSummary {
-            result: commit_transactions_result,
-            retryable_indexes: retryable_record_transaction_indexes,
+            result: record_transactions_result,
             record_transactions_timings,
+            starting_transaction_index,
         } = record_transactions_summary;
-        execute_and_commit_timings.record_transactions_timings = record_transactions_timings;
+        execute_and_commit_timings.record_transactions_timings = RecordTransactionsTimings {
+            execution_results_to_transactions_us: execution_results_to_transactions_time.as_us(),
+            ..record_transactions_timings
+        };
 
-        // mark transactions that were executed but not recorded
-        retryable_record_transaction_indexes.iter().for_each(|i| {
-            transactions_execute_and_record_status[*i] = CommitTransactionDetails::NotCommitted;
-        });
+        if let Err(recorder_err) = record_transactions_result {
+            inc_new_counter_info!(
+                "banking_stage-record_transactions_retryable_record_txs",
+                executed_transactions_count
+            );
 
-        inc_new_counter_info!(
-            "banking_stage-record_transactions_num_to_commit",
-            *commit_transactions_result.as_ref().unwrap_or(&0)
-        );
-        inc_new_counter_info!(
-            "banking_stage-record_transactions_retryable_record_txs",
-            retryable_record_transaction_indexes.len()
-        );
-        retryable_transaction_indexes.extend(retryable_record_transaction_indexes);
-        let transactions_attempted_execution_count = execution_results.len();
-        if let Err(e) = commit_transactions_result {
+            retryable_transaction_indexes.extend(execution_results.iter().enumerate().filter_map(
+                |(index, execution_result)| execution_result.was_executed().then(|| index),
+            ));
+
             return ExecuteAndCommitTransactionsOutput {
                 transactions_attempted_execution_count,
                 executed_transactions_count,
                 executed_with_successful_result_count,
                 retryable_transaction_indexes,
-                commit_transactions_result: Err(e),
+                commit_transactions_result: Err(recorder_err),
                 execute_and_commit_timings,
                 error_counters,
             };
         }
 
         let sanitized_txs = batch.sanitized_transactions();
-        let committed_transaction_count = commit_transactions_result.unwrap();
-        // Note: `committed_transaction_count` should equal `executed_transactions_count`, since
-        // every executed transaction should have been recorded into the Poh stream if the record
-        // was successful (there's no partial records).
-        let commit_time_us = if committed_transaction_count != 0 {
-            let (tx_results, commit_time) = Measure::this(
-                |_| {
-                    bank.commit_transactions(
-                        sanitized_txs,
-                        &mut loaded_transactions,
-                        execution_results,
-                        last_blockhash,
-                        lamports_per_signature,
-                        CommitTransactionCounts {
-                            committed_transactions_count: executed_transactions_count as u64,
-                            committed_with_failure_result_count: executed_transactions_count
-                                .saturating_sub(executed_with_successful_result_count)
-                                as u64,
-                            signature_count,
-                        },
-                        &mut execute_and_commit_timings.execute_timings,
-                    )
-                },
-                (),
+        let (commit_time_us, commit_transaction_statuses) = if executed_transactions_count != 0 {
+            inc_new_counter_info!(
+                "banking_stage-record_transactions_num_to_commit",
+                executed_transactions_count
+            );
+
+            let (tx_results, commit_time) = measure!(
+                bank.commit_transactions(
+                    sanitized_txs,
+                    &mut loaded_transactions,
+                    execution_results,
+                    last_blockhash,
+                    lamports_per_signature,
+                    CommitTransactionCounts {
+                        committed_transactions_count: executed_transactions_count as u64,
+                        committed_with_failure_result_count: executed_transactions_count
+                            .saturating_sub(executed_with_successful_result_count)
+                            as u64,
+                        signature_count,
+                    },
+                    &mut execute_and_commit_timings.execute_timings,
+                ),
                 "commit",
             );
             let commit_time_us = commit_time.as_us();
             execute_and_commit_timings.commit_us = commit_time_us;
 
-            let (_, find_and_send_votes_time) = Measure::this(
-                |_| {
+            let commit_transaction_statuses = tx_results
+                .execution_results
+                .iter()
+                .map(|execution_result| match execution_result.details() {
+                    Some(details) => CommitTransactionDetails::Committed {
+                        compute_units: details.executed_units,
+                    },
+                    None => CommitTransactionDetails::NotCommitted,
+                })
+                .collect();
+
+            let (_, find_and_send_votes_time) = measure!(
+                {
                     bank_utils::find_and_send_votes(
                         sanitized_txs,
                         &tx_results,
@@ -1603,6 +1540,20 @@ impl BankingStage {
                         let post_balances = bank.collect_balances(batch);
                         let post_token_balances =
                             collect_token_balances(bank, batch, &mut mint_decimals);
+                        let mut transaction_index = starting_transaction_index.unwrap_or_default();
+                        let batch_transaction_indexes: Vec<_> = tx_results
+                            .execution_results
+                            .iter()
+                            .map(|result| {
+                                if result.was_executed() {
+                                    let this_transaction_index = transaction_index;
+                                    saturating_add_assign!(transaction_index, 1);
+                                    this_transaction_index
+                                } else {
+                                    0
+                                }
+                            })
+                            .collect();
                         transaction_status_sender.send_transaction_status_batch(
                             bank.clone(),
                             txs,
@@ -1613,16 +1564,19 @@ impl BankingStage {
                                 post_token_balances,
                             ),
                             tx_results.rent_debits,
+                            batch_transaction_indexes,
                         );
                     }
                 },
-                (),
                 "find_and_send_votes",
             );
             execute_and_commit_timings.find_and_send_votes_us = find_and_send_votes_time.as_us();
-            commit_time_us
+            (commit_time_us, commit_transaction_statuses)
         } else {
-            0
+            (
+                0,
+                vec![CommitTransactionDetails::NotCommitted; execution_results.len()],
+            )
         };
 
         drop(freeze_lock);
@@ -1641,12 +1595,17 @@ impl BankingStage {
             execute_and_commit_timings.execute_timings,
         );
 
+        debug_assert_eq!(
+            commit_transaction_statuses.len(),
+            transactions_attempted_execution_count
+        );
+
         ExecuteAndCommitTransactionsOutput {
             transactions_attempted_execution_count,
             executed_transactions_count,
             executed_with_successful_result_count,
             retryable_transaction_indexes,
-            commit_transactions_result: Ok(transactions_execute_and_record_status),
+            commit_transactions_result: Ok(commit_transaction_statuses),
             execute_and_commit_timings,
             error_counters,
         }
@@ -1660,6 +1619,7 @@ impl BankingStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: &ReplayVoteSender,
         qos_service: &QosService,
+        log_messages_bytes_limit: Option<usize>,
     ) -> ProcessTransactionBatchOutput {
         let mut cost_model_time = Measure::start("cost_model");
 
@@ -1695,6 +1655,7 @@ impl BankingStage {
                 &batch,
                 transaction_status_sender,
                 gossip_vote_sender,
+                log_messages_bytes_limit,
             );
 
         let mut unlock_time = Measure::start("unlock_time");
@@ -1828,8 +1789,8 @@ impl BankingStage {
         let (units, times): (Vec<_>, Vec<_>) = execute_timings
             .details
             .per_program_timings
-            .iter()
-            .map(|(_program_id, program_timings)| {
+            .values()
+            .map(|program_timings| {
                 (
                     program_timings.accumulated_units,
                     program_timings.accumulated_us,
@@ -1851,6 +1812,7 @@ impl BankingStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: &ReplayVoteSender,
         qos_service: &QosService,
+        log_messages_bytes_limit: Option<usize>,
     ) -> ProcessTransactionsSummary {
         let mut chunk_start = 0;
         let mut all_retryable_tx_indexes = vec![];
@@ -1882,6 +1844,7 @@ impl BankingStage {
                 transaction_status_sender.clone(),
                 gossip_vote_sender,
                 qos_service,
+                log_messages_bytes_limit,
             );
 
             let ProcessTransactionBatchOutput {
@@ -2061,21 +2024,20 @@ impl BankingStage {
         banking_stage_stats: &'a BankingStageStats,
         qos_service: &'a QosService,
         slot_metrics_tracker: &'a mut LeaderSlotMetricsTracker,
+        log_messages_bytes_limit: Option<usize>,
     ) -> ProcessTransactionsSummary {
         // Process transactions
-        let (mut process_transactions_summary, process_transactions_time) = Measure::this(
-            |_| {
-                Self::process_transactions(
-                    bank,
-                    bank_creation_time,
-                    sanitized_transactions,
-                    poh,
-                    transaction_status_sender,
-                    gossip_vote_sender,
-                    qos_service,
-                )
-            },
-            (),
+        let (mut process_transactions_summary, process_transactions_time) = measure!(
+            Self::process_transactions(
+                bank,
+                bank_creation_time,
+                sanitized_transactions,
+                poh,
+                transaction_status_sender,
+                gossip_vote_sender,
+                qos_service,
+                log_messages_bytes_limit,
+            ),
             "process_transaction_time",
         );
         let process_transactions_us = process_transactions_time.as_us();
@@ -2097,16 +2059,13 @@ impl BankingStage {
         inc_new_counter_info!("banking_stage-unprocessed_transactions", retryable_tx_count);
 
         // Filter out the retryable transactions that are too old
-        let (filtered_retryable_transaction_indexes, filter_retryable_packets_time) = Measure::this(
-            |_| {
-                Self::filter_pending_packets_from_pending_txs(
-                    bank,
-                    sanitized_transactions,
-                    retryable_transaction_indexes,
-                )
-            },
-            (),
-            "filter_pending_packets_time",
+        let (filtered_retryable_transaction_indexes, filter_retryable_packets_time) = measure!(
+            Self::filter_pending_packets_from_pending_txs(
+                bank,
+                sanitized_transactions,
+                retryable_transaction_indexes
+            ),
+            "filter_retryable_packets_time"
         );
 
         let filter_retryable_packets_us = filter_retryable_packets_time.as_us();
@@ -2304,35 +2263,35 @@ impl BankingStage {
 
 pub(crate) fn next_leader_tpu(
     cluster_info: &ClusterInfo,
-    poh_recorder: &Mutex<PohRecorder>,
+    poh_recorder: &RwLock<PohRecorder>,
 ) -> Option<(Pubkey, std::net::SocketAddr)> {
     next_leader_x(cluster_info, poh_recorder, |leader| leader.tpu)
 }
 
 fn next_leader_tpu_forwards(
     cluster_info: &ClusterInfo,
-    poh_recorder: &Mutex<PohRecorder>,
+    poh_recorder: &RwLock<PohRecorder>,
 ) -> Option<(Pubkey, std::net::SocketAddr)> {
     next_leader_x(cluster_info, poh_recorder, |leader| leader.tpu_forwards)
 }
 
 pub(crate) fn next_leader_tpu_vote(
     cluster_info: &ClusterInfo,
-    poh_recorder: &Mutex<PohRecorder>,
+    poh_recorder: &RwLock<PohRecorder>,
 ) -> Option<(Pubkey, std::net::SocketAddr)> {
     next_leader_x(cluster_info, poh_recorder, |leader| leader.tpu_vote)
 }
 
 fn next_leader_x<F>(
     cluster_info: &ClusterInfo,
-    poh_recorder: &Mutex<PohRecorder>,
+    poh_recorder: &RwLock<PohRecorder>,
     port_selector: F,
 ) -> Option<(Pubkey, std::net::SocketAddr)>
 where
     F: FnOnce(&ContactInfo) -> SocketAddr,
 {
     let leader_pubkey = poh_recorder
-        .lock()
+        .read()
         .unwrap()
         .leader_after_n_slots(FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET);
     if let Some(leader_pubkey) = leader_pubkey {
@@ -2351,7 +2310,7 @@ mod tests {
         crossbeam_channel::{unbounded, Receiver},
         solana_address_lookup_table_program::state::{AddressLookupTable, LookupTableMeta},
         solana_entry::entry::{next_entry, next_versioned_entry, Entry, EntrySlice},
-        solana_gossip::{cluster_info::Node, contact_info::ContactInfo},
+        solana_gossip::cluster_info::Node,
         solana_ledger::{
             blockstore::{entries_to_test_shreds, Blockstore},
             genesis_utils::{create_genesis_config, GenesisConfigInfo},
@@ -2363,9 +2322,9 @@ mod tests {
             poh_recorder::{create_test_recorder, Record, WorkingBankEntry},
             poh_service::PohService,
         },
-        solana_program_runtime::{invoke_context::Executors, timings::ProgramTiming},
+        solana_program_runtime::timings::ProgramTiming,
         solana_rpc::transaction_status_service::TransactionStatusService,
-        solana_runtime::{bank::TransactionExecutionDetails, bank_forks::BankForks},
+        solana_runtime::bank_forks::BankForks,
         solana_sdk::{
             account::AccountSharedData,
             hash::Hash,
@@ -2376,7 +2335,6 @@ mod tests {
             },
             poh_config::PohConfig,
             signature::{Keypair, Signer},
-            system_instruction::SystemError,
             system_transaction,
             transaction::{MessageHash, Transaction, TransactionError, VersionedTransaction},
         },
@@ -2384,9 +2342,7 @@ mod tests {
         solana_transaction_status::{TransactionStatusMeta, VersionedTransactionWithStatusMeta},
         std::{
             borrow::Cow,
-            cell::RefCell,
             path::Path,
-            rc::Rc,
             sync::atomic::{AtomicBool, Ordering},
             thread::sleep,
         },
@@ -2399,20 +2355,6 @@ mod tests {
             Arc::new(Keypair::new()),
             SocketAddrSpace::Unspecified,
         )
-    }
-
-    fn new_execution_result(status: Result<(), TransactionError>) -> TransactionExecutionResult {
-        TransactionExecutionResult::Executed {
-            details: TransactionExecutionDetails {
-                status,
-                log_messages: None,
-                inner_instructions: None,
-                durable_nonce_fee: None,
-                executed_units: 0,
-                accounts_data_len_delta: 0,
-            },
-            executors: Rc::new(RefCell::new(Executors::default())),
-        }
     }
 
     #[test]
@@ -2445,6 +2387,7 @@ mod tests {
                 None,
                 gossip_vote_sender,
                 Arc::new(RwLock::new(CostModel::default())),
+                None,
                 Arc::new(ConnectionCache::default()),
                 bank_forks,
             );
@@ -2498,6 +2441,7 @@ mod tests {
                 None,
                 gossip_vote_sender,
                 Arc::new(RwLock::new(CostModel::default())),
+                None,
                 Arc::new(ConnectionCache::default()),
                 bank_forks,
             );
@@ -2576,6 +2520,7 @@ mod tests {
                 None,
                 gossip_vote_sender,
                 Arc::new(RwLock::new(CostModel::default())),
+                None,
                 Arc::new(ConnectionCache::default()),
                 bank_forks,
             );
@@ -2731,6 +2676,7 @@ mod tests {
                     None,
                     gossip_vote_sender,
                     Arc::new(RwLock::new(CostModel::default())),
+                    None,
                     Arc::new(ConnectionCache::default()),
                     bank_forks,
                 );
@@ -2803,70 +2749,36 @@ mod tests {
                 Arc::new(AtomicBool::default()),
             );
             let recorder = poh_recorder.recorder();
-            let poh_recorder = Arc::new(Mutex::new(poh_recorder));
+            let poh_recorder = Arc::new(RwLock::new(poh_recorder));
 
             let poh_simulator = simulate_poh(record_receiver, &poh_recorder);
 
-            poh_recorder.lock().unwrap().set_bank(&bank);
+            poh_recorder.write().unwrap().set_bank(&bank, false);
             let pubkey = solana_sdk::pubkey::new_rand();
             let keypair2 = Keypair::new();
             let pubkey2 = solana_sdk::pubkey::new_rand();
 
-            let txs = sanitize_transactions(vec![
-                system_transaction::transfer(&mint_keypair, &pubkey, 1, genesis_config.hash()),
-                system_transaction::transfer(&keypair2, &pubkey2, 1, genesis_config.hash()),
-            ]);
+            let txs = vec![
+                system_transaction::transfer(&mint_keypair, &pubkey, 1, genesis_config.hash())
+                    .into(),
+                system_transaction::transfer(&keypair2, &pubkey2, 1, genesis_config.hash()).into(),
+            ];
 
-            let mut results = vec![new_execution_result(Ok(())); 2];
-            let _ = BankingStage::record_transactions(bank.slot(), &txs, &results, &recorder);
+            let _ = BankingStage::record_transactions(bank.slot(), txs.clone(), &recorder);
             let (_bank, (entry, _tick_height)) = entry_receiver.recv().unwrap();
-            assert_eq!(entry.transactions.len(), txs.len());
-
-            // InstructionErrors should still be recorded
-            results[0] = new_execution_result(Err(TransactionError::InstructionError(
-                1,
-                SystemError::ResultWithNegativeLamports.into(),
-            )));
-            let RecordTransactionsSummary {
-                result,
-                retryable_indexes,
-                ..
-            } = BankingStage::record_transactions(bank.slot(), &txs, &results, &recorder);
-            result.unwrap();
-            assert!(retryable_indexes.is_empty());
-            let (_bank, (entry, _tick_height)) = entry_receiver.recv().unwrap();
-            assert_eq!(entry.transactions.len(), txs.len());
-
-            // Other TransactionErrors should not be recorded
-            results[0] = TransactionExecutionResult::NotExecuted(TransactionError::AccountNotFound);
-            let RecordTransactionsSummary {
-                result,
-                retryable_indexes,
-                ..
-            } = BankingStage::record_transactions(bank.slot(), &txs, &results, &recorder);
-            result.unwrap();
-            assert!(retryable_indexes.is_empty());
-            let (_bank, (entry, _tick_height)) = entry_receiver.recv().unwrap();
-            assert_eq!(entry.transactions.len(), txs.len() - 1);
+            assert_eq!(entry.transactions, txs);
 
             // Once bank is set to a new bank (setting bank.slot() + 1 in record_transactions),
-            // record_transactions should throw MaxHeightReached and return the set of retryable
-            // txs
+            // record_transactions should throw MaxHeightReached
             let next_slot = bank.slot() + 1;
-            let RecordTransactionsSummary {
-                result,
-                retryable_indexes,
-                ..
-            } = BankingStage::record_transactions(next_slot, &txs, &results, &recorder);
+            let RecordTransactionsSummary { result, .. } =
+                BankingStage::record_transactions(next_slot, txs, &recorder);
             assert_matches!(result, Err(PohRecorderError::MaxHeightReached));
-            // The first result was an error so it's filtered out. The second result was Ok(),
-            // so it should be marked as retryable
-            assert_eq!(retryable_indexes, vec![1]);
             // Should receive nothing from PohRecorder b/c record failed
             assert!(entry_receiver.try_recv().is_err());
 
             poh_recorder
-                .lock()
+                .read()
                 .unwrap()
                 .is_exited
                 .store(true, Ordering::Relaxed);
@@ -3053,11 +2965,11 @@ mod tests {
                 Arc::new(AtomicBool::default()),
             );
             let recorder = poh_recorder.recorder();
-            let poh_recorder = Arc::new(Mutex::new(poh_recorder));
+            let poh_recorder = Arc::new(RwLock::new(poh_recorder));
 
             let poh_simulator = simulate_poh(record_receiver, &poh_recorder);
 
-            poh_recorder.lock().unwrap().set_bank(&bank);
+            poh_recorder.write().unwrap().set_bank(&bank, false);
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
 
             let process_transactions_batch_output = BankingStage::process_and_record_transactions(
@@ -3068,6 +2980,7 @@ mod tests {
                 None,
                 &gossip_vote_sender,
                 &QosService::new(Arc::new(RwLock::new(CostModel::default())), 1),
+                None,
             );
 
             let ExecuteAndCommitTransactionsOutput {
@@ -3084,8 +2997,8 @@ mod tests {
             assert!(commit_transactions_result.is_ok());
 
             // Tick up to max tick height
-            while poh_recorder.lock().unwrap().tick_height() != bank.max_tick_height() {
-                poh_recorder.lock().unwrap().tick();
+            while poh_recorder.read().unwrap().tick_height() != bank.max_tick_height() {
+                poh_recorder.write().unwrap().tick();
             }
 
             let mut done = false;
@@ -3120,6 +3033,7 @@ mod tests {
                 None,
                 &gossip_vote_sender,
                 &QosService::new(Arc::new(RwLock::new(CostModel::default())), 1),
+                None,
             );
 
             let ExecuteAndCommitTransactionsOutput {
@@ -3141,13 +3055,95 @@ mod tests {
             );
 
             poh_recorder
-                .lock()
+                .read()
                 .unwrap()
                 .is_exited
                 .store(true, Ordering::Relaxed);
             let _ = poh_simulator.join();
 
             assert_eq!(bank.get_balance(&pubkey), 1);
+        }
+        Blockstore::destroy(ledger_path.path()).unwrap();
+    }
+
+    #[test]
+    fn test_bank_process_and_record_transactions_all_unexecuted() {
+        solana_logger::setup();
+        let GenesisConfigInfo {
+            genesis_config,
+            mint_keypair,
+            ..
+        } = create_slow_genesis_config(10_000);
+        let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
+        let pubkey = solana_sdk::pubkey::new_rand();
+
+        let transactions = {
+            let mut tx =
+                system_transaction::transfer(&mint_keypair, &pubkey, 1, genesis_config.hash());
+            // Add duplicate account key
+            tx.message.account_keys.push(pubkey);
+            sanitize_transactions(vec![tx])
+        };
+
+        let ledger_path = get_tmp_ledger_path_auto_delete!();
+        {
+            let blockstore = Blockstore::open(ledger_path.path())
+                .expect("Expected to be able to open database ledger");
+            let (poh_recorder, _entry_receiver, record_receiver) = PohRecorder::new(
+                bank.tick_height(),
+                bank.last_blockhash(),
+                bank.clone(),
+                Some((4, 4)),
+                bank.ticks_per_slot(),
+                &pubkey,
+                &Arc::new(blockstore),
+                &Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
+                &Arc::new(PohConfig::default()),
+                Arc::new(AtomicBool::default()),
+            );
+            let recorder = poh_recorder.recorder();
+            let poh_recorder = Arc::new(RwLock::new(poh_recorder));
+
+            let poh_simulator = simulate_poh(record_receiver, &poh_recorder);
+
+            poh_recorder.write().unwrap().set_bank(&bank, false);
+            let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
+
+            let process_transactions_batch_output = BankingStage::process_and_record_transactions(
+                &bank,
+                &transactions,
+                &recorder,
+                0,
+                None,
+                &gossip_vote_sender,
+                &QosService::new(Arc::new(RwLock::new(CostModel::default())), 1),
+                None,
+            );
+
+            let ExecuteAndCommitTransactionsOutput {
+                transactions_attempted_execution_count,
+                executed_transactions_count,
+                executed_with_successful_result_count,
+                commit_transactions_result,
+                retryable_transaction_indexes,
+                ..
+            } = process_transactions_batch_output.execute_and_commit_transactions_output;
+
+            assert_eq!(transactions_attempted_execution_count, 1);
+            assert_eq!(executed_transactions_count, 0);
+            assert_eq!(executed_with_successful_result_count, 0);
+            assert!(retryable_transaction_indexes.is_empty());
+            assert_eq!(
+                commit_transactions_result.ok(),
+                Some(vec![CommitTransactionDetails::NotCommitted; 1])
+            );
+
+            poh_recorder
+                .read()
+                .unwrap()
+                .is_exited
+                .store(true, Ordering::Relaxed);
+            let _ = poh_simulator.join();
         }
         Blockstore::destroy(ledger_path.path()).unwrap();
     }
@@ -3180,11 +3176,11 @@ mod tests {
                 Arc::new(AtomicBool::default()),
             );
             let recorder = poh_recorder.recorder();
-            let poh_recorder = Arc::new(Mutex::new(poh_recorder));
+            let poh_recorder = Arc::new(RwLock::new(poh_recorder));
 
             let poh_simulator = simulate_poh(record_receiver, &poh_recorder);
 
-            poh_recorder.lock().unwrap().set_bank(&bank);
+            poh_recorder.write().unwrap().set_bank(&bank, false);
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
 
             let qos_service = QosService::new(Arc::new(RwLock::new(CostModel::default())), 1);
@@ -3213,6 +3209,7 @@ mod tests {
                 None,
                 &gossip_vote_sender,
                 &qos_service,
+                None,
             );
 
             let ExecuteAndCommitTransactionsOutput {
@@ -3252,6 +3249,7 @@ mod tests {
                 None,
                 &gossip_vote_sender,
                 &qos_service,
+                None,
             );
 
             let ExecuteAndCommitTransactionsOutput {
@@ -3268,7 +3266,7 @@ mod tests {
             assert_eq!(get_tx_count(), 2);
 
             poh_recorder
-                .lock()
+                .read()
                 .unwrap()
                 .is_exited
                 .store(true, Ordering::Relaxed);
@@ -3279,10 +3277,10 @@ mod tests {
 
     fn simulate_poh(
         record_receiver: CrossbeamReceiver<Record>,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
     ) -> JoinHandle<()> {
         let poh_recorder = poh_recorder.clone();
-        let is_exited = poh_recorder.lock().unwrap().is_exited.clone();
+        let is_exited = poh_recorder.read().unwrap().is_exited.clone();
         let tick_producer = Builder::new()
             .name("solana-simulate_poh".to_string())
             .spawn(move || loop {
@@ -3332,9 +3330,9 @@ mod tests {
                 Arc::new(AtomicBool::default()),
             );
             let recorder = poh_recorder.recorder();
-            let poh_recorder = Arc::new(Mutex::new(poh_recorder));
+            let poh_recorder = Arc::new(RwLock::new(poh_recorder));
 
-            poh_recorder.lock().unwrap().set_bank(&bank);
+            poh_recorder.write().unwrap().set_bank(&bank, false);
 
             let poh_simulator = simulate_poh(record_receiver, &poh_recorder);
 
@@ -3348,10 +3346,11 @@ mod tests {
                 None,
                 &gossip_vote_sender,
                 &QosService::new(Arc::new(RwLock::new(CostModel::default())), 1),
+                None,
             );
 
             poh_recorder
-                .lock()
+                .read()
                 .unwrap()
                 .is_exited
                 .store(true, Ordering::Relaxed);
@@ -3501,7 +3500,7 @@ mod tests {
             // record
             let recorder = poh_recorder.recorder();
 
-            let poh_simulator = simulate_poh(record_receiver, &Arc::new(Mutex::new(poh_recorder)));
+            let poh_simulator = simulate_poh(record_receiver, &Arc::new(RwLock::new(poh_recorder)));
 
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
 
@@ -3513,6 +3512,7 @@ mod tests {
                 None,
                 &gossip_vote_sender,
                 &QosService::new(Arc::new(RwLock::new(CostModel::default())), 1),
+                None,
             );
 
             let ProcessTransactionsSummary {
@@ -3563,9 +3563,9 @@ mod tests {
             Arc::new(AtomicBool::default()),
         );
         let recorder = poh_recorder.recorder();
-        let poh_recorder = Arc::new(Mutex::new(poh_recorder));
+        let poh_recorder = Arc::new(RwLock::new(poh_recorder));
 
-        poh_recorder.lock().unwrap().set_bank(&bank);
+        poh_recorder.write().unwrap().set_bank(&bank, false);
 
         let poh_simulator = simulate_poh(record_receiver, &poh_recorder);
 
@@ -3579,10 +3579,11 @@ mod tests {
             None,
             &gossip_vote_sender,
             &QosService::new(Arc::new(RwLock::new(CostModel::default())), 1),
+            None,
         );
 
         poh_recorder
-            .lock()
+            .read()
             .unwrap()
             .is_exited
             .store(true, Ordering::Relaxed);
@@ -3768,13 +3769,20 @@ mod tests {
                 Arc::new(AtomicBool::default()),
             );
             let recorder = poh_recorder.recorder();
-            let poh_recorder = Arc::new(Mutex::new(poh_recorder));
+            let poh_recorder = Arc::new(RwLock::new(poh_recorder));
 
             let poh_simulator = simulate_poh(record_receiver, &poh_recorder);
 
-            poh_recorder.lock().unwrap().set_bank(&bank);
+            poh_recorder.write().unwrap().set_bank(&bank, false);
 
-            let shreds = entries_to_test_shreds(&entries, bank.slot(), 0, true, 0);
+            let shreds = entries_to_test_shreds(
+                &entries,
+                bank.slot(),
+                0,    // parent_slot
+                true, // is_full_slot
+                0,    // version
+                true, // merkle_variant
+            );
             blockstore.insert_shreds(shreds, None, false).unwrap();
             blockstore.set_roots(std::iter::once(&bank.slot())).unwrap();
 
@@ -3801,6 +3809,7 @@ mod tests {
                 }),
                 &gossip_vote_sender,
                 &QosService::new(Arc::new(RwLock::new(CostModel::default())), 1),
+                None,
             );
 
             transaction_status_service.join().unwrap();
@@ -3826,7 +3835,7 @@ mod tests {
             assert_eq!(actual_tx_results, expected_tx_results);
 
             poh_recorder
-                .lock()
+                .read()
                 .unwrap()
                 .is_exited
                 .store(true, Ordering::Relaxed);
@@ -3929,13 +3938,20 @@ mod tests {
                 Arc::new(AtomicBool::default()),
             );
             let recorder = poh_recorder.recorder();
-            let poh_recorder = Arc::new(Mutex::new(poh_recorder));
+            let poh_recorder = Arc::new(RwLock::new(poh_recorder));
 
             let poh_simulator = simulate_poh(record_receiver, &poh_recorder);
 
-            poh_recorder.lock().unwrap().set_bank(&bank);
+            poh_recorder.write().unwrap().set_bank(&bank, false);
 
-            let shreds = entries_to_test_shreds(&entries, bank.slot(), 0, true, 0);
+            let shreds = entries_to_test_shreds(
+                &entries,
+                bank.slot(),
+                0,    // parent_slot
+                true, // is_full_slot
+                0,    // version
+                true, // merkle_variant
+            );
             blockstore.insert_shreds(shreds, None, false).unwrap();
             blockstore.set_roots(std::iter::once(&bank.slot())).unwrap();
 
@@ -3962,6 +3978,7 @@ mod tests {
                 }),
                 &gossip_vote_sender,
                 &QosService::new(Arc::new(RwLock::new(CostModel::default())), 1),
+                None,
             );
 
             transaction_status_service.join().unwrap();
@@ -3980,11 +3997,12 @@ mod tests {
                     post_token_balances: Some(vec![]),
                     rewards: Some(vec![]),
                     loaded_addresses: sanitized_tx.get_loaded_addresses(),
+                    compute_units_consumed: Some(0),
                     ..TransactionStatusMeta::default()
                 }
             );
             poh_recorder
-                .lock()
+                .read()
                 .unwrap()
                 .is_exited
                 .store(true, Ordering::Relaxed);
@@ -3999,7 +4017,7 @@ mod tests {
     ) -> (
         Vec<Transaction>,
         Arc<Bank>,
-        Arc<Mutex<PohRecorder>>,
+        Arc<RwLock<PohRecorder>>,
         Receiver<WorkingBankEntry>,
         JoinHandle<()>,
     ) {
@@ -4026,7 +4044,7 @@ mod tests {
             &Arc::new(PohConfig::default()),
             exit,
         );
-        let poh_recorder = Arc::new(Mutex::new(poh_recorder));
+        let poh_recorder = Arc::new(RwLock::new(poh_recorder));
 
         // Set up unparallelizable conflicting transactions
         let pubkey0 = solana_sdk::pubkey::new_rand();
@@ -4054,7 +4072,7 @@ mod tests {
         {
             let (transactions, bank, poh_recorder, _entry_receiver, poh_simulator) =
                 setup_conflicting_transactions(ledger_path.path());
-            let recorder = poh_recorder.lock().unwrap().recorder();
+            let recorder = poh_recorder.read().unwrap().recorder();
             let num_conflicting_transactions = transactions.len();
             let deserialized_packets =
                 unprocessed_packet_batches::transactions_to_deserialized_packets(&transactions)
@@ -4069,7 +4087,7 @@ mod tests {
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
 
             // When the working bank in poh_recorder is None, no packets should be processed
-            assert!(!poh_recorder.lock().unwrap().has_bank());
+            assert!(!poh_recorder.read().unwrap().has_bank());
             let max_tx_processing_ns = std::u128::MAX;
             BankingStage::consume_buffered_packets(
                 &Pubkey::default(),
@@ -4083,11 +4101,12 @@ mod tests {
                 &recorder,
                 &QosService::new(Arc::new(RwLock::new(CostModel::default())), 1),
                 &mut LeaderSlotMetricsTracker::new(0),
+                None,
             );
             assert_eq!(buffered_packet_batches.len(), num_conflicting_transactions);
             // When the working bank in poh_recorder is Some, all packets should be processed.
             // Multi-Iterator will process them 1-by-1 if all txs are conflicting.
-            poh_recorder.lock().unwrap().set_bank(&bank);
+            poh_recorder.write().unwrap().set_bank(&bank, false);
             BankingStage::consume_buffered_packets(
                 &Pubkey::default(),
                 max_tx_processing_ns,
@@ -4100,10 +4119,11 @@ mod tests {
                 &recorder,
                 &QosService::new(Arc::new(RwLock::new(CostModel::default())), 1),
                 &mut LeaderSlotMetricsTracker::new(0),
+                None,
             );
             assert!(buffered_packet_batches.is_empty());
             poh_recorder
-                .lock()
+                .read()
                 .unwrap()
                 .is_exited
                 .store(true, Ordering::Relaxed);
@@ -4127,9 +4147,9 @@ mod tests {
             });
             // When the poh recorder has a bank, it should process all buffered packets.
             let num_conflicting_transactions = transactions.len();
-            poh_recorder.lock().unwrap().set_bank(&bank);
+            poh_recorder.write().unwrap().set_bank(&bank, false);
             let poh_recorder_ = poh_recorder.clone();
-            let recorder = poh_recorder_.lock().unwrap().recorder();
+            let recorder = poh_recorder_.read().unwrap().recorder();
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
             // Start up thread to process the banks
             let t_consume = Builder::new()
@@ -4159,6 +4179,7 @@ mod tests {
                         &recorder,
                         &QosService::new(Arc::new(RwLock::new(CostModel::default())), 1),
                         &mut LeaderSlotMetricsTracker::new(0),
+                        None,
                     );
 
                     // Check everything is correct. All valid packets should be processed.
@@ -4172,7 +4193,7 @@ mod tests {
                 finished_packet_receiver.recv().unwrap();
                 if i == num_conflicting_transactions {
                     poh_recorder
-                        .lock()
+                        .write()
                         .unwrap()
                         .schedule_dummy_max_height_reached_failure();
                 }
@@ -4181,7 +4202,7 @@ mod tests {
 
             t_consume.join().unwrap();
             poh_recorder
-                .lock()
+                .read()
                 .unwrap()
                 .is_exited
                 .store(true, Ordering::Relaxed);
