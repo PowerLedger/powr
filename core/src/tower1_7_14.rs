@@ -22,7 +22,7 @@ pub struct Tower1_7_14 {
     // blockhash of the voted block itself, depending if the vote slot was refreshed.
     // For instance, a vote for slot 5, may be refreshed/resubmitted for inclusion in
     //  block 10, in  which case `last_vote_tx_blockhash` equals the blockhash of 10, not 5.
-    pub(crate) last_vote_tx_blockhash: Hash,
+    pub(crate) last_vote_tx_blockhash: Option<Hash>,
     pub(crate) last_timestamp: BlockTimestamp,
     #[serde(skip)]
     // Restored last voted slot which cannot be found in SlotHistory at replayed root
@@ -37,7 +37,7 @@ pub struct Tower1_7_14 {
 }
 
 #[frozen_abi(digest = "CxwFFxKfn6ez6wifDKr5WYr3eu2PsWUKdMYp3LX8Xj52")]
-#[derive(Default, Clone, Serialize, Deserialize, Debug, PartialEq, AbiExample)]
+#[derive(Default, Clone, Serialize, Deserialize, Debug, PartialEq, Eq, AbiExample)]
 pub struct SavedTower1_7_14 {
     pub(crate) signature: Signature,
     pub(crate) data: Vec<u8>,

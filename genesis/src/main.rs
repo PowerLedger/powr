@@ -13,7 +13,7 @@ use {
     },
     solana_entry::poh::compute_hashes_per_tick,
     solana_genesis::{genesis_accounts::add_genesis_accounts, Base64Account},
-    solana_ledger::{blockstore::create_new_ledger, blockstore_db::LedgerColumnOptions},
+    solana_ledger::{blockstore::create_new_ledger, blockstore_options::LedgerColumnOptions},
     solana_runtime::hardened_unpack::MAX_GENESIS_ARCHIVE_UNPACKED_SIZE,
     solana_sdk::{
         account::{Account, AccountSharedData, ReadableAccount, WritableAccount},
@@ -135,7 +135,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         .to_string();
     // stake account
     let default_bootstrap_validator_stake_lamports = &sol_to_lamports(0.5)
-        .max(StakeState::get_rent_exempt_reserve(&rent))
+        .max(rent.minimum_balance(StakeState::size_of()))
         .to_string();
 
     let default_target_tick_duration =
@@ -430,7 +430,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let bootstrap_validator_stake_lamports = rent_exempt_check(
         &matches,
         "bootstrap_validator_stake_lamports",
-        StakeState::get_rent_exempt_reserve(&rent),
+        rent.minimum_balance(StakeState::size_of()),
     )?;
 
     let bootstrap_stake_authorized_pubkey =
@@ -459,12 +459,12 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     match matches.value_of("hashes_per_tick").unwrap() {
         "auto" => match cluster_type {
-            // ClusterType::Development => {
-            //     let hashes_per_tick =
-            //         compute_hashes_per_tick(poh_config.target_tick_duration, 1_000_000);
-            //     poh_config.hashes_per_tick = Some(hashes_per_tick / 2); // use 50% of peak ability
-            // }
-            ClusterType::Development | ClusterType::Devnet | ClusterType::Testnet | ClusterType::MainnetBeta => {
+            ClusterType::Development => {
+                let hashes_per_tick =
+                    compute_hashes_per_tick(poh_config.target_tick_duration, 1_000_000);
+                poh_config.hashes_per_tick = Some(hashes_per_tick / 2); // use 50% of peak ability
+            }
+            ClusterType::Devnet | ClusterType::Testnet | ClusterType::MainnetBeta => {
                 poh_config.hashes_per_tick = Some(clock::DEFAULT_HASHES_PER_TICK);
             }
         },
@@ -565,7 +565,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     }
 
     solana_stake_program::add_genesis_accounts(&mut genesis_config);
-    if genesis_config.cluster_type == ClusterType::MainnetBeta {
+    if genesis_config.cluster_type == ClusterType::Development {
         solana_runtime::genesis_utils::activate_all_features(&mut genesis_config);
     }
 
@@ -580,8 +580,8 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     let issued_lamports = genesis_config
         .accounts
-        .iter()
-        .map(|(_key, account)| account.lamports)
+        .values()
+        .map(|account| account.lamports)
         .sum::<u64>();
 
     add_genesis_accounts(&mut genesis_config, issued_lamports - faucet_lamports);

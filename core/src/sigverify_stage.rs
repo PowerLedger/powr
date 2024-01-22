@@ -275,21 +275,18 @@ impl SigVerifyStage {
         }
     }
 
-    fn maybe_shrink_batches(packet_batches: &mut Vec<PacketBatch>) -> (u64, usize) {
+    /// make this function public so that it is available for benchmarking
+    pub fn maybe_shrink_batches(packet_batches: &mut Vec<PacketBatch>) -> (u64, usize) {
         let mut shrink_time = Measure::start("sigverify_shrink_time");
         let num_packets = count_packets_in_batches(packet_batches);
         let num_discarded_packets = count_discarded_packets(packet_batches);
-        let shrink_total = if num_packets > 0 {
-            let pre_packet_batches_len = packet_batches.len();
-            let discarded_packet_rate = (num_discarded_packets as f64) / (num_packets as f64);
-            if discarded_packet_rate >= MAX_DISCARDED_PACKET_RATE {
-                shrink_batches(packet_batches);
-            }
-            let post_packet_batches_len = packet_batches.len();
-            pre_packet_batches_len.saturating_sub(post_packet_batches_len)
-        } else {
-            0
-        };
+        let pre_packet_batches_len = packet_batches.len();
+        let discarded_packet_rate = (num_discarded_packets as f64) / (num_packets as f64);
+        if discarded_packet_rate >= MAX_DISCARDED_PACKET_RATE {
+            shrink_batches(packet_batches);
+        }
+        let post_packet_batches_len = packet_batches.len();
+        let shrink_total = pre_packet_batches_len.saturating_sub(post_packet_batches_len);
         shrink_time.stop();
         (shrink_time.as_us(), shrink_total)
     }
@@ -332,7 +329,7 @@ impl SigVerifyStage {
             },
         ) as usize;
         dedup_time.stop();
-        let num_unique = num_packets.saturating_sub(discard_or_dedup_fail);
+        let num_unique = non_discarded_packets.saturating_sub(discard_or_dedup_fail);
 
         let mut discard_time = Measure::start("sigverify_discard_time");
         let mut num_packets_to_verify = num_unique;
@@ -419,7 +416,7 @@ impl SigVerifyStage {
         const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
         const DEDUPER_NUM_BITS: u64 = 63_999_979;
         Builder::new()
-            .name("solana-verifier".to_string())
+            .name("solSigVerifier".to_string())
             .spawn(move || {
                 let mut rng = rand::thread_rng();
                 let mut deduper = Deduper::<2, [u8]>::new(&mut rng, DEDUPER_NUM_BITS);
@@ -482,13 +479,9 @@ mod tests {
     fn count_non_discard(packet_batches: &[PacketBatch]) -> usize {
         packet_batches
             .iter()
-            .map(|batch| {
-                batch
-                    .iter()
-                    .map(|p| if p.meta.discard() { 0 } else { 1 })
-                    .sum::<usize>()
-            })
-            .sum::<usize>()
+            .flatten()
+            .filter(|p| !p.meta.discard())
+            .count()
     }
 
     #[test]

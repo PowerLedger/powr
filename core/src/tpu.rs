@@ -15,7 +15,7 @@ use {
         sigverify_stage::SigVerifyStage,
         staked_nodes_updater_service::StakedNodesUpdaterService,
     },
-    crossbeam_channel::{bounded, unbounded, Receiver, RecvTimeoutError},
+    crossbeam_channel::{unbounded, Receiver},
     solana_client::connection_cache::ConnectionCache,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{blockstore::Blockstore, blockstore_processor::TransactionStatusSender},
@@ -36,16 +36,12 @@ use {
     },
     std::{
         net::UdpSocket,
-        sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
+        sync::{atomic::AtomicBool, Arc, RwLock},
         thread,
-        time::Duration,
     },
 };
 
 pub const DEFAULT_TPU_COALESCE_MS: u64 = 5;
-
-/// Timeout interval when joining threads during TPU close
-const TPU_THREADS_JOIN_TIMEOUT_SECONDS: u64 = 10;
 
 // allow multiple connections for NAT and any open/close overlap
 pub const MAX_QUIC_CONNECTIONS_PER_PEER: usize = 8;
@@ -77,7 +73,7 @@ impl Tpu {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         cluster_info: &Arc<ClusterInfo>,
-        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        poh_recorder: &Arc<RwLock<PohRecorder>>,
         entry_receiver: Receiver<WorkingBankEntry>,
         retransmit_slots_receiver: RetransmitSlotsReceiver,
         sockets: TpuSockets,
@@ -99,6 +95,7 @@ impl Tpu {
         cost_model: &Arc<RwLock<CostModel>>,
         connection_cache: &Arc<ConnectionCache>,
         keypair: &Keypair,
+        log_messages_bytes_limit: Option<usize>,
         staked_nodes: &Arc<RwLock<StakedNodes>>,
         tpu_enable_udp: bool,
     ) -> Self {
@@ -142,7 +139,7 @@ impl Tpu {
             packet_receiver,
             find_packet_sender_stake_sender,
             staked_nodes.clone(),
-            "tpu-find-packet-sender-stake",
+            "Tpu",
         );
 
         let (vote_find_packet_sender_stake_sender, vote_find_packet_sender_stake_receiver) =
@@ -152,7 +149,7 @@ impl Tpu {
             vote_packet_receiver,
             vote_find_packet_sender_stake_sender,
             staked_nodes.clone(),
-            "tpu-vote-find-packet-sender-stake",
+            "Vote",
         );
 
         let (verified_sender, verified_receiver) = unbounded();
@@ -230,6 +227,7 @@ impl Tpu {
             transaction_status_sender,
             replay_vote_sender,
             cost_model.clone(),
+            log_messages_bytes_limit,
             connection_cache.clone(),
             bank_forks.clone(),
         );
@@ -261,22 +259,6 @@ impl Tpu {
     }
 
     pub fn join(self) -> thread::Result<()> {
-        // spawn a new thread to wait for tpu close
-        let (sender, receiver) = bounded(0);
-        let _ = thread::spawn(move || {
-            let _ = self.do_join();
-            sender.send(()).unwrap();
-        });
-
-        // exit can deadlock. put an upper-bound on how long we wait for it
-        let timeout = Duration::from_secs(TPU_THREADS_JOIN_TIMEOUT_SECONDS);
-        if let Err(RecvTimeoutError::Timeout) = receiver.recv_timeout(timeout) {
-            error!("timeout for closing tpu");
-        }
-        Ok(())
-    }
-
-    fn do_join(self) -> thread::Result<()> {
         let results = vec![
             self.fetch_stage.join(),
             self.sigverify_stage.join(),

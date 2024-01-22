@@ -13,12 +13,12 @@
 
 use {
     crate::{
-        cluster_info::CRDS_UNIQUE_PUBKEY_CAPACITY,
-        contact_info::ContactInfo,
+        cluster_info::{Ping, CRDS_UNIQUE_PUBKEY_CAPACITY},
         crds::{Crds, Cursor, GossipRoute},
-        crds_gossip::{get_stake, get_weight},
-        crds_gossip_error::CrdsGossipError,
+        crds_gossip::{self, get_stake, get_weight},
         crds_value::CrdsValue,
+        legacy_contact_info::LegacyContactInfo as ContactInfo,
+        ping_pong::PingCache,
         weighted_shuffle::WeightedShuffle,
     },
     bincode::serialized_size,
@@ -27,17 +27,24 @@ use {
     lru::LruCache,
     rand::{seq::SliceRandom, Rng},
     solana_bloom::bloom::{AtomicBloom, Bloom},
-    solana_sdk::{packet::PACKET_DATA_SIZE, pubkey::Pubkey, timing::timestamp},
+    solana_sdk::{
+        packet::PACKET_DATA_SIZE,
+        pubkey::Pubkey,
+        signature::{Keypair, Signer},
+        timing::timestamp,
+    },
     solana_streamer::socket::SocketAddrSpace,
     std::{
         cmp,
         collections::{HashMap, HashSet},
         iter::repeat,
+        net::SocketAddr,
         ops::{DerefMut, RangeBounds},
         sync::{
             atomic::{AtomicUsize, Ordering},
             Mutex, RwLock,
         },
+        time::Instant,
     },
 };
 
@@ -210,45 +217,37 @@ impl CrdsGossipPush {
     pub(crate) fn process_push_message(
         &self,
         crds: &RwLock<Crds>,
-        from: &Pubkey,
-        values: Vec<CrdsValue>,
+        messages: Vec<(/*from:*/ Pubkey, Vec<CrdsValue>)>,
         now: u64,
-    ) -> Vec<Result<Pubkey, CrdsGossipError>> {
-        self.num_total.fetch_add(values.len(), Ordering::Relaxed);
-        let values: Vec<_> = {
-            let wallclock_window = self.wallclock_window(now);
-            let mut received_cache = self.received_cache.lock().unwrap();
-            values
-                .into_iter()
-                .map(|value| {
-                    if !wallclock_window.contains(&value.wallclock()) {
-                        return Err(CrdsGossipError::PushMessageTimeout);
-                    }
-                    let origin = value.pubkey();
-                    let peers = received_cache.entry(origin).or_default();
-                    peers
-                        .entry(*from)
-                        .and_modify(|(_pruned, timestamp)| *timestamp = now)
-                        .or_insert((/*pruned:*/ false, now));
-                    Ok(value)
-                })
-                .collect()
-        };
+    ) -> HashSet<Pubkey> {
+        let mut received_cache = self.received_cache.lock().unwrap();
         let mut crds = crds.write().unwrap();
-        values
-            .into_iter()
-            .map(|value| {
-                let value = value?;
+        let wallclock_window = self.wallclock_window(now);
+        let mut origins = HashSet::new();
+        for (from, values) in messages {
+            self.num_total.fetch_add(values.len(), Ordering::Relaxed);
+            for value in values {
+                if !wallclock_window.contains(&value.wallclock()) {
+                    continue;
+                }
                 let origin = value.pubkey();
+                received_cache
+                    .entry(origin)
+                    .or_default()
+                    .entry(from)
+                    .and_modify(|(_pruned, timestamp)| *timestamp = now)
+                    .or_insert((/*pruned:*/ false, now));
                 match crds.insert(value, now, GossipRoute::PushMessage) {
-                    Ok(()) => Ok(origin),
+                    Ok(()) => {
+                        origins.insert(origin);
+                    }
                     Err(_) => {
                         self.num_old.fetch_add(1, Ordering::Relaxed);
-                        Err(CrdsGossipError::PushMessageOldVersion)
                     }
                 }
-            })
-            .collect()
+            }
+        }
+        origins
     }
 
     /// New push message to broadcast to peers.
@@ -261,12 +260,16 @@ impl CrdsGossipPush {
         &self,
         crds: &RwLock<Crds>,
         now: u64,
-    ) -> HashMap<Pubkey, Vec<CrdsValue>> {
+    ) -> (
+        HashMap<Pubkey, Vec<CrdsValue>>,
+        usize, // number of values
+        usize, // number of push messages
+    ) {
         let active_set = self.active_set.read().unwrap();
         let active_set_len = active_set.len();
         let push_fanout = self.push_fanout.min(active_set_len);
         if push_fanout == 0 {
-            return HashMap::default();
+            return (HashMap::default(), 0, 0);
         }
         let mut num_pushes = 0;
         let mut num_values = 0;
@@ -310,11 +313,16 @@ impl CrdsGossipPush {
         for target_pubkey in push_messages.keys().copied() {
             last_pushed_to.put(target_pubkey, now);
         }
-        push_messages
+        (push_messages, num_values, num_pushes)
     }
 
     /// Add the `from` to the peer's filter of nodes.
-    pub fn process_prune_msg(&self, self_pubkey: &Pubkey, peer: &Pubkey, origins: &[Pubkey]) {
+    pub(crate) fn process_prune_msg(
+        &self,
+        self_pubkey: &Pubkey,
+        peer: &Pubkey,
+        origins: &[Pubkey],
+    ) {
         if let Some(filter) = self.active_set.read().unwrap().get(peer) {
             for origin in origins {
                 if origin != self_pubkey {
@@ -334,15 +342,18 @@ impl CrdsGossipPush {
     /// # Arguments
     ///
     /// * ratio - active_set.len()/ratio is the number of actives to rotate
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn refresh_push_active_set(
         &self,
         crds: &RwLock<Crds>,
         stakes: &HashMap<Pubkey, u64>,
         gossip_validators: Option<&HashSet<Pubkey>>,
-        self_id: &Pubkey,
+        self_keypair: &Keypair,
         self_shred_version: u16,
         network_size: usize,
         ratio: usize,
+        ping_cache: &Mutex<PingCache>,
+        pings: &mut Vec<(SocketAddr, Ping)>,
         socket_addr_space: &SocketAddrSpace,
     ) {
         const BLOOM_FALSE_RATE: f64 = 0.1;
@@ -353,18 +364,36 @@ impl CrdsGossipPush {
         const MIN_NUM_BLOOM_ITEMS: usize = CRDS_UNIQUE_PUBKEY_CAPACITY;
         let mut rng = rand::thread_rng();
         let mut new_items = HashMap::new();
-        let (weights, peers): (Vec<_>, Vec<_>) = {
-            self.push_options(
-                crds,
-                self_id,
-                self_shred_version,
-                stakes,
-                gossip_validators,
-                socket_addr_space,
-            )
-            .into_iter()
-            .unzip()
+        // Gossip peers and respective sampling weights.
+        let peers = self.push_options(
+            crds,
+            &self_keypair.pubkey(),
+            self_shred_version,
+            stakes,
+            gossip_validators,
+            socket_addr_space,
+        );
+        // Check for nodes which have responded to ping messages.
+        let peers: Vec<_> = {
+            let mut ping_cache = ping_cache.lock().unwrap();
+            let mut pingf = move || Ping::new_rand(&mut rng, self_keypair).ok();
+            let now = Instant::now();
+            peers
+                .into_iter()
+                .filter(|(_weight, peer)| {
+                    let node = (peer.id, peer.gossip);
+                    let (check, ping) = ping_cache.check(now, node, &mut pingf);
+                    if let Some(ping) = ping {
+                        pings.push((peer.gossip, ping));
+                    }
+                    check
+                })
+                .collect()
         };
+        let (weights, peers): (Vec<_>, Vec<_>) = crds_gossip::dedup_gossip_addresses(peers)
+            .into_values()
+            .map(|(weight, node)| (weight, node.id))
+            .unzip();
         if peers.is_empty() {
             return;
         }
@@ -406,7 +435,7 @@ impl CrdsGossipPush {
         stakes: &HashMap<Pubkey, u64>,
         gossip_validators: Option<&HashSet<Pubkey>>,
         socket_addr_space: &SocketAddrSpace,
-    ) -> Vec<(/*weight:*/ u64, /*node:*/ Pubkey)> {
+    ) -> Vec<(/*weight:*/ u64, /*node:*/ ContactInfo)> {
         let now = timestamp();
         let mut rng = rand::thread_rng();
         let max_weight = u16::MAX as f32 - 1.0;
@@ -443,7 +472,7 @@ impl CrdsGossipPush {
                 let weight = get_weight(max_weight, since, stake);
                 // Weights are bounded by max_weight defined above.
                 // So this type-cast should be safe.
-                ((weight * 100.0) as u64, info.id)
+                ((weight * 100.0) as u64, info.clone())
             })
             .collect()
     }
@@ -489,11 +518,20 @@ impl CrdsGossipPush {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use {
         super::*,
-        crate::{contact_info::ContactInfo, crds_value::CrdsData},
+        crate::{crds_value::CrdsData, socketaddr},
+        std::time::Duration,
     };
+
+    fn new_ping_cache() -> PingCache {
+        PingCache::new(
+            Duration::from_secs(20 * 60),      // ttl
+            Duration::from_secs(20 * 60) / 64, // rate_limit_delay
+            128,                               // capacity
+        )
+    }
 
     #[test]
     fn test_prune() {
@@ -506,13 +544,13 @@ mod test {
         stakes.insert(self_id, 100);
         stakes.insert(origin, 100);
 
-        let value = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::new_localhost(
-            &origin, 0,
-        )));
+        let value = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(
+            ContactInfo::new_localhost(&origin, 0),
+        ));
         let low_staked_peers = (0..10).map(|_| solana_sdk::pubkey::new_rand());
         let mut low_staked_set = HashSet::new();
         low_staked_peers.for_each(|p| {
-            push.process_push_message(&crds, &p, vec![value.clone()], 0);
+            push.process_push_message(&crds, vec![(p, vec![value.clone()])], 0);
             low_staked_set.insert(p);
             stakes.insert(p, 1);
         });
@@ -534,7 +572,7 @@ mod test {
         let high_staked_peer = solana_sdk::pubkey::new_rand();
         let high_stake = CrdsGossipPush::prune_stake_threshold(100, 100) + 10;
         stakes.insert(high_staked_peer, high_stake);
-        push.process_push_message(&crds, &high_staked_peer, vec![value], 0);
+        push.process_push_message(&crds, vec![(high_staked_peer, vec![value])], 0);
 
         let pruned = {
             let mut received_cache = push.received_cache.lock().unwrap();
@@ -561,23 +599,21 @@ mod test {
     fn test_process_push_one() {
         let crds = RwLock::<Crds>::default();
         let push = CrdsGossipPush::default();
-        let value = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::new_localhost(
-            &solana_sdk::pubkey::new_rand(),
-            0,
-        )));
+        let value = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(
+            ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0),
+        ));
         let label = value.label();
         // push a new message
         assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![value.clone()], 0),
-            [Ok(label.pubkey())],
+            push.process_push_message(&crds, vec![(Pubkey::default(), vec![value.clone()])], 0),
+            [label.pubkey()].into_iter().collect(),
         );
         assert_eq!(crds.read().unwrap().get::<&CrdsValue>(&label), Some(&value));
 
         // push it again
-        assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![value], 0),
-            [Err(CrdsGossipError::PushMessageOldVersion)],
-        );
+        assert!(push
+            .process_push_message(&crds, vec![(Pubkey::default(), vec![value])], 0)
+            .is_empty());
     }
     #[test]
     fn test_process_push_old_version() {
@@ -585,21 +621,20 @@ mod test {
         let push = CrdsGossipPush::default();
         let mut ci = ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0);
         ci.wallclock = 1;
-        let value = CrdsValue::new_unsigned(CrdsData::ContactInfo(ci.clone()));
+        let value = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ci.clone()));
 
         // push a new message
         assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![value], 0),
-            [Ok(ci.id)],
+            push.process_push_message(&crds, vec![(Pubkey::default(), vec![value])], 0),
+            [ci.id].into_iter().collect()
         );
 
         // push an old version
         ci.wallclock = 0;
-        let value = CrdsValue::new_unsigned(CrdsData::ContactInfo(ci));
-        assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![value], 0),
-            [Err(CrdsGossipError::PushMessageOldVersion)],
-        );
+        let value = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ci));
+        assert!(push
+            .process_push_message(&crds, vec![(Pubkey::default(), vec![value])], 0)
+            .is_empty());
     }
     #[test]
     fn test_process_push_timeout() {
@@ -610,19 +645,17 @@ mod test {
 
         // push a version to far in the future
         ci.wallclock = timeout + 1;
-        let value = CrdsValue::new_unsigned(CrdsData::ContactInfo(ci.clone()));
-        assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![value], 0),
-            [Err(CrdsGossipError::PushMessageTimeout)],
-        );
+        let value = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ci.clone()));
+        assert!(push
+            .process_push_message(&crds, vec![(Pubkey::default(), vec![value])], 0)
+            .is_empty());
 
         // push a version to far in the past
         ci.wallclock = 0;
-        let value = CrdsValue::new_unsigned(CrdsData::ContactInfo(ci));
-        assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![value], timeout + 1),
-            [Err(CrdsGossipError::PushMessageTimeout)]
-        );
+        let value = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ci));
+        assert!(push
+            .process_push_message(&crds, vec![(Pubkey::default(), vec![value])], timeout + 1)
+            .is_empty());
     }
     #[test]
     fn test_process_push_update() {
@@ -631,20 +664,20 @@ mod test {
         let mut ci = ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0);
         let origin = ci.id;
         ci.wallclock = 0;
-        let value_old = CrdsValue::new_unsigned(CrdsData::ContactInfo(ci.clone()));
+        let value_old = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ci.clone()));
 
         // push a new message
         assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![value_old], 0),
-            [Ok(origin)],
+            push.process_push_message(&crds, vec![(Pubkey::default(), vec![value_old])], 0),
+            [origin].into_iter().collect()
         );
 
         // push an old version
         ci.wallclock = 1;
-        let value = CrdsValue::new_unsigned(CrdsData::ContactInfo(ci));
+        let value = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ci));
         assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![value], 0),
-            [Ok(origin)],
+            push.process_push_message(&crds, vec![(Pubkey::default(), vec![value])], 0),
+            [origin].into_iter().collect()
         );
     }
     #[test]
@@ -660,33 +693,40 @@ mod test {
         let now = timestamp();
         let mut crds = Crds::default();
         let push = CrdsGossipPush::default();
-        let value1 = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::new_localhost(
-            &solana_sdk::pubkey::new_rand(),
-            0,
-        )));
+        let mut ping_cache = new_ping_cache();
+        let value1 = ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0);
+        ping_cache.mock_pong(value1.id, value1.gossip, Instant::now());
+        let value1 = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(value1));
 
         assert_eq!(
             crds.insert(value1.clone(), now, GossipRoute::LocalMessage),
             Ok(())
         );
+        let keypair = Keypair::new();
         let crds = RwLock::new(crds);
+        let ping_cache = Mutex::new(ping_cache);
         push.refresh_push_active_set(
             &crds,
-            &HashMap::new(),
-            None,
-            &Pubkey::default(),
-            0,
-            1,
-            1,
+            &HashMap::new(), // stakes
+            None,            // gossip_validators
+            &keypair,
+            0, // self_shred_version
+            1, // network_sizer
+            1, // ratio
+            &ping_cache,
+            &mut Vec::new(), // pings
             &SocketAddrSpace::Unspecified,
         );
 
         let active_set = push.active_set.read().unwrap();
         assert!(active_set.get(&value1.label().pubkey()).is_some());
-        let value2 = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::new_localhost(
-            &solana_sdk::pubkey::new_rand(),
-            0,
-        )));
+        let mut value2 = ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0);
+        value2.gossip.set_port(1245);
+        ping_cache
+            .lock()
+            .unwrap()
+            .mock_pong(value2.id, value2.gossip, Instant::now());
+        let value2 = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(value2));
         assert!(active_set.get(&value2.label().pubkey()).is_none());
         drop(active_set);
         assert_eq!(
@@ -698,12 +738,14 @@ mod test {
         for _ in 0..30 {
             push.refresh_push_active_set(
                 &crds,
-                &HashMap::new(),
-                None,
-                &Pubkey::default(),
-                0,
-                1,
-                1,
+                &HashMap::new(), // stakes
+                None,            // gossip_validators
+                &keypair,
+                0, // self_shred_version
+                1, // network_size
+                1, // ratio
+                &ping_cache,
+                &mut Vec::new(), // pings
                 &SocketAddrSpace::Unspecified,
             );
             let active_set = push.active_set.read().unwrap();
@@ -715,10 +757,14 @@ mod test {
             let active_set = push.active_set.read().unwrap();
             assert!(active_set.get(&value2.label().pubkey()).is_some());
         }
-        for _ in 0..push.num_active {
-            let value2 = CrdsValue::new_unsigned(CrdsData::ContactInfo(
-                ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0),
-            ));
+        for k in 0..push.num_active {
+            let mut value2 = ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0);
+            value2.gossip.set_port(1246 + k as u16);
+            ping_cache
+                .lock()
+                .unwrap()
+                .mock_pong(value2.id, value2.gossip, Instant::now());
+            let value2 = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(value2));
             assert_eq!(
                 crds.write()
                     .unwrap()
@@ -726,14 +772,17 @@ mod test {
                 Ok(())
             );
         }
+
         push.refresh_push_active_set(
             &crds,
-            &HashMap::new(),
-            None,
-            &Pubkey::default(),
-            0,
-            1,
-            1,
+            &HashMap::new(), // stakes
+            None,            // gossip_validators
+            &keypair,
+            0, // self_shred_version
+            1, // network_size
+            1, // ratio
+            &ping_cache,
+            &mut Vec::new(), // pings
             &SocketAddrSpace::Unspecified,
         );
         assert_eq!(push.active_set.read().unwrap().len(), push.num_active);
@@ -746,10 +795,9 @@ mod test {
         let push = CrdsGossipPush::default();
         let mut stakes = HashMap::new();
         for i in 1..=100 {
-            let peer = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::new_localhost(
-                &solana_sdk::pubkey::new_rand(),
-                time,
-            )));
+            let peer = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(
+                ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), time),
+            ));
             let id = peer.label().pubkey();
             crds.insert(peer.clone(), time, GossipRoute::LocalMessage)
                 .unwrap();
@@ -768,7 +816,7 @@ mod test {
         assert!(!options.is_empty());
         options.sort_by(|(weight_l, _), (weight_r, _)| weight_r.partial_cmp(weight_l).unwrap());
         // check that the highest stake holder is also the heaviest weighted.
-        assert_eq!(stakes[&options[0].1], 10_000_u64);
+        assert_eq!(stakes[&options[0].1.id], 10_000_u64);
     }
 
     #[test]
@@ -780,25 +828,25 @@ mod test {
 
         let gossip = socketaddr!("127.0.0.1:1234");
 
-        let me = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo {
+        let me = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ContactInfo {
             id: solana_sdk::pubkey::new_rand(),
             shred_version: 123,
             gossip,
             ..ContactInfo::default()
         }));
-        let spy = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo {
+        let spy = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ContactInfo {
             id: solana_sdk::pubkey::new_rand(),
             shred_version: 0,
             gossip,
             ..ContactInfo::default()
         }));
-        let node_123 = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo {
+        let node_123 = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ContactInfo {
             id: solana_sdk::pubkey::new_rand(),
             shred_version: 123,
             gossip,
             ..ContactInfo::default()
         }));
-        let node_456 = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo {
+        let node_456 = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ContactInfo {
             id: solana_sdk::pubkey::new_rand(),
             shred_version: 456,
             gossip,
@@ -826,7 +874,7 @@ mod test {
                 &SocketAddrSpace::Unspecified,
             )
             .iter()
-            .map(|(_, pk)| *pk)
+            .map(|(_, node)| node.id)
             .collect::<Vec<_>>();
         assert_eq!(options.len(), 1);
         assert!(!options.contains(&spy.pubkey()));
@@ -852,12 +900,12 @@ mod test {
         let node = CrdsGossipPush::default();
         let gossip = socketaddr!("127.0.0.1:1234");
 
-        let me = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo {
+        let me = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ContactInfo {
             id: solana_sdk::pubkey::new_rand(),
             gossip,
             ..ContactInfo::default()
         }));
-        let node_123 = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo {
+        let node_123 = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ContactInfo {
             id: solana_sdk::pubkey::new_rand(),
             gossip,
             ..ContactInfo::default()
@@ -906,7 +954,7 @@ mod test {
         );
 
         assert_eq!(options.len(), 1);
-        assert_eq!(options[0].1, node_123.pubkey());
+        assert_eq!(options[0].1.id, node_123.pubkey());
     }
 
     #[test]
@@ -914,39 +962,41 @@ mod test {
         let now = timestamp();
         let mut crds = Crds::default();
         let push = CrdsGossipPush::default();
-        let peer = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::new_localhost(
-            &solana_sdk::pubkey::new_rand(),
-            0,
-        )));
+        let mut ping_cache = new_ping_cache();
+        let peer = ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0);
+        ping_cache.mock_pong(peer.id, peer.gossip, Instant::now());
+        let peer = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(peer));
         assert_eq!(
             crds.insert(peer.clone(), now, GossipRoute::LocalMessage),
             Ok(())
         );
         let crds = RwLock::new(crds);
+        let ping_cache = Mutex::new(ping_cache);
         push.refresh_push_active_set(
             &crds,
-            &HashMap::new(),
-            None,
-            &Pubkey::default(),
-            0,
-            1,
-            1,
+            &HashMap::new(), // stakes
+            None,            // gossip_validtors
+            &Keypair::new(),
+            0, // self_shred_version
+            1, // network_size
+            1, // ratio
+            &ping_cache,
+            &mut Vec::new(), // pings
             &SocketAddrSpace::Unspecified,
         );
 
-        let new_msg = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::new_localhost(
-            &solana_sdk::pubkey::new_rand(),
-            0,
-        )));
+        let new_msg = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(
+            ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0),
+        ));
         let mut expected = HashMap::new();
         expected.insert(peer.label().pubkey(), vec![new_msg.clone()]);
         let origin = new_msg.pubkey();
         assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![new_msg], 0),
-            [Ok(origin)]
+            push.process_push_message(&crds, vec![(Pubkey::default(), vec![new_msg])], 0),
+            [origin].into_iter().collect()
         );
         assert_eq!(push.active_set.read().unwrap().len(), 1);
-        assert_eq!(push.new_push_messages(&crds, 0), expected);
+        assert_eq!(push.new_push_messages(&crds, 0).0, expected);
     }
     #[test]
     fn test_personalized_push_messages() {
@@ -954,12 +1004,14 @@ mod test {
         let mut rng = rand::thread_rng();
         let mut crds = Crds::default();
         let push = CrdsGossipPush::default();
+        let mut ping_cache = new_ping_cache();
         let peers: Vec<_> = vec![0, 0, now]
             .into_iter()
             .map(|wallclock| {
                 let mut peer = ContactInfo::new_rand(&mut rng, /*pubkey=*/ None);
                 peer.wallclock = wallclock;
-                CrdsValue::new_unsigned(CrdsData::ContactInfo(peer))
+                ping_cache.mock_pong(peer.id, peer.gossip, Instant::now());
+                CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(peer))
             })
             .collect();
         let origin: Vec<_> = peers.iter().map(|node| node.pubkey()).collect();
@@ -973,17 +1025,24 @@ mod test {
         );
         let crds = RwLock::new(crds);
         assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![peers[2].clone()], now),
-            [Ok(origin[2])],
+            push.process_push_message(
+                &crds,
+                vec![(Pubkey::default(), vec![peers[2].clone()])],
+                now
+            ),
+            [origin[2]].into_iter().collect()
         );
+        let ping_cache = Mutex::new(ping_cache);
         push.refresh_push_active_set(
             &crds,
-            &HashMap::new(),
-            None,
-            &Pubkey::default(),
-            0,
-            1,
-            1,
+            &HashMap::new(), // stakes
+            None,            // gossip_validators
+            &Keypair::new(),
+            0, // self_shred_version
+            1, // network_size
+            1, // ratio
+            &ping_cache,
+            &mut Vec::new(),
             &SocketAddrSpace::Unspecified,
         );
 
@@ -995,81 +1054,84 @@ mod test {
         .into_iter()
         .collect();
         assert_eq!(push.active_set.read().unwrap().len(), 3);
-        assert_eq!(push.new_push_messages(&crds, now), expected);
+        assert_eq!(push.new_push_messages(&crds, now).0, expected);
     }
     #[test]
     fn test_process_prune() {
         let mut crds = Crds::default();
         let self_id = solana_sdk::pubkey::new_rand();
         let push = CrdsGossipPush::default();
-        let peer = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::new_localhost(
-            &solana_sdk::pubkey::new_rand(),
-            0,
-        )));
+        let peer = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(
+            ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0),
+        ));
         assert_eq!(
             crds.insert(peer.clone(), 0, GossipRoute::LocalMessage),
             Ok(())
         );
         let crds = RwLock::new(crds);
+        let ping_cache = Mutex::new(new_ping_cache());
         push.refresh_push_active_set(
             &crds,
-            &HashMap::new(),
-            None,
-            &Pubkey::default(),
-            0,
-            1,
-            1,
+            &HashMap::new(), // stakes
+            None,            // gossip_validators
+            &Keypair::new(),
+            0, // self_shred_version
+            1, // network_size
+            1, // ratio
+            &ping_cache,
+            &mut Vec::new(), // pings
             &SocketAddrSpace::Unspecified,
         );
 
-        let new_msg = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::new_localhost(
-            &solana_sdk::pubkey::new_rand(),
-            0,
-        )));
+        let new_msg = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(
+            ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0),
+        ));
         let expected = HashMap::new();
         let origin = new_msg.pubkey();
         assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![new_msg.clone()], 0),
-            [Ok(origin)],
+            push.process_push_message(&crds, vec![(Pubkey::default(), vec![new_msg.clone()])], 0),
+            [origin].into_iter().collect()
         );
         push.process_prune_msg(
             &self_id,
             &peer.label().pubkey(),
             &[new_msg.label().pubkey()],
         );
-        assert_eq!(push.new_push_messages(&crds, 0), expected);
+        assert_eq!(push.new_push_messages(&crds, 0).0, expected);
     }
     #[test]
     fn test_purge_old_pending_push_messages() {
         let mut crds = Crds::default();
         let push = CrdsGossipPush::default();
-        let peer = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::new_localhost(
-            &solana_sdk::pubkey::new_rand(),
-            0,
-        )));
+        let peer = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(
+            ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0),
+        ));
         assert_eq!(crds.insert(peer, 0, GossipRoute::LocalMessage), Ok(()));
         let crds = RwLock::new(crds);
+        let ping_cache = Mutex::new(new_ping_cache());
         push.refresh_push_active_set(
             &crds,
-            &HashMap::new(),
-            None,
-            &Pubkey::default(),
-            0,
-            1,
-            1,
+            &HashMap::new(), // stakes
+            None,            // gossip_validators
+            &Keypair::new(),
+            0, // self_shred_version
+            1, // network_size
+            1, // ratio
+            &ping_cache,
+            &mut Vec::new(), // pings
             &SocketAddrSpace::Unspecified,
         );
 
         let mut ci = ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0);
         ci.wallclock = 1;
-        let new_msg = CrdsValue::new_unsigned(CrdsData::ContactInfo(ci));
+        let new_msg = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ci));
         let expected = HashMap::new();
         let origin = new_msg.pubkey();
         assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![new_msg], 1),
-            [Ok(origin)],
+            push.process_push_message(&crds, vec![(Pubkey::default(), vec![new_msg])], 1),
+            [origin].into_iter().collect()
         );
-        assert_eq!(push.new_push_messages(&crds, 0), expected);
+        assert_eq!(push.new_push_messages(&crds, 0).0, expected);
     }
 
     #[test]
@@ -1078,12 +1140,12 @@ mod test {
         let push = CrdsGossipPush::default();
         let mut ci = ContactInfo::new_localhost(&solana_sdk::pubkey::new_rand(), 0);
         ci.wallclock = 0;
-        let value = CrdsValue::new_unsigned(CrdsData::ContactInfo(ci));
+        let value = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ci));
         let label = value.label();
         // push a new message
         assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![value.clone()], 0),
-            [Ok(label.pubkey())]
+            push.process_push_message(&crds, vec![(Pubkey::default(), vec![value.clone()])], 0),
+            [label.pubkey()].into_iter().collect()
         );
         assert_eq!(
             crds.write().unwrap().get::<&CrdsValue>(&label),
@@ -1091,18 +1153,16 @@ mod test {
         );
 
         // push it again
-        assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![value.clone()], 0),
-            [Err(CrdsGossipError::PushMessageOldVersion)],
-        );
+        assert!(push
+            .process_push_message(&crds, vec![(Pubkey::default(), vec![value.clone()])], 0)
+            .is_empty());
 
         // purge the old pushed
         push.purge_old_received_cache(1);
 
         // push it again
-        assert_eq!(
-            push.process_push_message(&crds, &Pubkey::default(), vec![value], 0),
-            [Err(CrdsGossipError::PushMessageOldVersion)],
-        );
+        assert!(push
+            .process_push_message(&crds, vec![(Pubkey::default(), vec![value])], 0)
+            .is_empty());
     }
 }
