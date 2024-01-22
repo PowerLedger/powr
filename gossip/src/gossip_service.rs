@@ -1,7 +1,7 @@
 //! The `gossip_service` module implements the network control plane.
 
 use {
-    crate::{cluster_info::ClusterInfo, contact_info::ContactInfo},
+    crate::{cluster_info::ClusterInfo, legacy_contact_info::LegacyContactInfo as ContactInfo},
     crossbeam_channel::{unbounded, Sender},
     rand::{thread_rng, Rng},
     solana_client::{connection_cache::ConnectionCache, thin_client::ThinClient},
@@ -80,7 +80,7 @@ impl GossipService {
             exit.clone(),
         );
         let t_responder = streamer::responder(
-            "gossip",
+            "Gossip",
             gossip_socket,
             response_receiver,
             socket_addr_space,
