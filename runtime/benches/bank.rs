@@ -6,7 +6,11 @@ extern crate test;
 use {
     log::*,
     solana_program_runtime::invoke_context::InvokeContext,
-    solana_runtime::{bank::*, bank_client::BankClient, loader_utils::create_invoke_instruction},
+    solana_runtime::{
+        bank::{test_utils::goto_end_of_slot, *},
+        bank_client::BankClient,
+        loader_utils::create_invoke_instruction,
+    },
     solana_sdk::{
         client::{AsyncClient, SyncClient},
         clock::MAX_RECENT_BLOCKHASHES,
@@ -34,7 +38,6 @@ const NOOP_PROGRAM_ID: [u8; 32] = [
 #[allow(clippy::unnecessary_wraps)]
 fn process_instruction(
     _first_instruction_account: usize,
-    _data: &[u8],
     _invoke_context: &mut InvokeContext,
 ) -> Result<(), InstructionError> {
     Ok(())
@@ -44,7 +47,7 @@ pub fn create_builtin_transactions(
     bank_client: &BankClient,
     mint_keypair: &Keypair,
 ) -> Vec<Transaction> {
-    let program_id = Pubkey::new(&BUILTIN_PROGRAM_ID);
+    let program_id = Pubkey::from(BUILTIN_PROGRAM_ID);
 
     (0..4096)
         .map(|_| {
@@ -66,7 +69,7 @@ pub fn create_native_loader_transactions(
     bank_client: &BankClient,
     mint_keypair: &Keypair,
 ) -> Vec<Transaction> {
-    let program_id = Pubkey::new(&NOOP_PROGRAM_ID);
+    let program_id = Pubkey::from(NOOP_PROGRAM_ID);
 
     (0..4096)
         .map(|_| {
@@ -116,6 +119,7 @@ fn async_bencher(bank: &Arc<Bank>, bank_client: &BankClient, transactions: &[Tra
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn do_bench_transactions(
     bencher: &mut Bencher,
     bench_work: &dyn Fn(&Arc<Bank>, &BankClient, &[Transaction]),
@@ -133,10 +137,10 @@ fn do_bench_transactions(
     let mut bank = Bank::new_from_parent(&Arc::new(bank), &Pubkey::default(), 1);
     bank.add_builtin(
         "builtin_program",
-        &Pubkey::new(&BUILTIN_PROGRAM_ID),
+        &Pubkey::from(BUILTIN_PROGRAM_ID),
         process_instruction,
     );
-    bank.add_builtin_account("solana_noop_program", &Pubkey::new(&NOOP_PROGRAM_ID), false);
+    bank.add_builtin_account("solana_noop_program", &Pubkey::from(NOOP_PROGRAM_ID), false);
     let bank = Arc::new(bank);
     let bank_client = BankClient::new_shared(&bank);
     let transactions = create_transactions(&bank_client, &mint_keypair);
@@ -200,10 +204,7 @@ fn bench_bank_update_recent_blockhashes(bencher: &mut Bencher) {
         goto_end_of_slot(Arc::get_mut(&mut bank).unwrap());
     }
     // Verify blockhash_queue is full (genesis hash has been kicked out)
-    assert_eq!(
-        Some(false),
-        bank.check_hash_age(&genesis_hash, MAX_RECENT_BLOCKHASHES)
-    );
+    assert!(!bank.is_hash_valid_for_age(&genesis_hash, MAX_RECENT_BLOCKHASHES));
     bencher.iter(|| {
         bank.update_recent_blockhashes();
     });

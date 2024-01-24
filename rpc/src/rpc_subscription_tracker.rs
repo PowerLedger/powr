@@ -13,10 +13,7 @@ use {
     },
     solana_transaction_status::{TransactionDetails, UiTransactionEncoding},
     std::{
-        collections::{
-            hash_map::{Entry, HashMap},
-            HashSet,
-        },
+        collections::hash_map::{Entry, HashMap},
         fmt,
         sync::{
             atomic::{AtomicU64, Ordering},
@@ -291,6 +288,21 @@ impl SubscriptionControl {
     }
 
     #[cfg(test)]
+    pub fn logs_subscribed(&self, pubkey: Option<&Pubkey>) -> bool {
+        self.0.subscriptions.iter().any(|item| {
+            if let SubscriptionParams::Logs(params) = item.key() {
+                let subscribed_pubkey = match &params.kind {
+                    LogsSubscriptionKind::All | LogsSubscriptionKind::AllWithVotes => None,
+                    LogsSubscriptionKind::Single(pubkey) => Some(pubkey),
+                };
+                subscribed_pubkey == pubkey
+            } else {
+                false
+            }
+        })
+    }
+
+    #[cfg(test)]
     pub fn signature_subscribed(&self, signature: &Signature) -> bool {
         self.0.subscriptions.iter().any(|item| {
             if let SubscriptionParams::Signature(params) = item.key() {
@@ -373,20 +385,21 @@ impl LogsSubscriptionsIndex {
     }
 
     fn update_config(&self) {
+        let mentioned_addresses = self.single_count.keys().copied().collect();
         let config = if self.all_with_votes_count > 0 {
             TransactionLogCollectorConfig {
                 filter: TransactionLogCollectorFilter::AllWithVotes,
-                mentioned_addresses: HashSet::new(),
+                mentioned_addresses,
             }
         } else if self.all_count > 0 {
             TransactionLogCollectorConfig {
                 filter: TransactionLogCollectorFilter::All,
-                mentioned_addresses: HashSet::new(),
+                mentioned_addresses,
             }
         } else {
             TransactionLogCollectorConfig {
                 filter: TransactionLogCollectorFilter::OnlyMentionedAddresses,
-                mentioned_addresses: self.single_count.keys().copied().collect(),
+                mentioned_addresses,
             }
         };
 
@@ -702,7 +715,7 @@ mod tests {
         assert_eq!(*info.last_notified_slot.read().unwrap(), 0);
 
         let account_params = SubscriptionParams::Account(AccountSubscriptionParams {
-            pubkey: Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap(),
+            pubkey: Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(),
             commitment: CommitmentConfig::finalized(),
             encoding: UiAccountEncoding::Base64Zstd,
             data_slice: None,
@@ -742,7 +755,7 @@ mod tests {
         assert_eq!(counts(&tracker), (0, 0, 0, 0));
 
         let account_params = SubscriptionParams::Account(AccountSubscriptionParams {
-            pubkey: Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap(),
+            pubkey: Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(),
             commitment: CommitmentConfig::finalized(),
             encoding: UiAccountEncoding::Base64Zstd,
             data_slice: None,
@@ -753,7 +766,7 @@ mod tests {
         assert_eq!(counts(&tracker), (0, 0, 0, 0));
 
         let account_params2 = SubscriptionParams::Account(AccountSubscriptionParams {
-            pubkey: Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap(),
+            pubkey: Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(),
             commitment: CommitmentConfig::confirmed(),
             encoding: UiAccountEncoding::Base64Zstd,
             data_slice: None,

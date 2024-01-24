@@ -24,7 +24,7 @@ use {
         },
         rpc_response::{
             Response as RpcResponse, RpcBlockUpdate, RpcKeyedAccount, RpcLogsResponse,
-            RpcSignatureResult, RpcVote, SlotInfo, SlotUpdate,
+            RpcSignatureResult, RpcVersionInfo, RpcVote, SlotInfo, SlotUpdate,
         },
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Signature},
@@ -348,6 +348,10 @@ mod internal {
         // Unsubscribe from slot notification subscription.
         #[rpc(name = "rootUnsubscribe")]
         fn root_unsubscribe(&self, id: SubscriptionId) -> Result<bool>;
+
+        // Get the current solana version running on the node
+        #[rpc(name = "getVersion")]
+        fn get_version(&self) -> Result<RpcVersionInfo>;
     }
 }
 
@@ -576,6 +580,14 @@ impl RpcSolPubSubInternal for RpcSolPubSubImpl {
     fn root_unsubscribe(&self, id: SubscriptionId) -> Result<bool> {
         self.unsubscribe(id)
     }
+
+    fn get_version(&self) -> Result<RpcVersionInfo> {
+        let version = solana_version::Version::default();
+        Ok(RpcVersionInfo {
+            solana_core: version.to_string(),
+            feature_set: Some(version.feature_set),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -597,8 +609,8 @@ mod tests {
             bank_forks::BankForks,
             commitment::{BlockCommitmentCache, CommitmentSlots},
             genesis_utils::{
-                create_genesis_config, create_genesis_config_with_vote_accounts, GenesisConfigInfo,
-                ValidatorVoteKeypairs,
+                activate_all_features, create_genesis_config,
+                create_genesis_config_with_vote_accounts, GenesisConfigInfo, ValidatorVoteKeypairs,
             },
             vote_transaction::VoteTransaction,
         },
@@ -609,10 +621,11 @@ mod tests {
             hash::Hash,
             message::Message,
             pubkey::Pubkey,
+            rent::Rent,
             signature::{Keypair, Signer},
             stake::{
                 self, instruction as stake_instruction,
-                state::{Authorized, Lockup, StakeAuthorize},
+                state::{Authorized, Lockup, StakeAuthorize, StakeState},
             },
             system_instruction, system_program, system_transaction,
             transaction::{self, Transaction},
@@ -663,9 +676,11 @@ mod tests {
         let blockhash = bank.last_blockhash();
         let bank_forks = Arc::new(RwLock::new(BankForks::new(bank)));
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
+        let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let rpc_subscriptions = Arc::new(RpcSubscriptions::new_for_tests(
             &Arc::new(AtomicBool::new(false)),
             max_complete_transaction_status_slot,
+            max_complete_rewards_slot,
             bank_forks.clone(),
             Arc::new(RwLock::new(BlockCommitmentCache::new_for_tests())),
             OptimisticallyConfirmedBank::locked_from_bank_forks_root(&bank_forks),
@@ -792,8 +807,10 @@ mod tests {
 
         let mut io = IoHandler::<()>::default();
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
+        let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let subscriptions = Arc::new(RpcSubscriptions::default_with_bank_forks(
             max_complete_transaction_status_slot,
+            max_complete_rewards_slot,
             bank_forks,
         ));
         let (rpc, _receiver) = rpc_pubsub_service::test_connection(&subscriptions);
@@ -830,10 +847,12 @@ mod tests {
     #[serial]
     fn test_account_subscribe() {
         let GenesisConfigInfo {
-            genesis_config,
+            mut genesis_config,
             mint_keypair: alice,
             ..
-        } = create_genesis_config(10_000);
+        } = create_genesis_config(10_000_000_000);
+        genesis_config.rent = Rent::default();
+        activate_all_features(&mut genesis_config);
 
         let new_stake_authority = solana_sdk::pubkey::new_rand();
         let stake_authority = Keypair::new();
@@ -847,9 +866,11 @@ mod tests {
         let bank1 = Bank::new_from_parent(&bank0, &Pubkey::default(), 1);
         bank_forks.write().unwrap().insert(bank1);
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
+        let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let rpc_subscriptions = Arc::new(RpcSubscriptions::new_for_tests(
             &Arc::new(AtomicBool::new(false)),
             max_complete_transaction_status_slot,
+            max_complete_rewards_slot,
             bank_forks.clone(),
             Arc::new(RwLock::new(BlockCommitmentCache::new_for_tests_with_slots(
                 1, 1,
@@ -878,16 +899,21 @@ mod tests {
         rpc_subscriptions.notify_slot(1, 0, 0);
         receiver2.recv();
 
-        let tx = system_transaction::transfer(&alice, &from.pubkey(), 51, blockhash);
-        process_transaction_and_notify(&bank_forks, &tx, &rpc_subscriptions, 1).unwrap();
+        let balance = {
+            let bank = bank_forks.read().unwrap().working_bank();
+            let rent = &bank.rent_collector().rent;
+            rent.minimum_balance(StakeState::size_of())
+        };
 
+        let tx = system_transaction::transfer(&alice, &from.pubkey(), balance, blockhash);
+        process_transaction_and_notify(&bank_forks, &tx, &rpc_subscriptions, 1).unwrap();
         let authorized = Authorized::auto(&stake_authority.pubkey());
         let ixs = stake_instruction::create_account(
             &from.pubkey(),
             &stake_account.pubkey(),
             &authorized,
             &Lockup::default(),
-            51,
+            balance,
         );
         let message = Message::new(&ixs, Some(&from.pubkey()));
         let tx = Transaction::new(&[&from, &stake_account], message, blockhash);
@@ -910,7 +936,7 @@ mod tests {
                    "context": { "slot": 1 },
                    "value": {
                        "owner": stake_program_id.to_string(),
-                       "lamports": 51,
+                       "lamports": balance,
                        "data": [base64::encode(expected_data), encoding],
                        "executable": false,
                        "rentEpoch": 0,
@@ -926,7 +952,13 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&response).unwrap(),
         );
 
-        let tx = system_transaction::transfer(&alice, &stake_authority.pubkey(), 1, blockhash);
+        let balance = {
+            let bank = bank_forks.read().unwrap().working_bank();
+            let rent = &bank.rent_collector().rent;
+            rent.minimum_balance(0)
+        };
+        let tx =
+            system_transaction::transfer(&alice, &stake_authority.pubkey(), balance, blockhash);
         process_transaction_and_notify(&bank_forks, &tx, &rpc_subscriptions, 1).unwrap();
         sleep(Duration::from_millis(200));
         let ix = stake_instruction::authorize(
@@ -966,9 +998,11 @@ mod tests {
         let bank1 = Bank::new_from_parent(&bank0, &Pubkey::default(), 1);
         bank_forks.write().unwrap().insert(bank1);
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
+        let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let rpc_subscriptions = Arc::new(RpcSubscriptions::new_for_tests(
             &Arc::new(AtomicBool::new(false)),
             max_complete_transaction_status_slot,
+            max_complete_rewards_slot,
             bank_forks.clone(),
             Arc::new(RwLock::new(BlockCommitmentCache::new_for_tests_with_slots(
                 1, 1,
@@ -1058,8 +1092,10 @@ mod tests {
 
         let mut io = IoHandler::<()>::default();
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
+        let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let subscriptions = Arc::new(RpcSubscriptions::default_with_bank_forks(
             max_complete_transaction_status_slot,
+            max_complete_rewards_slot,
             bank_forks,
         ));
         let (rpc, _receiver) = rpc_pubsub_service::test_connection(&subscriptions);
@@ -1106,9 +1142,11 @@ mod tests {
 
         let exit = Arc::new(AtomicBool::new(false));
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
+        let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let rpc_subscriptions = Arc::new(RpcSubscriptions::new_for_tests(
             &exit,
             max_complete_transaction_status_slot,
+            max_complete_rewards_slot,
             bank_forks.clone(),
             Arc::new(RwLock::new(BlockCommitmentCache::new_for_tests())),
             OptimisticallyConfirmedBank::locked_from_bank_forks_root(&bank_forks),
@@ -1160,9 +1198,11 @@ mod tests {
         let exit = Arc::new(AtomicBool::new(false));
         let block_commitment_cache = Arc::new(RwLock::new(BlockCommitmentCache::new_for_tests()));
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
+        let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let subscriptions = Arc::new(RpcSubscriptions::new_for_tests(
             &exit,
             max_complete_transaction_status_slot,
+            max_complete_rewards_slot,
             bank_forks.clone(),
             block_commitment_cache,
             OptimisticallyConfirmedBank::locked_from_bank_forks_root(&bank_forks),
@@ -1232,8 +1272,10 @@ mod tests {
         let bank = Bank::new_for_tests(&genesis_config);
         let bank_forks = Arc::new(RwLock::new(BankForks::new(bank)));
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
+        let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let rpc_subscriptions = Arc::new(RpcSubscriptions::default_with_bank_forks(
             max_complete_transaction_status_slot,
+            max_complete_rewards_slot,
             bank_forks,
         ));
         let (rpc, mut receiver) = rpc_pubsub_service::test_connection(&rpc_subscriptions);
@@ -1264,8 +1306,10 @@ mod tests {
         let bank = Bank::new_for_tests(&genesis_config);
         let bank_forks = Arc::new(RwLock::new(BankForks::new(bank)));
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
+        let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let rpc_subscriptions = Arc::new(RpcSubscriptions::default_with_bank_forks(
             max_complete_transaction_status_slot,
+            max_complete_rewards_slot,
             bank_forks,
         ));
         let (rpc, mut receiver) = rpc_pubsub_service::test_connection(&rpc_subscriptions);
@@ -1310,9 +1354,11 @@ mod tests {
         let optimistically_confirmed_bank =
             OptimisticallyConfirmedBank::locked_from_bank_forks_root(&bank_forks);
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
+        let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let subscriptions = Arc::new(RpcSubscriptions::new_for_tests(
             &exit,
             max_complete_transaction_status_slot,
+            max_complete_rewards_slot,
             bank_forks,
             block_commitment_cache,
             optimistically_confirmed_bank,
@@ -1346,8 +1392,10 @@ mod tests {
         let bank = Bank::new_for_tests(&genesis_config);
         let bank_forks = Arc::new(RwLock::new(BankForks::new(bank)));
         let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
+        let max_complete_rewards_slot = Arc::new(AtomicU64::default());
         let rpc_subscriptions = Arc::new(RpcSubscriptions::default_with_bank_forks(
             max_complete_transaction_status_slot,
+            max_complete_rewards_slot,
             bank_forks,
         ));
         let (rpc, _receiver) = rpc_pubsub_service::test_connection(&rpc_subscriptions);
@@ -1355,5 +1403,24 @@ mod tests {
 
         assert!(rpc.vote_unsubscribe(42.into()).is_err());
         assert!(rpc.vote_unsubscribe(sub_id).is_ok());
+    }
+
+    #[test]
+    fn test_get_version() {
+        let GenesisConfigInfo { genesis_config, .. } = create_genesis_config(10_000);
+        let bank = Bank::new_for_tests(&genesis_config);
+        let bank_forks = Arc::new(RwLock::new(BankForks::new(bank)));
+        let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
+        let max_complete_rewards_slot = Arc::new(AtomicU64::default());
+        let rpc_subscriptions = Arc::new(RpcSubscriptions::default_with_bank_forks(
+            max_complete_transaction_status_slot,
+            max_complete_rewards_slot,
+            bank_forks,
+        ));
+        let (rpc, _receiver) = rpc_pubsub_service::test_connection(&rpc_subscriptions);
+        let version = rpc.get_version().unwrap();
+        let expected_version = solana_version::Version::default();
+        assert_eq!(version.to_string(), expected_version.to_string());
+        assert_eq!(version.feature_set.unwrap(), expected_version.feature_set);
     }
 }

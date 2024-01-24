@@ -8,7 +8,7 @@ use {
 };
 
 /// Reasons the vote might have had an error
-#[derive(Error, Debug, Clone, PartialEq, FromPrimitive, ToPrimitive)]
+#[derive(Error, Debug, Clone, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 pub enum VoteError {
     #[error("vote already recorded or not in slot hashes history")]
     VoteTooOld,
@@ -67,6 +67,9 @@ pub enum VoteError {
 
     #[error("Cannot close vote account unless it stopped voting at least one full epoch ago")]
     ActiveVoteAccountClose,
+
+    #[error("Cannot update commission at this point in the epoch")]
+    CommissionUpdateTooLate,
 }
 
 impl<E> DecodeError<E> for VoteError {

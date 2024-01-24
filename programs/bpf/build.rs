@@ -71,6 +71,8 @@ fn main() {
             "log_data",
             "external_spend",
             "finalize",
+            "get_minimum_delegation",
+            "inner_instruction_alignment_check",
             "instruction_introspection",
             "invoke",
             "invoke_and_error",
@@ -99,7 +101,6 @@ fn main() {
             "spoof1_system",
             "upgradeable",
             "upgraded",
-            "zk_token_elgamal",
         ];
         for program in rust_programs.iter() {
             println!(
@@ -107,7 +108,7 @@ fn main() {
                 program
             );
             assert!(Command::new("../../cargo-build-bpf")
-                .args(&[
+                .args([
                     "--manifest-path",
                     &format!("rust/{}/Cargo.toml", program),
                     "--bpf-out-dir",
