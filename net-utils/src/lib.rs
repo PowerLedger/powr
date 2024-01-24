@@ -144,15 +144,18 @@ fn do_verify_reachable_ports(
     for (port, tcp_listener) in tcp_listeners {
         let (sender, receiver) = unbounded();
         let listening_addr = tcp_listener.local_addr().unwrap();
-        let thread_handle = std::thread::spawn(move || {
-            debug!("Waiting for incoming connection on tcp/{}", port);
-            match tcp_listener.incoming().next() {
-                Some(_) => sender
-                    .send(())
-                    .unwrap_or_else(|err| warn!("send failure: {}", err)),
-                None => warn!("tcp incoming failed"),
-            }
-        });
+        let thread_handle = std::thread::Builder::new()
+            .name(format!("solVrfyTcp{:05}", port))
+            .spawn(move || {
+                debug!("Waiting for incoming connection on tcp/{}", port);
+                match tcp_listener.incoming().next() {
+                    Some(_) => sender
+                        .send(())
+                        .unwrap_or_else(|err| warn!("send failure: {}", err)),
+                    None => warn!("tcp incoming failed"),
+                }
+            })
+            .unwrap();
         match receiver.recv_timeout(timeout) {
             Ok(_) => {
                 info!("tcp/{} is reachable", port);
@@ -222,33 +225,37 @@ fn do_verify_reachable_ports(
                     let port = udp_socket.local_addr().unwrap().port();
                     let udp_socket = udp_socket.try_clone().expect("Unable to clone udp socket");
                     let reachable_ports = reachable_ports.clone();
-                    std::thread::spawn(move || {
-                        let start = Instant::now();
 
-                        let original_read_timeout = udp_socket.read_timeout().unwrap();
-                        udp_socket
-                            .set_read_timeout(Some(Duration::from_millis(250)))
-                            .unwrap();
-                        loop {
-                            if reachable_ports.read().unwrap().contains(&port)
-                                || Instant::now().duration_since(start) >= timeout
-                            {
-                                break;
+                    std::thread::Builder::new()
+                        .name(format!("solVrfyUdp{:05}", port))
+                        .spawn(move || {
+                            let start = Instant::now();
+
+                            let original_read_timeout = udp_socket.read_timeout().unwrap();
+                            udp_socket
+                                .set_read_timeout(Some(Duration::from_millis(250)))
+                                .unwrap();
+                            loop {
+                                if reachable_ports.read().unwrap().contains(&port)
+                                    || Instant::now().duration_since(start) >= timeout
+                                {
+                                    break;
+                                }
+
+                                let recv_result = udp_socket.recv(&mut [0; 1]);
+                                debug!(
+                                    "Waited for incoming datagram on udp/{}: {:?}",
+                                    port, recv_result
+                                );
+
+                                if recv_result.is_ok() {
+                                    reachable_ports.write().unwrap().insert(port);
+                                    break;
+                                }
                             }
-
-                            let recv_result = udp_socket.recv(&mut [0; 1]);
-                            debug!(
-                                "Waited for incoming datagram on udp/{}: {:?}",
-                                port, recv_result
-                            );
-
-                            if recv_result.is_ok() {
-                                reachable_ports.write().unwrap().insert(port);
-                                break;
-                            }
-                        }
-                        udp_socket.set_read_timeout(original_read_timeout).unwrap();
-                    })
+                            udp_socket.set_read_timeout(original_read_timeout).unwrap();
+                        })
+                        .unwrap()
                 })
                 .collect();
 
@@ -516,7 +523,7 @@ pub fn bind_common(
     let addr = SocketAddr::new(ip_addr, port);
     let sock_addr = SockAddr::from(addr);
     sock.bind(&sock_addr)
-        .and_then(|_| TcpListener::bind(&addr).map(|listener| (sock.into(), listener)))
+        .and_then(|_| TcpListener::bind(addr).map(|listener| (sock.into(), listener)))
 }
 
 pub fn bind_two_in_range_with_offset(

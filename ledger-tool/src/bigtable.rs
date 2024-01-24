@@ -15,8 +15,9 @@ use {
         OutputFormat,
     },
     solana_ledger::{
-        bigtable_upload::ConfirmedBlockUploadConfig, blockstore::Blockstore,
-        blockstore_db::AccessType,
+        bigtable_upload::ConfirmedBlockUploadConfig,
+        blockstore::Blockstore,
+        blockstore_options::{AccessType, ShredStorageType},
     },
     solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Signature},
     solana_storage_bigtable::CredentialType,
@@ -276,7 +277,7 @@ pub async fn transaction_history(
                     "{}, slot={}, memo=\"{}\", status={}",
                     result.signature,
                     result.slot,
-                    result.memo.unwrap_or_else(|| "".to_string()),
+                    result.memo.unwrap_or_default(),
                     match result.err {
                         None => "Confirmed".to_string(),
                         Some(err) => format!("Failed: {:?}", err),
@@ -615,7 +616,11 @@ fn get_global_subcommand_arg<T: FromStr>(
     }
 }
 
-pub fn bigtable_process_command(ledger_path: &Path, matches: &ArgMatches<'_>) {
+pub fn bigtable_process_command(
+    ledger_path: &Path,
+    matches: &ArgMatches<'_>,
+    shred_storage_type: &ShredStorageType,
+) {
     let runtime = tokio::runtime::Runtime::new().unwrap();
 
     let verbose = matches.is_present("verbose");
@@ -642,8 +647,9 @@ pub fn bigtable_process_command(ledger_path: &Path, matches: &ArgMatches<'_>) {
             let force_reupload = arg_matches.is_present("force_reupload");
             let blockstore = crate::open_blockstore(
                 &canonicalize_ledger_path(ledger_path),
-                AccessType::TryPrimaryThenSecondary,
+                AccessType::Secondary,
                 None,
+                shred_storage_type,
             );
             let config = solana_storage_bigtable::LedgerStorageConfig {
                 read_only: false,

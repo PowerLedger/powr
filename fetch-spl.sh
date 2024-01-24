@@ -39,6 +39,7 @@ fetch_program() {
 }
 
 fetch_program token 3.5.0 Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo BPFLoader2111111111111111111111111111111111
+fetch_program token-2022 0.6.0 TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb BPFLoaderUpgradeab1e11111111111111111111111
 fetch_program memo  1.0.0 MemobGYbxnEG8DZ26obYMiqk7GC2Kda5nGoaaUBYtdL BPFLoader1111111111111111111111111111111111
 fetch_program memo  3.0.0 MemobGYbxnEG8DZ26obYMiqk7GC2Kda5nGoaaUBYtdL BPFLoader2111111111111111111111111111111111
 fetch_program associated-token-account 1.1.1 ATokenqZm7F6ZkbeSGZss84Vrk2nEXacBQGHscAsjq5c BPFLoader2111111111111111111111111111111111

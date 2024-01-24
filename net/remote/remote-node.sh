@@ -282,7 +282,7 @@ EOF
 
     if $maybeFullRpc; then
       args+=(--enable-rpc-transaction-history)
-      args+=(--enable-cpi-and-log-storage)
+      args+=(--enable-extended-tx-metadata-storage)
     fi
 
     if $enableUdp; then
@@ -414,7 +414,7 @@ EOF
 
     if $maybeFullRpc; then
       args+=(--enable-rpc-transaction-history)
-      args+=(--enable-cpi-and-log-storage)
+      args+=(--enable-extended-tx-metadata-storage)
     fi
 
     if $enableUdp; then
