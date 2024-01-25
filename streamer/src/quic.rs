@@ -78,6 +78,7 @@ pub(crate) fn configure_server(
     server_tls_config.alpn_protocols = vec![ALPN_TPU_PROTOCOL_ID.to_vec()];
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(server_tls_config));
+    server_config.use_retry(true);
     let config = Arc::get_mut(&mut server_config.transport).unwrap();
 
     // QUIC_MAX_CONCURRENT_STREAMS doubled, which was found to improve reliability
@@ -137,6 +138,12 @@ pub struct StreamStats {
     pub(crate) connection_add_failed_on_pruning: AtomicUsize,
     pub(crate) connection_setup_timeout: AtomicUsize,
     pub(crate) connection_setup_error: AtomicUsize,
+    pub(crate) connection_setup_error_closed: AtomicUsize,
+    pub(crate) connection_setup_error_timed_out: AtomicUsize,
+    pub(crate) connection_setup_error_transport: AtomicUsize,
+    pub(crate) connection_setup_error_app_closed: AtomicUsize,
+    pub(crate) connection_setup_error_reset: AtomicUsize,
+    pub(crate) connection_setup_error_locally_closed: AtomicUsize,
     pub(crate) connection_removed: AtomicUsize,
     pub(crate) connection_remove_failed: AtomicUsize,
 }
@@ -226,6 +233,41 @@ impl StreamStats {
                 i64
             ),
             (
+                "connection_setup_error_timed_out",
+                self.connection_setup_error_timed_out
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "connection_setup_error_closed",
+                self.connection_setup_error_closed
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "connection_setup_error_transport",
+                self.connection_setup_error_transport
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "connection_setup_error_app_closed",
+                self.connection_setup_error_app_closed
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "connection_setup_error_reset",
+                self.connection_setup_error_reset.swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "connection_setup_error_locally_closed",
+                self.connection_setup_error_locally_closed
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
                 "invalid_chunk",
                 self.total_invalid_chunks.swap(0, Ordering::Relaxed),
                 i64
@@ -303,11 +345,14 @@ pub fn spawn_server(
             stats,
         )
     }?;
-    let handle = thread::spawn(move || {
-        if let Err(e) = runtime.block_on(task) {
-            warn!("error from runtime.block_on: {:?}", e);
-        }
-    });
+    let handle = thread::Builder::new()
+        .name("solQuicServer".into())
+        .spawn(move || {
+            if let Err(e) = runtime.block_on(task) {
+                warn!("error from runtime.block_on: {:?}", e);
+            }
+        })
+        .unwrap();
     Ok(handle)
 }
 

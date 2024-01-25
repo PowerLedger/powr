@@ -91,7 +91,7 @@ impl TransactionInfo {
     }
 }
 
-#[derive(Default, Debug, PartialEq)]
+#[derive(Default, Debug, PartialEq, Eq)]
 struct ProcessTransactionsResult {
     rooted: u64,
     expired: u64,
@@ -332,6 +332,7 @@ impl SendTransactionService {
         connection_cache: &Arc<ConnectionCache>,
         retry_rate_ms: u64,
         leader_forward_count: u64,
+        exit: Arc<AtomicBool>,
     ) -> Self {
         let config = Config {
             retry_rate_ms,
@@ -345,6 +346,7 @@ impl SendTransactionService {
             receiver,
             connection_cache,
             config,
+            exit,
         )
     }
 
@@ -355,6 +357,7 @@ impl SendTransactionService {
         receiver: Receiver<TransactionInfo>,
         connection_cache: &Arc<ConnectionCache>,
         config: Config,
+        exit: Arc<AtomicBool>,
     ) -> Self {
         let stats_report = Arc::new(SendTransactionServiceStatsReport::default());
 
@@ -362,7 +365,6 @@ impl SendTransactionService {
 
         let leader_info_provider = Arc::new(Mutex::new(CurrentLeaderInfo::new(leader_info)));
 
-        let exit = Arc::new(AtomicBool::new(false));
         let receive_txn_thread = Self::receive_txn_thread(
             tpu_address,
             receiver,
@@ -410,7 +412,7 @@ impl SendTransactionService {
             config
         );
         Builder::new()
-            .name("send-tx-receive".to_string())
+            .name("solStxReceive".to_string())
             .spawn(move || loop {
                 let recv_timeout_ms = config.batch_send_rate_ms;
                 let stats = &stats_report.stats;
@@ -454,7 +456,7 @@ impl SendTransactionService {
                     stats
                         .sent_transactions
                         .fetch_add(transactions.len() as u64, Ordering::Relaxed);
-                    let _result = Self::send_transactions_in_batch(
+                    Self::send_transactions_in_batch(
                         &tpu_address,
                         &mut transactions,
                         leader_info_provider.lock().unwrap().get_leader_info(),
@@ -514,7 +516,7 @@ impl SendTransactionService {
             config
         );
         Builder::new()
-            .name("send-tx-retry".to_string())
+            .name("solStxRetry".to_string())
             .spawn(move || loop {
                 let retry_interval_ms = config.retry_rate_ms;
                 let stats = &stats_report.stats;
@@ -609,11 +611,8 @@ impl SendTransactionService {
                     .last_sent_time
                     .map(|last| now.duration_since(last) >= retry_rate)
                     .unwrap_or(false);
-                let verify_nonce_account = nonce_account::verify_nonce_account(
-                    &nonce_account,
-                    &durable_nonce,
-                    working_bank.separate_nonce_from_blockhash(),
-                );
+                let verify_nonce_account =
+                    nonce_account::verify_nonce_account(&nonce_account, &durable_nonce);
                 if verify_nonce_account.is_none() && signature_status.is_none() && expired {
                     info!("Dropping expired durable-nonce transaction: {}", signature);
                     result.expired += 1;
@@ -779,7 +778,7 @@ mod test {
     use {
         super::*,
         crate::tpu_info::NullTpuInfo,
-        crossbeam_channel::unbounded,
+        crossbeam_channel::{bounded, unbounded},
         solana_sdk::{
             account::AccountSharedData,
             genesis_config::create_genesis_config,
@@ -807,10 +806,53 @@ mod test {
             &connection_cache,
             1000,
             1,
+            Arc::new(AtomicBool::new(false)),
         );
 
         drop(sender);
         send_tranaction_service.join().unwrap();
+    }
+
+    #[test]
+    fn validator_exit() {
+        let tpu_address = "127.0.0.1:0".parse().unwrap();
+        let bank = Bank::default_for_tests();
+        let bank_forks = Arc::new(RwLock::new(BankForks::new(bank)));
+        let (sender, receiver) = bounded(0);
+
+        let dummy_tx_info = || TransactionInfo {
+            signature: Signature::default(),
+            wire_transaction: vec![0; 128],
+            last_valid_block_height: 0,
+            durable_nonce_info: None,
+            max_retries: None,
+            retries: 0,
+            last_sent_time: None,
+        };
+
+        let exit = Arc::new(AtomicBool::new(false));
+        let connection_cache = Arc::new(ConnectionCache::default());
+        let _send_transaction_service = SendTransactionService::new::<NullTpuInfo>(
+            tpu_address,
+            &bank_forks,
+            None,
+            receiver,
+            &connection_cache,
+            1000,
+            1,
+            exit.clone(),
+        );
+
+        sender.send(dummy_tx_info()).unwrap();
+
+        thread::spawn(move || {
+            exit.store(true, Ordering::Relaxed);
+        });
+
+        let mut option = Ok(());
+        while option.is_ok() {
+            option = sender.send(dummy_tx_info());
+        }
     }
 
     #[test]
@@ -1098,16 +1140,10 @@ mod test {
             .unwrap();
 
         let nonce_address = Pubkey::new_unique();
-        let durable_nonce =
-            DurableNonce::from_blockhash(&Hash::new_unique(), /*separate_domains:*/ true);
-        let nonce_state = nonce::state::Versions::new(
-            nonce::State::Initialized(nonce::state::Data::new(
-                Pubkey::default(),
-                durable_nonce,
-                42,
-            )),
-            true, // separate_domains
-        );
+        let durable_nonce = DurableNonce::from_blockhash(&Hash::new_unique());
+        let nonce_state = nonce::state::Versions::new(nonce::State::Initialized(
+            nonce::state::Data::new(Pubkey::default(), durable_nonce, 42),
+        ));
         let nonce_account =
             AccountSharedData::new_data(43, &nonce_state, &system_program::id()).unwrap();
         root_bank.store_account(&nonce_address, &nonce_account);
@@ -1355,16 +1391,10 @@ mod test {
         for mut transaction in transactions.values_mut() {
             transaction.last_sent_time = Some(Instant::now().sub(Duration::from_millis(4000)));
         }
-        let new_durable_nonce =
-            DurableNonce::from_blockhash(&Hash::new_unique(), /*separate_domains:*/ true);
-        let new_nonce_state = nonce::state::Versions::new(
-            nonce::State::Initialized(nonce::state::Data::new(
-                Pubkey::default(),
-                new_durable_nonce,
-                42,
-            )),
-            true, // separate_domains
-        );
+        let new_durable_nonce = DurableNonce::from_blockhash(&Hash::new_unique());
+        let new_nonce_state = nonce::state::Versions::new(nonce::State::Initialized(
+            nonce::state::Data::new(Pubkey::default(), new_durable_nonce, 42),
+        ));
         let nonce_account =
             AccountSharedData::new_data(43, &new_nonce_state, &system_program::id()).unwrap();
         working_bank.store_account(&nonce_address, &nonce_account);

@@ -1,5 +1,8 @@
 //! The `recvmmsg` module provides recvmmsg() API implementation
 
+#[cfg(target_os = "linux")]
+#[allow(deprecated)]
+use nix::sys::socket::InetAddr;
 pub use solana_perf::packet::NUM_RCVMMSGS;
 use {
     crate::packet::{Meta, Packet},
@@ -9,7 +12,6 @@ use {
 use {
     itertools::izip,
     libc::{iovec, mmsghdr, sockaddr_storage, socklen_t, AF_INET, AF_INET6, MSG_WAITFORONE},
-    nix::sys::socket::InetAddr,
     std::{mem, os::unix::io::AsRawFd},
 };
 
@@ -41,6 +43,7 @@ pub fn recv_mmsg(socket: &UdpSocket, packets: &mut [Packet]) -> io::Result</*num
 }
 
 #[cfg(target_os = "linux")]
+#[allow(deprecated)]
 fn cast_socket_addr(addr: &sockaddr_storage, hdr: &mmsghdr) -> Option<InetAddr> {
     use libc::{sa_family_t, sockaddr_in, sockaddr_in6};
     const SOCKADDR_IN_SIZE: usize = std::mem::size_of::<sockaddr_in>();
@@ -72,7 +75,8 @@ pub fn recv_mmsg(sock: &UdpSocket, packets: &mut [Packet]) -> io::Result</*num p
     const SOCKADDR_STORAGE_SIZE: usize = mem::size_of::<sockaddr_storage>();
 
     let mut hdrs: [mmsghdr; NUM_RCVMMSGS] = unsafe { mem::zeroed() };
-    let mut iovs: [iovec; NUM_RCVMMSGS] = unsafe { mem::MaybeUninit::uninit().assume_init() };
+    let iovs = mem::MaybeUninit::<[iovec; NUM_RCVMMSGS]>::uninit();
+    let mut iovs: [iovec; NUM_RCVMMSGS] = unsafe { iovs.assume_init() };
     let mut addrs: [sockaddr_storage; NUM_RCVMMSGS] = unsafe { mem::zeroed() };
 
     let sock_fd = sock.as_raw_fd();
@@ -138,7 +142,7 @@ mod tests {
             let sent = TEST_NUM_MSGS - 1;
             for _ in 0..sent {
                 let data = [0; PACKET_DATA_SIZE];
-                sender.send_to(&data[..], &addr).unwrap();
+                sender.send_to(&data[..], addr).unwrap();
             }
 
             let mut packets = vec![Packet::default(); TEST_NUM_MSGS];
@@ -164,7 +168,7 @@ mod tests {
             let sent = TEST_NUM_MSGS + 10;
             for _ in 0..sent {
                 let data = [0; PACKET_DATA_SIZE];
-                sender.send_to(&data[..], &addr).unwrap();
+                sender.send_to(&data[..], addr).unwrap();
             }
 
             let mut packets = vec![Packet::default(); TEST_NUM_MSGS];
@@ -205,7 +209,7 @@ mod tests {
         let sent = TEST_NUM_MSGS;
         for _ in 0..sent {
             let data = [0; PACKET_DATA_SIZE];
-            sender.send_to(&data[..], &addr).unwrap();
+            sender.send_to(&data[..], addr).unwrap();
         }
 
         let start = Instant::now();
@@ -240,12 +244,12 @@ mod tests {
 
         for _ in 0..sent1 {
             let data = [0; PACKET_DATA_SIZE];
-            sender1.send_to(&data[..], &addr).unwrap();
+            sender1.send_to(&data[..], addr).unwrap();
         }
 
         for _ in 0..sent2 {
             let data = [0; PACKET_DATA_SIZE];
-            sender2.send_to(&data[..], &addr).unwrap();
+            sender2.send_to(&data[..], addr).unwrap();
         }
 
         let mut packets = vec![Packet::default(); TEST_NUM_MSGS];

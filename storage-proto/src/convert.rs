@@ -12,6 +12,7 @@ use {
         pubkey::Pubkey,
         signature::Signature,
         transaction::{Transaction, TransactionError, VersionedTransaction},
+        transaction_context::TransactionReturnData,
     },
     solana_transaction_status::{
         ConfirmedBlock, InnerInstructions, Reward, RewardType, TransactionByAddrInfo,
@@ -301,7 +302,7 @@ impl From<generated::Message> for VersionedMessage {
         let account_keys = value
             .account_keys
             .into_iter()
-            .map(|key| Pubkey::new(&key))
+            .map(|key| Pubkey::try_from(key).unwrap())
             .collect();
         let recent_blockhash = Hash::new(&value.recent_blockhash);
         let instructions = value.instructions.into_iter().map(|ix| ix.into()).collect();
@@ -363,6 +364,8 @@ impl From<TransactionStatusMeta> for generated::TransactionStatusMeta {
             post_token_balances,
             rewards,
             loaded_addresses,
+            return_data,
+            compute_units_consumed,
         } = value;
         let err = match status {
             Ok(()) => None,
@@ -403,6 +406,8 @@ impl From<TransactionStatusMeta> for generated::TransactionStatusMeta {
             .into_iter()
             .map(|key| <Pubkey as AsRef<[u8]>>::as_ref(&key).into())
             .collect();
+        let return_data_none = return_data.is_none();
+        let return_data = return_data.map(|return_data| return_data.into());
 
         Self {
             err,
@@ -418,6 +423,9 @@ impl From<TransactionStatusMeta> for generated::TransactionStatusMeta {
             rewards,
             loaded_writable_addresses,
             loaded_readonly_addresses,
+            return_data,
+            return_data_none,
+            compute_units_consumed,
         }
     }
 }
@@ -447,6 +455,9 @@ impl TryFrom<generated::TransactionStatusMeta> for TransactionStatusMeta {
             rewards,
             loaded_writable_addresses,
             loaded_readonly_addresses,
+            return_data,
+            return_data_none,
+            compute_units_consumed,
         } = value;
         let status = match &err {
             None => Ok(()),
@@ -483,12 +494,25 @@ impl TryFrom<generated::TransactionStatusMeta> for TransactionStatusMeta {
         let loaded_addresses = LoadedAddresses {
             writable: loaded_writable_addresses
                 .into_iter()
-                .map(|key| Pubkey::new(&key))
-                .collect(),
+                .map(Pubkey::try_from)
+                .collect::<Result<_, _>>()
+                .map_err(|err| {
+                    let err = format!("Invalid writable address: {err:?}");
+                    Self::Error::new(bincode::ErrorKind::Custom(err))
+                })?,
             readonly: loaded_readonly_addresses
                 .into_iter()
-                .map(|key| Pubkey::new(&key))
-                .collect(),
+                .map(Pubkey::try_from)
+                .collect::<Result<_, _>>()
+                .map_err(|err| {
+                    let err = format!("Invalid readonly address: {err:?}");
+                    Self::Error::new(bincode::ErrorKind::Custom(err))
+                })?,
+        };
+        let return_data = if return_data_none {
+            None
+        } else {
+            return_data.map(|return_data| return_data.into())
         };
         Ok(Self {
             status,
@@ -501,6 +525,8 @@ impl TryFrom<generated::TransactionStatusMeta> for TransactionStatusMeta {
             post_token_balances,
             rewards,
             loaded_addresses,
+            return_data,
+            compute_units_consumed,
         })
     }
 }
@@ -582,9 +608,27 @@ impl From<MessageAddressTableLookup> for generated::MessageAddressTableLookup {
 impl From<generated::MessageAddressTableLookup> for MessageAddressTableLookup {
     fn from(value: generated::MessageAddressTableLookup) -> Self {
         Self {
-            account_key: Pubkey::new(&value.account_key),
+            account_key: Pubkey::try_from(value.account_key).unwrap(),
             writable_indexes: value.writable_indexes,
             readonly_indexes: value.readonly_indexes,
+        }
+    }
+}
+
+impl From<TransactionReturnData> for generated::ReturnData {
+    fn from(value: TransactionReturnData) -> Self {
+        Self {
+            program_id: <Pubkey as AsRef<[u8]>>::as_ref(&value.program_id).into(),
+            data: value.data,
+        }
+    }
+}
+
+impl From<generated::ReturnData> for TransactionReturnData {
+    fn from(value: generated::ReturnData) -> Self {
+        Self {
+            program_id: Pubkey::try_from(value.program_id).unwrap(),
+            data: value.data,
         }
     }
 }
@@ -673,7 +717,7 @@ impl TryFrom<tx_by_addr::TransactionError> for TransactionError {
                     48 => InstructionError::UnsupportedSysvar,
                     49 => InstructionError::IllegalOwner,
                     50 => InstructionError::MaxAccountsDataSizeExceeded,
-                    51 => InstructionError::ActiveVoteAccountClose,
+                    51 => InstructionError::MaxAccountsExceeded,
                     _ => return Err("Invalid InstructionError"),
                 };
 
@@ -730,6 +774,7 @@ impl TryFrom<tx_by_addr::TransactionError> for TransactionError {
             27 => TransactionError::InvalidRentPayingAccount,
             28 => TransactionError::WouldExceedMaxVoteCostLimit,
             29 => TransactionError::WouldExceedAccountDataTotalLimit,
+            36 => TransactionError::UnbalancedTransaction,
             _ => return Err("Invalid TransactionError"),
         })
     }
@@ -832,6 +877,9 @@ impl From<TransactionError> for tx_by_addr::TransactionError {
                 }
                 TransactionError::InsufficientFundsForRent { .. } => {
                     tx_by_addr::TransactionErrorType::InsufficientFundsForRent
+                }
+                TransactionError::UnbalancedTransaction => {
+                    tx_by_addr::TransactionErrorType::UnbalancedTransaction
                 }
             } as i32,
             instruction_error: match transaction_error {
@@ -990,8 +1038,8 @@ impl From<TransactionError> for tx_by_addr::TransactionError {
                             InstructionError::MaxAccountsDataSizeExceeded => {
                                 tx_by_addr::InstructionErrorType::MaxAccountsDataSizeExceeded
                             }
-                            InstructionError::ActiveVoteAccountClose => {
-                                tx_by_addr::InstructionErrorType::ActiveVoteAccountClose
+                            InstructionError::MaxAccountsExceeded => {
+                                tx_by_addr::InstructionErrorType::MaxAccountsExceeded
                             }
                         } as i32,
                         custom: match instruction_error {
@@ -1694,6 +1742,14 @@ mod test {
         );
 
         let transaction_error = TransactionError::InsufficientFundsForRent { account_index: 10 };
+        let tx_by_addr_transaction_error: tx_by_addr::TransactionError =
+            transaction_error.clone().into();
+        assert_eq!(
+            transaction_error,
+            tx_by_addr_transaction_error.try_into().unwrap()
+        );
+
+        let transaction_error = TransactionError::UnbalancedTransaction;
         let tx_by_addr_transaction_error: tx_by_addr::TransactionError =
             transaction_error.clone().into();
         assert_eq!(

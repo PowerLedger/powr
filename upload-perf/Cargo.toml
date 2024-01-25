@@ -1,6 +1,6 @@
 [package]
 name = "solana-upload-perf"
-version = "1.13.7"
+version = "1.14.29"
 description = "Metrics Upload Utility"
 authors = ["Solana Maintainers <maintainers@solana.foundation>"]
 repository = "https://github.com/solana-labs/solana"
@@ -10,8 +10,8 @@ homepage = "https://solana.com/"
 publish = false
 
 [dependencies]
-serde_json = "1.0.79"
-solana-metrics = { path = "../metrics", version = "=1.13.7" }
+serde_json = "1.0.81"
+solana-metrics = { path = "../metrics", version = "=1.14.29" }
 
 [[bin]]
 name = "solana-upload-perf"
