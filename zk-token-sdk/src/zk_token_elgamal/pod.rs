@@ -1,7 +1,12 @@
 pub use bytemuck::{Pod, Zeroable};
-use std::fmt;
+use {
+    crate::zk_token_proof_instruction::ProofType,
+    num_traits::{FromPrimitive, ToPrimitive},
+    solana_program::instruction::InstructionError,
+    std::fmt,
+};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct PodU16([u8; 2]);
 impl From<u16> for PodU16 {
@@ -15,7 +20,7 @@ impl From<PodU16> for u16 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct PodU64([u8; 8]);
 impl From<u64> for PodU64 {
@@ -29,11 +34,27 @@ impl From<PodU64> for u64 {
     }
 }
 
-#[derive(Clone, Copy, Pod, Zeroable, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct PodProofType(u8);
+impl From<ProofType> for PodProofType {
+    fn from(proof_type: ProofType) -> Self {
+        Self(ToPrimitive::to_u8(&proof_type).unwrap())
+    }
+}
+impl TryFrom<PodProofType> for ProofType {
+    type Error = InstructionError;
+
+    fn try_from(pod: PodProofType) -> Result<Self, Self::Error> {
+        FromPrimitive::from_u8(pod.0).ok_or(Self::Error::InvalidAccountData)
+    }
+}
+
+#[derive(Clone, Copy, Pod, Zeroable, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct CompressedRistretto(pub [u8; 32]);
 
-#[derive(Clone, Copy, Pod, Zeroable, PartialEq)]
+#[derive(Clone, Copy, Pod, Zeroable, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct ElGamalCiphertext(pub [u8; 64]);
 
@@ -55,7 +76,7 @@ impl Default for ElGamalCiphertext {
     }
 }
 
-#[derive(Clone, Copy, Default, Pod, Zeroable, PartialEq)]
+#[derive(Clone, Copy, Default, Pod, Zeroable, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct ElGamalPubkey(pub [u8; 32]);
 
@@ -71,7 +92,7 @@ impl fmt::Display for ElGamalPubkey {
     }
 }
 
-#[derive(Clone, Copy, Default, Pod, Zeroable, PartialEq)]
+#[derive(Clone, Copy, Default, Pod, Zeroable, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct PedersenCommitment(pub [u8; 32]);
 
@@ -81,7 +102,7 @@ impl fmt::Debug for PedersenCommitment {
     }
 }
 
-#[derive(Clone, Copy, Default, Pod, Zeroable, PartialEq)]
+#[derive(Clone, Copy, Default, Pod, Zeroable, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct DecryptHandle(pub [u8; 32]);
 
@@ -91,25 +112,25 @@ impl fmt::Debug for DecryptHandle {
     }
 }
 
-/// Serialization of `CtxtCommEqualityProof`
+/// Serialization of `CiphertextCommitmentEqualityProof`
 #[derive(Clone, Copy)]
 #[repr(transparent)]
-pub struct CtxtCommEqualityProof(pub [u8; 192]);
+pub struct CiphertextCommitmentEqualityProof(pub [u8; 192]);
 
-// `CtxtCommEqualityProof` is a Pod and Zeroable.
+// `CiphertextCommitmentEqualityProof` is a Pod and Zeroable.
 // Add the marker traits manually because `bytemuck` only adds them for some `u8` arrays
-unsafe impl Zeroable for CtxtCommEqualityProof {}
-unsafe impl Pod for CtxtCommEqualityProof {}
+unsafe impl Zeroable for CiphertextCommitmentEqualityProof {}
+unsafe impl Pod for CiphertextCommitmentEqualityProof {}
 
 /// Serialization of `CtxtCtxtEqualityProof`
 #[derive(Clone, Copy)]
 #[repr(transparent)]
-pub struct CtxtCtxtEqualityProof(pub [u8; 224]);
+pub struct CiphertextCiphertextEqualityProof(pub [u8; 224]);
 
 // `CtxtCtxtEqualityProof` is a Pod and Zeroable.
 // Add the marker traits manually because `bytemuck` only adds them for some `u8` arrays
-unsafe impl Zeroable for CtxtCtxtEqualityProof {}
-unsafe impl Pod for CtxtCtxtEqualityProof {}
+unsafe impl Zeroable for CiphertextCiphertextEqualityProof {}
+unsafe impl Pod for CiphertextCiphertextEqualityProof {}
 
 /// Serialization of validity proofs
 #[derive(Clone, Copy)]
@@ -146,6 +167,11 @@ unsafe impl Pod for ZeroBalanceProof {}
 #[repr(transparent)]
 pub struct FeeSigmaProof(pub [u8; 256]);
 
+/// Serialization of public-key sigma proof
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct PubkeyValidityProof(pub [u8; 64]);
+
 /// Serialization of range proofs for 64-bit numbers (for `Withdraw` instruction)
 #[derive(Clone, Copy)]
 #[repr(transparent)]
@@ -177,7 +203,7 @@ unsafe impl Zeroable for RangeProof256 {}
 unsafe impl Pod for RangeProof256 {}
 
 /// Serialization for AeCiphertext
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct AeCiphertext(pub [u8; 36]);
 

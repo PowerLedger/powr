@@ -3,8 +3,8 @@ use {
         check_num_accounts, ParsableProgram, ParseInstructionError, ParsedInstructionEnum,
     },
     extension::{
-        default_account_state::*, interest_bearing_mint::*, memo_transfer::*,
-        mint_close_authority::*, reallocate::*, transfer_fee::*,
+        cpi_guard::*, default_account_state::*, interest_bearing_mint::*, memo_transfer::*,
+        mint_close_authority::*, permanent_delegate::*, reallocate::*, transfer_fee::*,
     },
     serde_json::{json, Map, Value},
     solana_account_decoder::parse_token::{
@@ -228,7 +228,9 @@ pub fn parse_token(
                 | AuthorityType::TransferFeeConfig
                 | AuthorityType::WithheldWithdraw
                 | AuthorityType::CloseMint
-                | AuthorityType::InterestRate => "mint",
+                | AuthorityType::InterestRate
+                | AuthorityType::PermanentDelegate
+                | AuthorityType::ConfidentialTransferMint => "mint",
                 AuthorityType::AccountOwner | AuthorityType::CloseAccount => "account",
             };
             let mut value = json!({
@@ -572,10 +574,25 @@ pub fn parse_token(
                 account_keys,
             )
         }
+        TokenInstruction::CpiGuardExtension => {
+            if instruction.data.len() < 2 {
+                return Err(ParseInstructionError::InstructionNotParsable(
+                    ParsableProgram::SplToken,
+                ));
+            }
+            parse_cpi_guard_instruction(&instruction.data[1..], &instruction.accounts, account_keys)
+        }
+        TokenInstruction::InitializePermanentDelegate { delegate } => {
+            parse_initialize_permanent_delegate_instruction(
+                delegate,
+                &instruction.accounts,
+                account_keys,
+            )
+        }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum UiAuthorityType {
     MintTokens,
@@ -586,6 +603,8 @@ pub enum UiAuthorityType {
     WithheldWithdraw,
     CloseMint,
     InterestRate,
+    PermanentDelegate,
+    ConfidentialTransferMint,
 }
 
 impl From<AuthorityType> for UiAuthorityType {
@@ -599,11 +618,13 @@ impl From<AuthorityType> for UiAuthorityType {
             AuthorityType::WithheldWithdraw => UiAuthorityType::WithheldWithdraw,
             AuthorityType::CloseMint => UiAuthorityType::CloseMint,
             AuthorityType::InterestRate => UiAuthorityType::InterestRate,
+            AuthorityType::PermanentDelegate => UiAuthorityType::PermanentDelegate,
+            AuthorityType::ConfidentialTransferMint => UiAuthorityType::ConfidentialTransferMint,
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum UiExtensionType {
     Uninitialized,
@@ -617,6 +638,9 @@ pub enum UiExtensionType {
     MemoTransfer,
     NonTransferable,
     InterestBearingConfig,
+    CpiGuard,
+    PermanentDelegate,
+    NonTransferableAccount,
 }
 
 impl From<ExtensionType> for UiExtensionType {
@@ -635,6 +659,9 @@ impl From<ExtensionType> for UiExtensionType {
             ExtensionType::MemoTransfer => UiExtensionType::MemoTransfer,
             ExtensionType::NonTransferable => UiExtensionType::NonTransferable,
             ExtensionType::InterestBearingConfig => UiExtensionType::InterestBearingConfig,
+            ExtensionType::CpiGuard => UiExtensionType::CpiGuard,
+            ExtensionType::PermanentDelegate => UiExtensionType::PermanentDelegate,
+            ExtensionType::NonTransferableAccount => UiExtensionType::NonTransferableAccount,
         }
     }
 }

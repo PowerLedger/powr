@@ -8,7 +8,7 @@
 //!   <https://spl.solana.com/feature-proposal#feature-proposal-life-cycle>
 //!
 //! 1. Generate a new keypair with `solana-keygen new --outfile feature.json --no-passphrase`
-//!    - Keypairs should be held by core contributors only. If you're a non-core contirbutor going
+//!    - Keypairs should be held by core contributors only. If you're a non-core contributor going
 //!      through these steps, the PR process will facilitate a keypair holder being picked. That
 //!      person will generate the keypair, provide pubkey for PR, and ultimately enable the feature.
 //! 2. Add a public module for the feature, specifying keypair pubkey as the id with
@@ -109,10 +109,6 @@ pub mod vote_stake_checked_instructions {
     solana_sdk::declare_id!("H9atLv8WkDaDxL9tLbdMcRRKDZ8UFVoE2jY2aP7qYXhL");
 }
 
-pub mod neon_evm_compute_budget {
-    solana_sdk::declare_id!("GzTjpaeb2NZsPrMU8oTQ253D7uVe61mMQLV6gzmKxm6D");
-}
-
 pub mod rent_for_sysvars {
     solana_sdk::declare_id!("B6KtfnQDb5Sgwvwa4sxDsk2zcTW74V3AMEe6QDpTErVr");
 }
@@ -141,10 +137,6 @@ pub mod stake_merge_with_unmatched_credits_observed {
     solana_sdk::declare_id!("CyDHm4Zx2gm3PdNcJrGcm32dq5hQiHt3bnJnJ5fwph2B");
 }
 
-pub mod gate_large_block {
-    solana_sdk::declare_id!("4idbuaHGiPgLCrk31LVcSxcnGPCcLCKi24JhH6YthVr4");
-}
-
 pub mod zk_token_sdk_enabled {
     solana_sdk::declare_id!("7eb9iUc9ucSL3FpSLhazwvbmPi6ssS8wXY6pN2qP7cRx");
 }
@@ -171,6 +163,10 @@ pub mod instructions_sysvar_owned_by_sysvar {
 
 pub mod stake_program_advance_activating_credits_observed {
     solana_sdk::declare_id!("EKXsBwSZ98KidxVWcynyB5qFvpKUXTz5RnrJy2uTA6J3");
+}
+
+pub mod credits_auto_rewind {
+    solana_sdk::declare_id!("ArhevNNpdiUXFBac2cu7xYbdjfMVsyPmKGSzY2u19qhR");
 }
 
 pub mod demote_program_write_locks {
@@ -283,6 +279,14 @@ pub mod update_syscall_base_costs {
     solana_sdk::declare_id!("2dAGPMrm1HGnj1yqqntctia9mUqiS2nnGxV6G2aZkuNL");
 }
 
+pub mod stake_deactivate_delinquent_instruction {
+    solana_sdk::declare_id!("3yP3EGjWD7SwZvk9mALoFn27Uirtoff9XrFjQ1wXLXp3");
+}
+
+pub mod stake_redelegate_instruction {
+    solana_sdk::declare_id!("3w5rpavyBaRrGYTzsmhQui7LWTSP3rPSLnPBYqNxyNK7");
+}
+
 pub mod vote_withdraw_authority_may_change_authorized_voter {
     solana_sdk::declare_id!("3LHtLE8uUpDcXyCZ6qxrF7ZuuHfcF7QeZ3NhncmUZE9X");
 }
@@ -331,8 +335,40 @@ pub mod disable_deprecated_loader {
     solana_sdk::declare_id!("42NxW6Nx1DT9SpkdYvDU5u1yEDz3Sjez854FRcWEytYQ");
 }
 
+pub mod check_slice_translation_size {
+    solana_sdk::declare_id!("9BEfs9dbwZ3DA7dsGWYiHbedAuu1NGfVTBXSBnVzRiv9");
+}
+
+pub mod stake_split_uses_rent_sysvar {
+    solana_sdk::declare_id!("8f2zrt1UpyEJpLfY2G1CxrdFbSKhpE2T384RHJLoLU1K");
+}
+
+pub mod add_get_minimum_delegation_instruction_to_stake_program {
+    solana_sdk::declare_id!("CzhPo9NMSJYRLUe8x9A6XLCnsBn5KuXUX2qBi4jJchbp");
+}
+
+pub mod error_on_syscall_bpf_function_hash_collisions {
+    solana_sdk::declare_id!("GaJfrub1QDjfVgEy56zKJfDTzawHLq9bF7aMAUb37cYG");
+}
+
+pub mod reject_callx_r10 {
+    solana_sdk::declare_id!("9QibqkiL4Gmcse92joeBQPZ3kY3pSQ9VhdiDSo6bk848");
+}
+
 pub mod drop_redundant_turbine_path {
     solana_sdk::declare_id!("DRszsP44r1R33FPXu7auJkZq8tTFnCkTyUZVWFWFGWuP");
+}
+
+pub mod executables_incur_cpi_data_cost {
+    solana_sdk::declare_id!("ATjywpeivPjaLfEDVXds5UKTDKpiPnfzeWsiL5YeF5ZL");
+}
+
+pub mod fix_recent_blockhashes {
+    solana_sdk::declare_id!("36d5FF2huRwCigmXpntMvLw8wuHzgLpejv37KL5CtdAd");
+}
+
+pub mod update_rewards_from_cached_accounts {
+    solana_sdk::declare_id!("5vmBmqeVabKYz3ftgd9eZhrtvTkj8QMAW47bcZpnvX9L");
 }
 
 pub mod spl_token_v3_4_0 {
@@ -355,8 +391,21 @@ pub mod require_static_program_ids_in_transaction {
     solana_sdk::declare_id!("9VvunPGo6ZnfRZmvWsbdqckpvkEdQpfn2SULBk66iGPq");
 }
 
+pub mod stake_raise_minimum_delegation_to_1_sol {
+    // This is a feature-proposal *feature id*.  The feature keypair address is `GQXzC7YiSNkje6FFUk6sc2p53XRvKoaZ9VMktYzUMnpL`.
+    solana_sdk::declare_id!("FeqLA35GSSrNaSqovy7gPm5k7ufcX2PWhNutjqvARsaf");
+}
+
+pub mod stake_minimum_delegation_for_rewards {
+    solana_sdk::declare_id!("FJeuDjSo237p27SUCLXJs8CMzUdYn5cK8rcc9nPaF8v5");
+}
+
 pub mod add_set_compute_unit_price_ix {
     solana_sdk::declare_id!("AWL5agYvRuRz1LzmPtHAVsgubXoemBaRD5MZhQSDfhp");
+}
+
+pub mod disable_deploy_of_alloc_free_syscall {
+    solana_sdk::declare_id!("D9AR6yzmWcRdT8RtaYeTMnXbASH9LMG7Yi8CJ9kn4Ehs");
 }
 
 pub mod include_account_index_in_rent_error {
@@ -379,8 +428,8 @@ pub mod enable_durable_nonce {
     solana_sdk::declare_id!("9nZcxdGV63q54txkYmo92XZQtMfAXJHtqzWe8mnpHPEQ");
 }
 
-pub mod executables_incur_cpi_data_cost {
-    solana_sdk::declare_id!("31DEjA5BFEAb2LouzWFE1KbBU5vpPZiRuLjsX9CDKmEC");
+pub mod vote_state_update_credit_per_dequeue {
+    solana_sdk::declare_id!("9a6QJLpUMCTE3dJVVrQBFfeS4nAaagdFJP1qmTK3Swet");
 }
 
 pub mod quick_bail_on_panic {
@@ -407,12 +456,56 @@ pub mod preserve_rent_epoch_for_rent_exempt_accounts {
     solana_sdk::declare_id!("FQWn9mXQWhJHJZUTWYosUnjA1VT6CtJndKHzypmVpAKd");
 }
 
+pub mod enable_bpf_loader_extend_program_ix {
+    solana_sdk::declare_id!("iQkFmvHLmzYpxjom9aFAkHJ4Je9SFbjefMqCRuP1313");
+}
+
+pub mod enable_early_verification_of_account_modifications {
+    solana_sdk::declare_id!("5RZmkjDxtZYWhjt9CFfzprNztDapAXCgtuS2zUdHBhoX");
+}
+
 pub mod prevent_crediting_accounts_that_end_rent_paying {
     solana_sdk::declare_id!("7oyoj6fPgxiNA6PK5E3o5SEgsoPPqRn8D9b1HQPP1WP");
 }
 
+pub mod cap_bpf_program_instruction_accounts {
+    solana_sdk::declare_id!("8RmWEiW9f1PNGaXa9N22aHFf32M78vpKD1NDqF1xxCQx");
+}
+
+pub mod loosen_cpi_size_restriction {
+    solana_sdk::declare_id!("EMmECA7Bcd2VrX7eLZvM6779RLuaFWX8FWyjB6hTnZD2");
+}
+
+pub mod use_default_units_in_fee_calculation {
+    solana_sdk::declare_id!("P7TF7KySzmXS8QH2eHFQmvnadjFogD8z6tQ8SxD9454");
+}
+
+pub mod compact_vote_state_updates {
+    solana_sdk::declare_id!("6c34D12qwpiXXzwfU2bNfWeSWvsd1RovBeJma4L1NRrT");
+}
+
+pub mod concurrent_replay_of_forks {
+    solana_sdk::declare_id!("AWxQXErcSfFqKhNxSTpXhHjbJfeX2AiPmtoQezkpf71M");
+}
+
+pub mod incremental_snapshot_only_incremental_hash_calculation {
+    solana_sdk::declare_id!("5tsmjyahowwVNpefVUf4A6gQWTzKqGmKupq1NPkTnCmF");
+}
+
+pub mod vote_state_update_root_fix {
+    solana_sdk::declare_id!("AjzVZB5K6YkWSwujkL2BrGAk9X2G9CYjX2NRDbhQhctR");
+}
+
 pub mod return_none_for_zero_lamport_accounts {
     solana_sdk::declare_id!("DzdC5Qzj8kDxt48wsKsa3BEbYS1Gf7etXu2G9hHsMb4j");
+}
+
+pub mod disable_rehash_for_rent_epoch {
+    solana_sdk::declare_id!("CZomNWPRLVeaLdj3wVPkq643ck2UHUvYAaVe6B5fYMic");
+}
+
+pub mod on_load_preserve_rent_epoch_for_rent_exempt_accounts {
+    solana_sdk::declare_id!("3YoVxZh7hS7a9YsFYqAFXwTn2RFAcoZ6SheR5S9P5A4i");
 }
 
 pub mod increase_tx_account_lock_limit {
@@ -421,6 +514,50 @@ pub mod increase_tx_account_lock_limit {
 
 pub mod check_syscall_outputs_do_not_overlap {
     solana_sdk::declare_id!("9dsPsZgBBbbkDPTf2e3DpE9rFBQvA8wZag45PY6hNNcx");
+}
+
+pub mod commission_updates_only_allowed_in_first_half_of_epoch {
+    solana_sdk::declare_id!("cyF3n7F3UsaymynHV1cfaVbYB7f6oNURxDgW63SF3m4");
+}
+
+pub mod enable_turbine_fanout_experiments {
+    solana_sdk::declare_id!("9nc5DDQ3rPnNpQ7CwwxjMtvPUY3456g9YqrXeAsSPzQ3");
+}
+
+pub mod disable_turbine_fanout_experiments {
+    solana_sdk::declare_id!("2to6WNVUhLSiFXtUaHE4PqAgFDmHn3J6nYs7GaQDLU91");
+}
+
+pub mod drop_merkle_shreds {
+    solana_sdk::declare_id!("4kGkPL4SL9UWgaZYfc8kftUXQfwco81NoMu7XAhJ7zju");
+}
+
+pub mod keep_merkle_shreds {
+    solana_sdk::declare_id!("HPFsFrBcFNWjJyabEYiZdthLxmSzVXh3prpsFtqYLWFb");
+}
+
+pub mod move_serialized_len_ptr_in_cpi {
+    solana_sdk::declare_id!("FXF9zcswXHtWYXacAgmQSNnK52bKEvTej3URuchQYHhn");
+}
+
+pub mod disable_builtin_loader_ownership_chains {
+    solana_sdk::declare_id!("5qirP859NrW97Ne51C61wLhc9FHeEgP94p9vvun4eJ4N");
+}
+
+pub mod enable_request_heap_frame_ix {
+    solana_sdk::declare_id!("BcJ935ni25SsRizyCBiU2JVpF2SRUZUAKsoW5g1buZXG");
+}
+
+pub mod clean_up_delegation_errors {
+    solana_sdk::declare_id!("GkBgWXFQ6XyuykHNDc7LohGBRDMaXXhERQgTQ7dQ98GD");
+}
+
+pub mod revise_turbine_epoch_stakes {
+    solana_sdk::declare_id!("9Swq9No8745L9x9XuXHPYkwu2pAzDuAekAwbaj8oNRZC");
+}
+
+pub mod better_error_codes_for_tx_lamport_check {
+    solana_sdk::declare_id!("ERbutGc25FqFTdJ58PUJVuijdndqwTkWjhoFWe2x2dpb");
 }
 
 lazy_static! {
@@ -445,7 +582,6 @@ lazy_static! {
         (dedupe_config_program_signers::id(), "dedupe config program signers"),
         (verify_tx_signatures_len::id(), "prohibit extra transaction signatures"),
         (vote_stake_checked_instructions::id(), "vote/state program checked instructions #18345"),
-        (neon_evm_compute_budget::id(), "bump neon_evm's compute budget"),
         (rent_for_sysvars::id(), "collect rent from accounts owned by sysvars"),
         (libsecp256k1_0_5_upgrade_enabled::id(), "upgrade libsecp256k1 to v0.5.0"),
         (tx_wide_compute_cap::id(), "transaction wide compute cap"),
@@ -453,7 +589,6 @@ lazy_static! {
         (merge_nonce_error_into_system_error::id(), "merge NonceError into SystemError"),
         (disable_fees_sysvar::id(), "disable fees sysvar"),
         (stake_merge_with_unmatched_credits_observed::id(), "allow merging active stakes with unmatched credits_observed #18985"),
-        (gate_large_block::id(), "validator checks block cost against max limit in realtime, reject if exceeds."),
         (zk_token_sdk_enabled::id(), "enable Zk Token proof program and syscalls"),
         (curve25519_syscall_enabled::id(), "enable curve25519 syscalls"),
         (versioned_tx_message_enabled::id(), "enable versioned transaction message processing"),
@@ -461,6 +596,7 @@ lazy_static! {
         (libsecp256k1_fail_on_bad_count2::id(), "fail libsec256k1_verify if count appears wrong"),
         (instructions_sysvar_owned_by_sysvar::id(), "fix owner for instructions sysvar"),
         (stake_program_advance_activating_credits_observed::id(), "Enable advancing credits observed for activation epoch #19309"),
+        (credits_auto_rewind::id(), "Auto rewind stake's credits_observed if (accidental) vote recreation is detected #22546"),
         (demote_program_write_locks::id(), "demote program write locks to readonly, except when upgradeable loader present #19593 #20265"),
         (ed25519_program_enabled::id(), "enable builtin ed25519 signature verify program"),
         (return_data_syscall_enabled::id(), "enable sol_{set,get}_return_data syscall"),
@@ -488,6 +624,7 @@ lazy_static! {
         (require_rent_exempt_accounts::id(), "require all new transaction accounts with data to be rent-exempt"),
         (filter_votes_outside_slot_hashes::id(), "filter vote slots older than the slot hashes history"),
         (update_syscall_base_costs::id(), "update syscall base costs"),
+        (stake_deactivate_delinquent_instruction::id(), "enable the deactivate delinquent stake instruction #23932"),
         (vote_withdraw_authority_may_change_authorized_voter::id(), "vote account withdraw authority may change the authorized voter #22521"),
         (spl_associated_token_account_v1_0_4::id(), "SPL Associated Token Account Program release version 1.0.4, tied to token 3.3.0 #22648"),
         (reject_vote_account_close_unless_zero_credit_epoch::id(), "fail vote account withdraw to 0 unless account earned 0 credits in last completed epoch"),
@@ -500,29 +637,63 @@ lazy_static! {
         (check_physical_overlapping::id(), "check physical overlapping regions"),
         (limit_secp256k1_recovery_id::id(), "limit secp256k1 recovery id"),
         (disable_deprecated_loader::id(), "disable the deprecated BPF loader"),
+        (check_slice_translation_size::id(), "check size when translating slices"),
+        (stake_split_uses_rent_sysvar::id(), "stake split instruction uses rent sysvar"),
+        (add_get_minimum_delegation_instruction_to_stake_program::id(), "add GetMinimumDelegation instruction to stake program"),
+        (error_on_syscall_bpf_function_hash_collisions::id(), "error on bpf function hash collisions"),
+        (reject_callx_r10::id(), "Reject bpf callx r10 instructions"),
         (drop_redundant_turbine_path::id(), "drop redundant turbine path"),
+        (executables_incur_cpi_data_cost::id(), "Executables incur CPI data costs"),
+        (fix_recent_blockhashes::id(), "stop adding hashes for skipped slots to recent blockhashes"),
+        (update_rewards_from_cached_accounts::id(), "update rewards from cached accounts"),
         (spl_token_v3_4_0::id(), "SPL Token Program version 3.4.0 release #24740"),
         (spl_associated_token_account_v1_1_0::id(), "SPL Associated Token Account Program version 1.1.0 release #24741"),
         (default_units_per_instruction::id(), "Default max tx-wide compute units calculated per instruction"),
         (stake_allow_zero_undelegated_amount::id(), "Allow zero-lamport undelegated amount for initialized stakes #24670"),
         (require_static_program_ids_in_transaction::id(), "require static program ids in versioned transactions"),
+        (stake_raise_minimum_delegation_to_1_sol::id(), "Raise minimum stake delegation to 1.0 SOL #24357"),
+        (stake_minimum_delegation_for_rewards::id(), "stakes must be at least the minimum delegation to earn rewards"),
         (add_set_compute_unit_price_ix::id(), "add compute budget ix for setting a compute unit price"),
+        (disable_deploy_of_alloc_free_syscall::id(), "disable new deployments of deprecated sol_alloc_free_ syscall"),
         (include_account_index_in_rent_error::id(), "include account index in rent tx error #25190"),
         (add_shred_type_to_shred_seed::id(), "add shred-type to shred seed #25556"),
         (warp_timestamp_with_a_vengeance::id(), "warp timestamp again, adjust bounding to 150% slow #25666"),
         (separate_nonce_from_blockhash::id(), "separate durable nonce and blockhash domains #25744"),
         (enable_durable_nonce::id(), "enable durable nonce #25744"),
-        (executables_incur_cpi_data_cost::id(), "Executables incure CPI data costs"),
+        (vote_state_update_credit_per_dequeue::id(), "Calculate vote credits for VoteStateUpdate per vote dequeue to match credit awards for Vote instruction"),
         (quick_bail_on_panic::id(), "quick bail on panic"),
         (nonce_must_be_authorized::id(), "nonce must be authorized"),
         (nonce_must_be_advanceable::id(), "durable nonces must be advanceable"),
         (vote_authorize_with_seed::id(), "An instruction you can use to change a vote accounts authority when the current authority is a derived key #25860"),
         (cap_accounts_data_size_per_block::id(), "cap the accounts data size per block #25517"),
+        (stake_redelegate_instruction::id(), "enable the redelegate stake instruction #26294"),
         (preserve_rent_epoch_for_rent_exempt_accounts::id(), "preserve rent epoch for rent exempt accounts #26479"),
+        (enable_bpf_loader_extend_program_ix::id(), "enable bpf upgradeable loader ExtendProgram instruction #25234"),
+        (enable_early_verification_of_account_modifications::id(), "enable early verification of account modifications #25899"),
+        (disable_rehash_for_rent_epoch::id(), "on accounts hash calculation, do not try to rehash accounts #28934"),
+        (on_load_preserve_rent_epoch_for_rent_exempt_accounts::id(), "on bank load account, do not try to fix up rent_epoch #28541"),
         (prevent_crediting_accounts_that_end_rent_paying::id(), "prevent crediting rent paying accounts #26606"),
+        (cap_bpf_program_instruction_accounts::id(), "enforce max number of accounts per bpf program instruction #26628"),
+        (loosen_cpi_size_restriction::id(), "loosen cpi size restrictions #26641"),
+        (use_default_units_in_fee_calculation::id(), "use default units per instruction in fee calculation #26785"),
+        (compact_vote_state_updates::id(), "Compact vote state updates to lower block size"),
+        (concurrent_replay_of_forks::id(), "Allow slots from different forks to be replayed concurrently #26465"),
+        (incremental_snapshot_only_incremental_hash_calculation::id(), "only hash accounts in incremental snapshot during incremental snapshot creation #26799"),
+        (vote_state_update_root_fix::id(), "fix root in vote state updates #27361"),
         (return_none_for_zero_lamport_accounts::id(), "return none for zero lamport accounts #27800"),
         (increase_tx_account_lock_limit::id(), "increase tx account lock limit to 128 #27241"),
         (check_syscall_outputs_do_not_overlap::id(), "check syscall outputs do_not overlap #28600"),
+        (commission_updates_only_allowed_in_first_half_of_epoch::id(), "validator commission updates are only allowed in the first half of an epoch #29362"),
+        (enable_turbine_fanout_experiments::id(), "enable turbine fanout experiments #29393"),
+        (disable_turbine_fanout_experiments::id(), "disable turbine fanout experiments #29393"),
+        (drop_merkle_shreds::id(), "drop merkle shreds #29711"),
+        (keep_merkle_shreds::id(), "keep merkle shreds #29711"),
+        (move_serialized_len_ptr_in_cpi::id(), "cpi ignore serialized_len_ptr #29592"),
+        (disable_builtin_loader_ownership_chains::id(), "disable builtin loader ownership chains #29956"),
+        (enable_request_heap_frame_ix::id(), "Enable transaction to request heap frame using compute budget instruction #30076"),
+        (clean_up_delegation_errors::id(), "Return InsufficientDelegation instead of InsufficientFunds or InsufficientStake where applicable #31206"),
+        (revise_turbine_epoch_stakes::id(), "revise turbine epoch stakes"),
+        (better_error_codes_for_tx_lamport_check::id(), "better error codes for tx lamport check #33353"),
         /*************** ADD NEW FEATURES HERE ***************/
     ]
     .iter()

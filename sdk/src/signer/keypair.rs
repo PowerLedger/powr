@@ -26,7 +26,7 @@ use {
 pub struct Keypair(ed25519_dalek::Keypair);
 
 impl Keypair {
-    /// Constructs a new, random `Keypair` using a caller-proveded RNG
+    /// Constructs a new, random `Keypair` using a caller-provided RNG
     pub fn generate<R>(csprng: &mut R) -> Self
     where
         R: CryptoRng + RngCore,
@@ -67,8 +67,9 @@ impl Keypair {
 }
 
 impl Signer for Keypair {
+    #[inline]
     fn pubkey(&self) -> Pubkey {
-        Pubkey::new(self.0.public.as_ref())
+        Pubkey::from(self.0.public.to_bytes())
     }
 
     fn try_pubkey(&self) -> Result<Pubkey, SignerError> {

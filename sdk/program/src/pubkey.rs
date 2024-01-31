@@ -1,3 +1,5 @@
+//! Solana account addresses.
+
 #![allow(clippy::integer_arithmetic)]
 use {
     crate::{decode_error::DecodeError, hash::hashv, wasm_bindgen},
@@ -23,7 +25,7 @@ const MAX_BASE58_LEN: usize = 44;
 
 const PDA_MARKER: &[u8; 21] = b"ProgramDerivedAddress";
 
-#[derive(Error, Debug, Serialize, Clone, PartialEq, FromPrimitive, ToPrimitive)]
+#[derive(Error, Debug, Serialize, Clone, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 pub enum PubkeyError {
     /// Length of the seed is too long for address generation
     #[error("Length of the seed is too long for address generation")]
@@ -48,6 +50,20 @@ impl From<u64> for PubkeyError {
     }
 }
 
+/// The address of a [Solana account][acc].
+///
+/// Some account addresses are [ed25519] public keys, with corresponding secret
+/// keys that are managed off-chain. Often, though, account addresses do not
+/// have corresponding secret keys &mdash; as with [_program derived
+/// addresses_][pdas] &mdash; or the secret key is not relevant to the operation
+/// of a program, and may have even been disposed of. As running Solana programs
+/// can not safely create or manage secret keys, the full [`Keypair`] is not
+/// defined in `solana-program` but in `solana-sdk`.
+///
+/// [acc]: https://docs.solana.com/developing/programming-model/accounts
+/// [ed25519]: https://ed25519.cr.yp.to/
+/// [pdas]: https://docs.solana.com/developing/programming-model/calling-between-programs#program-derived-addresses
+/// [`Keypair`]: https://docs.rs/solana-sdk/latest/solana_sdk/signer/keypair/struct.Keypair.html
 #[wasm_bindgen]
 #[repr(transparent)]
 #[derive(
@@ -72,7 +88,7 @@ pub struct Pubkey(pub(crate) [u8; 32]);
 
 impl crate::sanitize::Sanitize for Pubkey {}
 
-#[derive(Error, Debug, Serialize, Clone, PartialEq, FromPrimitive, ToPrimitive)]
+#[derive(Error, Debug, Serialize, Clone, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 pub enum ParsePubkeyError {
     #[error("String is the wrong size")]
     WrongSize,
@@ -105,8 +121,33 @@ impl FromStr for Pubkey {
         if pubkey_vec.len() != mem::size_of::<Pubkey>() {
             Err(ParsePubkeyError::WrongSize)
         } else {
-            Ok(Pubkey::new(&pubkey_vec))
+            Pubkey::try_from(pubkey_vec).map_err(|_| ParsePubkeyError::Invalid)
         }
+    }
+}
+
+impl From<[u8; 32]> for Pubkey {
+    #[inline]
+    fn from(from: [u8; 32]) -> Self {
+        Self(from)
+    }
+}
+
+impl TryFrom<&[u8]> for Pubkey {
+    type Error = std::array::TryFromSliceError;
+
+    #[inline]
+    fn try_from(pubkey: &[u8]) -> Result<Self, Self::Error> {
+        <[u8; 32]>::try_from(pubkey).map(Self::from)
+    }
+}
+
+impl TryFrom<Vec<u8>> for Pubkey {
+    type Error = Vec<u8>;
+
+    #[inline]
+    fn try_from(pubkey: Vec<u8>) -> Result<Self, Self::Error> {
+        <[u8; 32]>::try_from(pubkey).map(Self::from)
     }
 }
 
@@ -118,22 +159,23 @@ impl TryFrom<&str> for Pubkey {
 }
 
 pub fn bytes_are_curve_point<T: AsRef<[u8]>>(_bytes: T) -> bool {
-    #[cfg(not(target_arch = "bpf"))]
+    #[cfg(not(target_os = "solana"))]
     {
         curve25519_dalek::edwards::CompressedEdwardsY::from_slice(_bytes.as_ref())
             .decompress()
             .is_some()
     }
-    #[cfg(target_arch = "bpf")]
+    #[cfg(target_os = "solana")]
     unimplemented!();
 }
 
 impl Pubkey {
+    #[deprecated(
+        since = "1.14.14",
+        note = "Please use 'Pubkey::from' or 'Pubkey::try_from' instead"
+    )]
     pub fn new(pubkey_vec: &[u8]) -> Self {
-        Self(
-            <[u8; 32]>::try_from(<&[u8]>::clone(&pubkey_vec))
-                .expect("Slice must be the same length as a Pubkey"),
-        )
+        Self::try_from(pubkey_vec).expect("Slice must be the same length as a Pubkey")
     }
 
     pub const fn new_from_array(pubkey_array: [u8; 32]) -> Self {
@@ -141,10 +183,10 @@ impl Pubkey {
     }
 
     #[deprecated(since = "1.3.9", note = "Please use 'Pubkey::new_unique' instead")]
-    #[cfg(not(target_arch = "bpf"))]
+    #[cfg(not(target_os = "solana"))]
     pub fn new_rand() -> Self {
         // Consider removing Pubkey::new_rand() entirely in the v1.5 or v1.6 timeframe
-        Pubkey::new(&rand::random::<[u8; 32]>())
+        Pubkey::from(rand::random::<[u8; 32]>())
     }
 
     /// unique Pubkey for tests and benchmarks.
@@ -154,8 +196,10 @@ impl Pubkey {
 
         let mut b = [0u8; 32];
         let i = I.fetch_add(1);
-        b[0..8].copy_from_slice(&i.to_le_bytes());
-        Self::new(&b)
+        // use big endian representation to ensure that recent unique pubkeys
+        // are always greater than less recent unique pubkeys
+        b[0..8].copy_from_slice(&i.to_be_bytes());
+        Self::from(b)
     }
 
     pub fn create_with_seed(
@@ -174,10 +218,8 @@ impl Pubkey {
                 return Err(PubkeyError::IllegalOwner);
             }
         }
-
-        Ok(Pubkey::new(
-            hashv(&[base.as_ref(), seed.as_ref(), owner]).as_ref(),
-        ))
+        let hash = hashv(&[base.as_ref(), seed.as_ref(), owner]);
+        Ok(Pubkey::from(hash.to_bytes()))
     }
 
     /// Find a valid [program derived address][pda] and its corresponding bump seed.
@@ -452,7 +494,7 @@ impl Pubkey {
     pub fn try_find_program_address(seeds: &[&[u8]], program_id: &Pubkey) -> Option<(Pubkey, u8)> {
         // Perform the calculation inline, calling this from within a program is
         // not supported
-        #[cfg(not(target_arch = "bpf"))]
+        #[cfg(not(target_os = "solana"))]
         {
             let mut bump_seed = [std::u8::MAX];
             for _ in 0..std::u8::MAX {
@@ -470,21 +512,12 @@ impl Pubkey {
             None
         }
         // Call via a system call to perform the calculation
-        #[cfg(target_arch = "bpf")]
+        #[cfg(target_os = "solana")]
         {
-            extern "C" {
-                fn sol_try_find_program_address(
-                    seeds_addr: *const u8,
-                    seeds_len: u64,
-                    program_id_addr: *const u8,
-                    address_bytes_addr: *const u8,
-                    bump_seed_addr: *const u8,
-                ) -> u64;
-            }
             let mut bytes = [0; 32];
             let mut bump_seed = std::u8::MAX;
             let result = unsafe {
-                sol_try_find_program_address(
+                crate::syscalls::sol_try_find_program_address(
                     seeds as *const _ as *const u8,
                     seeds.len() as u64,
                     program_id as *const _ as *const u8,
@@ -493,7 +526,7 @@ impl Pubkey {
                 )
             };
             match result {
-                crate::entrypoint::SUCCESS => Some((Pubkey::new(&bytes), bump_seed)),
+                crate::entrypoint::SUCCESS => Some((Pubkey::from(bytes), bump_seed)),
                 _ => None,
             }
         }
@@ -556,7 +589,7 @@ impl Pubkey {
 
         // Perform the calculation inline, calling this from within a program is
         // not supported
-        #[cfg(not(target_arch = "bpf"))]
+        #[cfg(not(target_os = "solana"))]
         {
             let mut hasher = crate::hash::Hasher::default();
             for seed in seeds.iter() {
@@ -569,22 +602,14 @@ impl Pubkey {
                 return Err(PubkeyError::InvalidSeeds);
             }
 
-            Ok(Pubkey::new(hash.as_ref()))
+            Ok(Pubkey::from(hash.to_bytes()))
         }
         // Call via a system call to perform the calculation
-        #[cfg(target_arch = "bpf")]
+        #[cfg(target_os = "solana")]
         {
-            extern "C" {
-                fn sol_create_program_address(
-                    seeds_addr: *const u8,
-                    seeds_len: u64,
-                    program_id_addr: *const u8,
-                    address_bytes_addr: *const u8,
-                ) -> u64;
-            }
             let mut bytes = [0; 32];
             let result = unsafe {
-                sol_create_program_address(
+                crate::syscalls::sol_create_program_address(
                     seeds as *const _ as *const u8,
                     seeds.len() as u64,
                     program_id as *const _ as *const u8,
@@ -592,7 +617,7 @@ impl Pubkey {
                 )
             };
             match result {
-                crate::entrypoint::SUCCESS => Ok(Pubkey::new(&bytes)),
+                crate::entrypoint::SUCCESS => Ok(Pubkey::from(bytes)),
                 _ => Err(result.into()),
             }
         }
@@ -608,15 +633,12 @@ impl Pubkey {
 
     /// Log a `Pubkey` from a program
     pub fn log(&self) {
-        #[cfg(target_arch = "bpf")]
-        {
-            extern "C" {
-                fn sol_log_pubkey(pubkey_addr: *const u8);
-            }
-            unsafe { sol_log_pubkey(self.as_ref() as *const _ as *const u8) };
-        }
+        #[cfg(target_os = "solana")]
+        unsafe {
+            crate::syscalls::sol_log_pubkey(self.as_ref() as *const _ as *const u8)
+        };
 
-        #[cfg(not(target_arch = "bpf"))]
+        #[cfg(not(target_os = "solana"))]
         crate::program_stubs::sol_log(&self.to_string());
     }
 }

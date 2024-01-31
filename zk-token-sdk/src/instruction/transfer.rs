@@ -1,8 +1,4 @@
-use {
-    crate::zk_token_elgamal::pod,
-    bytemuck::{Pod, Zeroable},
-};
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 use {
     crate::{
         encryption::{
@@ -12,10 +8,11 @@ use {
             pedersen::{Pedersen, PedersenCommitment, PedersenOpening},
         },
         errors::ProofError,
-        instruction::{combine_lo_hi_ciphertexts, split_u64, Role, Verifiable},
+        instruction::{combine_lo_hi_ciphertexts, split_u64, Role},
         range_proof::RangeProof,
         sigma_proofs::{
-            equality_proof::CtxtCommEqualityProof, validity_proof::AggregatedValidityProof,
+            ctxt_comm_equality_proof::CiphertextCommitmentEqualityProof,
+            validity_proof::AggregatedValidityProof,
         },
         transcript::TranscriptProtocol,
     },
@@ -23,42 +20,61 @@ use {
     merlin::Transcript,
     std::convert::TryInto,
 };
+use {
+    crate::{
+        instruction::{ProofType, ZkProofData},
+        zk_token_elgamal::pod,
+    },
+    bytemuck::{Pod, Zeroable},
+};
 
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 const TRANSFER_SOURCE_AMOUNT_BITS: usize = 64;
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 const TRANSFER_AMOUNT_LO_BITS: usize = 16;
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 const TRANSFER_AMOUNT_LO_NEGATED_BITS: usize = 16;
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 const TRANSFER_AMOUNT_HI_BITS: usize = 32;
 
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 lazy_static::lazy_static! {
     pub static ref COMMITMENT_MAX: PedersenCommitment = Pedersen::encode((1_u64 <<
                                                                          TRANSFER_AMOUNT_LO_NEGATED_BITS) - 1);
 }
 
+/// The instruction data that is needed for the `ProofInstruction::VerifyTransfer` instruction.
+///
+/// It includes the cryptographic proof as well as the context data information needed to verify
+/// the proof.
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct TransferData {
-    /// Group encryption of the low 32 bits of the transfer amount
-    pub ciphertext_lo: pod::TransferAmountEncryption,
-
-    /// Group encryption of the high 32 bits of the transfer amount
-    pub ciphertext_hi: pod::TransferAmountEncryption,
-
-    /// The public encryption keys associated with the transfer: source, dest, and auditor
-    pub transfer_pubkeys: pod::TransferPubkeys,
-
-    /// The final spendable ciphertext after the transfer
-    pub new_source_ciphertext: pod::ElGamalCiphertext,
+    /// The context data for the transfer proof
+    pub context: TransferProofContext,
 
     /// Zero-knowledge proofs for Transfer
     pub proof: TransferProof,
 }
 
-#[cfg(not(target_arch = "bpf"))]
+/// The context data needed to verify a transfer proof.
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct TransferProofContext {
+    /// Group encryption of the low 16 bits of the transfer amount
+    pub ciphertext_lo: pod::TransferAmountEncryption, // 128 bytes
+
+    /// Group encryption of the high 48 bits of the transfer amount
+    pub ciphertext_hi: pod::TransferAmountEncryption, // 128 bytes
+
+    /// The public encryption keys associated with the transfer: source, dest, and auditor
+    pub transfer_pubkeys: pod::TransferPubkeys, // 96 bytes
+
+    /// The final spendable ciphertext after the transfer
+    pub new_source_ciphertext: pod::ElGamalCiphertext, // 64 bytes
+}
+
+#[cfg(not(target_os = "solana"))]
 impl TransferData {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -68,11 +84,7 @@ impl TransferData {
         (destination_pubkey, auditor_pubkey): (&ElGamalPubkey, &ElGamalPubkey),
     ) -> Result<Self, ProofError> {
         // split and encrypt transfer amount
-        let (amount_lo, amount_hi) = split_u64(
-            transfer_amount,
-            TRANSFER_AMOUNT_LO_BITS,
-            TRANSFER_AMOUNT_HI_BITS,
-        )?;
+        let (amount_lo, amount_hi) = split_u64(transfer_amount, TRANSFER_AMOUNT_LO_BITS);
 
         let (ciphertext_lo, opening_lo) = TransferAmountEncryption::new(
             amount_lo,
@@ -120,6 +132,13 @@ impl TransferData {
         let pod_ciphertext_hi: pod::TransferAmountEncryption = ciphertext_hi.into();
         let pod_new_source_ciphertext: pod::ElGamalCiphertext = new_source_ciphertext.into();
 
+        let context = TransferProofContext {
+            ciphertext_lo: pod_ciphertext_lo,
+            ciphertext_hi: pod_ciphertext_hi,
+            transfer_pubkeys: pod_transfer_pubkeys,
+            new_source_ciphertext: pod_new_source_ciphertext,
+        };
+
         let mut transcript = TransferProof::transcript_new(
             &pod_transfer_pubkeys,
             &pod_ciphertext_lo,
@@ -137,45 +156,49 @@ impl TransferData {
             &mut transcript,
         );
 
-        Ok(Self {
-            ciphertext_lo: pod_ciphertext_lo,
-            ciphertext_hi: pod_ciphertext_hi,
-            transfer_pubkeys: pod_transfer_pubkeys,
-            new_source_ciphertext: pod_new_source_ciphertext,
-            proof,
-        })
+        Ok(Self { context, proof })
     }
 
     /// Extracts the lo ciphertexts associated with a transfer data
     fn ciphertext_lo(&self, role: Role) -> Result<ElGamalCiphertext, ProofError> {
-        let ciphertext_lo: TransferAmountEncryption = self.ciphertext_lo.try_into()?;
+        let ciphertext_lo: TransferAmountEncryption = self.context.ciphertext_lo.try_into()?;
 
         let handle_lo = match role {
-            Role::Source => ciphertext_lo.source_handle,
-            Role::Dest => ciphertext_lo.destination_handle,
-            Role::Auditor => ciphertext_lo.auditor_handle,
+            Role::Source => Some(ciphertext_lo.source_handle),
+            Role::Destination => Some(ciphertext_lo.destination_handle),
+            Role::Auditor => Some(ciphertext_lo.auditor_handle),
+            Role::WithdrawWithheldAuthority => None,
         };
 
-        Ok(ElGamalCiphertext {
-            commitment: ciphertext_lo.commitment,
-            handle: handle_lo,
-        })
+        if let Some(handle) = handle_lo {
+            Ok(ElGamalCiphertext {
+                commitment: ciphertext_lo.commitment,
+                handle,
+            })
+        } else {
+            Err(ProofError::MissingCiphertext)
+        }
     }
 
     /// Extracts the lo ciphertexts associated with a transfer data
     fn ciphertext_hi(&self, role: Role) -> Result<ElGamalCiphertext, ProofError> {
-        let ciphertext_hi: TransferAmountEncryption = self.ciphertext_hi.try_into()?;
+        let ciphertext_hi: TransferAmountEncryption = self.context.ciphertext_hi.try_into()?;
 
         let handle_hi = match role {
-            Role::Source => ciphertext_hi.source_handle,
-            Role::Dest => ciphertext_hi.destination_handle,
-            Role::Auditor => ciphertext_hi.auditor_handle,
+            Role::Source => Some(ciphertext_hi.source_handle),
+            Role::Destination => Some(ciphertext_hi.destination_handle),
+            Role::Auditor => Some(ciphertext_hi.auditor_handle),
+            Role::WithdrawWithheldAuthority => None,
         };
 
-        Ok(ElGamalCiphertext {
-            commitment: ciphertext_hi.commitment,
-            handle: handle_hi,
-        })
+        if let Some(handle) = handle_hi {
+            Ok(ElGamalCiphertext {
+                commitment: ciphertext_hi.commitment,
+                handle,
+            })
+        } else {
+            Err(ProofError::MissingCiphertext)
+        }
     }
 
     /// Decrypts transfer amount from transfer data
@@ -195,21 +218,27 @@ impl TransferData {
     }
 }
 
-#[cfg(not(target_arch = "bpf"))]
-impl Verifiable for TransferData {
-    fn verify(&self) -> Result<(), ProofError> {
+impl ZkProofData<TransferProofContext> for TransferData {
+    const PROOF_TYPE: ProofType = ProofType::Transfer;
+
+    fn context_data(&self) -> &TransferProofContext {
+        &self.context
+    }
+
+    #[cfg(not(target_os = "solana"))]
+    fn verify_proof(&self) -> Result<(), ProofError> {
         // generate transcript and append all public inputs
         let mut transcript = TransferProof::transcript_new(
-            &self.transfer_pubkeys,
-            &self.ciphertext_lo,
-            &self.ciphertext_hi,
-            &self.new_source_ciphertext,
+            &self.context.transfer_pubkeys,
+            &self.context.ciphertext_lo,
+            &self.context.ciphertext_hi,
+            &self.context.new_source_ciphertext,
         );
 
-        let ciphertext_lo = self.ciphertext_lo.try_into()?;
-        let ciphertext_hi = self.ciphertext_hi.try_into()?;
-        let transfer_pubkeys = self.transfer_pubkeys.try_into()?;
-        let new_spendable_ciphertext = self.new_source_ciphertext.try_into()?;
+        let ciphertext_lo = self.context.ciphertext_lo.try_into()?;
+        let ciphertext_hi = self.context.ciphertext_hi.try_into()?;
+        let transfer_pubkeys = self.context.transfer_pubkeys.try_into()?;
+        let new_spendable_ciphertext = self.context.new_source_ciphertext.try_into()?;
 
         self.proof.verify(
             &ciphertext_lo,
@@ -229,7 +258,7 @@ pub struct TransferProof {
     pub new_source_commitment: pod::PedersenCommitment,
 
     /// Associated equality proof
-    pub equality_proof: pod::CtxtCommEqualityProof,
+    pub equality_proof: pod::CiphertextCommitmentEqualityProof,
 
     /// Associated ciphertext validity proof
     pub validity_proof: pod::AggregatedValidityProof,
@@ -239,7 +268,7 @@ pub struct TransferProof {
 }
 
 #[allow(non_snake_case)]
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 impl TransferProof {
     fn transcript_new(
         transfer_pubkeys: &pod::TransferPubkeys,
@@ -284,11 +313,11 @@ impl TransferProof {
         transcript.append_commitment(b"commitment-new-source", &pod_new_source_commitment);
 
         // generate equality_proof
-        let equality_proof = CtxtCommEqualityProof::new(
+        let equality_proof = CiphertextCommitmentEqualityProof::new(
             source_keypair,
             new_source_ciphertext,
-            source_new_balance,
             &source_opening,
+            source_new_balance,
             transcript,
         );
 
@@ -358,13 +387,11 @@ impl TransferProof {
         transcript.append_commitment(b"commitment-new-source", &self.new_source_commitment);
 
         let commitment: PedersenCommitment = self.new_source_commitment.try_into()?;
-        let equality_proof: CtxtCommEqualityProof = self.equality_proof.try_into()?;
+        let equality_proof: CiphertextCommitmentEqualityProof = self.equality_proof.try_into()?;
         let aggregated_validity_proof: AggregatedValidityProof = self.validity_proof.try_into()?;
         let range_proof: RangeProof = self.range_proof.try_into()?;
 
         // verify equality proof
-        //
-        // TODO: we can also consider verifying equality and range proof in a batch
         equality_proof.verify(
             &transfer_pubkeys.source_pubkey,
             ciphertext_new_spendable,
@@ -430,14 +457,14 @@ impl TransferProof {
 /// The ElGamal public keys needed for a transfer
 #[derive(Clone)]
 #[repr(C)]
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 pub struct TransferPubkeys {
     pub source_pubkey: ElGamalPubkey,
     pub destination_pubkey: ElGamalPubkey,
     pub auditor_pubkey: ElGamalPubkey,
 }
 
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 impl TransferPubkeys {
     // TODO: use constructor instead
     pub fn to_bytes(&self) -> [u8; 96] {
@@ -453,11 +480,11 @@ impl TransferPubkeys {
         let (source_pubkey, destination_pubkey, auditor_pubkey) = array_refs![bytes, 32, 32, 32];
 
         let source_pubkey =
-            ElGamalPubkey::from_bytes(source_pubkey).ok_or(ProofError::Verification)?;
-        let destination_pubkey =
-            ElGamalPubkey::from_bytes(destination_pubkey).ok_or(ProofError::Verification)?;
+            ElGamalPubkey::from_bytes(source_pubkey).ok_or(ProofError::PubkeyDeserialization)?;
+        let destination_pubkey = ElGamalPubkey::from_bytes(destination_pubkey)
+            .ok_or(ProofError::PubkeyDeserialization)?;
         let auditor_pubkey =
-            ElGamalPubkey::from_bytes(auditor_pubkey).ok_or(ProofError::Verification)?;
+            ElGamalPubkey::from_bytes(auditor_pubkey).ok_or(ProofError::PubkeyDeserialization)?;
 
         Ok(Self {
             source_pubkey,
@@ -469,7 +496,7 @@ impl TransferPubkeys {
 
 #[derive(Clone)]
 #[repr(C)]
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 pub struct TransferAmountEncryption {
     pub commitment: PedersenCommitment,
     pub source_handle: DecryptHandle,
@@ -477,7 +504,7 @@ pub struct TransferAmountEncryption {
     pub auditor_handle: DecryptHandle,
 }
 
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 impl TransferAmountEncryption {
     pub fn new(
         amount: u64,
@@ -535,7 +562,7 @@ mod test {
         )
         .unwrap();
 
-        assert!(transfer_data.verify().is_ok());
+        assert!(transfer_data.verify_proof().is_ok());
 
         // Case 2: transfer max amount
 
@@ -556,7 +583,7 @@ mod test {
         )
         .unwrap();
 
-        assert!(transfer_data.verify().is_ok());
+        assert!(transfer_data.verify_proof().is_ok());
 
         // Case 3: general success case
 
@@ -576,26 +603,41 @@ mod test {
         )
         .unwrap();
 
-        assert!(transfer_data.verify().is_ok());
+        assert!(transfer_data.verify_proof().is_ok());
 
-        // Case 4: transfer amount too big
-
-        // create source account spendable ciphertext
-        let spendable_balance: u64 = u64::max_value();
+        // Case 4: invalid destination or auditor pubkey
+        let spendable_balance: u64 = 0;
         let spendable_ciphertext = source_keypair.public.encrypt(spendable_balance);
 
-        // transfer amount
-        let transfer_amount: u64 = 1u64 << (TRANSFER_AMOUNT_LO_BITS + TRANSFER_AMOUNT_HI_BITS);
+        let transfer_amount: u64 = 0;
 
-        // create transfer data
+        // destination pubkey invalid
+        let dest_pk = pod::ElGamalPubkey::zeroed().try_into().unwrap();
+        let auditor_pk = ElGamalKeypair::new_rand().public;
+
         let transfer_data = TransferData::new(
             transfer_amount,
             (spendable_balance, &spendable_ciphertext),
             &source_keypair,
             (&dest_pk, &auditor_pk),
-        );
+        )
+        .unwrap();
 
-        assert!(transfer_data.is_err());
+        assert!(transfer_data.verify_proof().is_err());
+
+        // auditor pubkey invalid
+        let dest_pk = ElGamalKeypair::new_rand().public;
+        let auditor_pk = pod::ElGamalPubkey::zeroed().try_into().unwrap();
+
+        let transfer_data = TransferData::new(
+            transfer_amount,
+            (spendable_balance, &spendable_ciphertext),
+            &source_keypair,
+            (&dest_pk, &auditor_pk),
+        )
+        .unwrap();
+
+        assert!(transfer_data.verify_proof().is_err());
     }
 
     #[test]
@@ -637,7 +679,9 @@ mod test {
         );
 
         assert_eq!(
-            transfer_data.decrypt_amount(Role::Dest, &dest_sk).unwrap(),
+            transfer_data
+                .decrypt_amount(Role::Destination, &dest_sk)
+                .unwrap(),
             550000_u64,
         );
 

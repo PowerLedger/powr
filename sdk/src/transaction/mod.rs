@@ -138,7 +138,7 @@ mod versioned;
 
 pub use {error::*, sanitized::*, versioned::*};
 
-#[derive(PartialEq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum TransactionVerificationMode {
     HashOnly,
     HashAndVerifyPrecompiles,
@@ -1095,7 +1095,7 @@ pub fn uses_durable_nonce(tx: &Transaction) -> Option<&CompiledInstruction> {
             )
             // Nonce account is writable
             && matches!(
-                instruction.accounts.get(0),
+                instruction.accounts.first(),
                 Some(index) if message.is_writable(*index as usize)
             )
         })
@@ -1106,7 +1106,7 @@ pub fn get_nonce_pubkey_from_instruction<'a>(
     ix: &CompiledInstruction,
     tx: &'a Transaction,
 ) -> Option<&'a Pubkey> {
-    ix.accounts.get(0).and_then(|idx| {
+    ix.accounts.first().and_then(|idx| {
         let idx = *idx as usize;
         tx.message().account_keys.get(idx)
     })
@@ -1273,12 +1273,12 @@ mod tests {
             62, 89, 99,
         ])
         .unwrap();
-        let to = Pubkey::new(&[
+        let to = Pubkey::from([
             1, 1, 1, 4, 5, 6, 7, 8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 8, 7, 6, 5, 4,
             1, 1, 1,
         ]);
 
-        let program_id = Pubkey::new(&[
+        let program_id = Pubkey::from([
             2, 2, 2, 4, 5, 6, 7, 8, 9, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 8, 7, 6, 5, 4,
             2, 2, 2,
         ]);

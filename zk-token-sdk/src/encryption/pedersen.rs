@@ -1,6 +1,6 @@
 //! Pedersen commitment implementation using the Ristretto prime-order group.
 
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 use rand::rngs::OsRng;
 use {
     core::ops::{Add, Mul, Sub},
@@ -28,21 +28,21 @@ lazy_static::lazy_static! {
 /// Algorithm handle for the Pedersen commitment scheme.
 pub struct Pedersen;
 impl Pedersen {
-    /// On input a message, the function returns a Pedersen commitment of the message and the
-    /// corresponding opening.
+    /// On input a message (numeric amount), the function returns a Pedersen commitment of the
+    /// message and the corresponding opening.
     ///
     /// This function is randomized. It internally samples a Pedersen opening using `OsRng`.
-    #[cfg(not(target_arch = "bpf"))]
+    #[cfg(not(target_os = "solana"))]
     #[allow(clippy::new_ret_no_self)]
-    pub fn new<T: Into<Scalar>>(message: T) -> (PedersenCommitment, PedersenOpening) {
+    pub fn new<T: Into<Scalar>>(amount: T) -> (PedersenCommitment, PedersenOpening) {
         let opening = PedersenOpening::new_rand();
-        let commitment = Pedersen::with(message, &opening);
+        let commitment = Pedersen::with(amount, &opening);
 
         (commitment, opening)
     }
 
-    /// On input a message and a Pedersen opening, the function returns the corresponding Pedersen
-    /// commitment.
+    /// On input a message (numeric amount) and a Pedersen opening, the function returns the
+    /// corresponding Pedersen commitment.
     ///
     /// This function is deterministic.
     #[allow(non_snake_case)]
@@ -53,7 +53,8 @@ impl Pedersen {
         PedersenCommitment(RistrettoPoint::multiscalar_mul(&[x, *r], &[*G, *H]))
     }
 
-    /// On input a message, the function returns a Pedersen commitment with zero as the opening.
+    /// On input a message (numeric amount), the function returns a Pedersen commitment with zero
+    /// as the opening.
     ///
     /// This function is deterministic.
     pub fn encode<T: Into<Scalar>>(amount: T) -> PedersenCommitment {
@@ -72,7 +73,7 @@ impl PedersenOpening {
         &self.0
     }
 
-    #[cfg(not(target_arch = "bpf"))]
+    #[cfg(not(target_os = "solana"))]
     pub fn new_rand() -> Self {
         PedersenOpening(Scalar::random(&mut OsRng))
     }
@@ -109,8 +110,8 @@ impl ConstantTimeEq for PedersenOpening {
 impl<'a, 'b> Add<&'b PedersenOpening> for &'a PedersenOpening {
     type Output = PedersenOpening;
 
-    fn add(self, other: &'b PedersenOpening) -> PedersenOpening {
-        PedersenOpening(&self.0 + &other.0)
+    fn add(self, opening: &'b PedersenOpening) -> PedersenOpening {
+        PedersenOpening(&self.0 + &opening.0)
     }
 }
 
@@ -123,8 +124,8 @@ define_add_variants!(
 impl<'a, 'b> Sub<&'b PedersenOpening> for &'a PedersenOpening {
     type Output = PedersenOpening;
 
-    fn sub(self, other: &'b PedersenOpening) -> PedersenOpening {
-        PedersenOpening(&self.0 - &other.0)
+    fn sub(self, opening: &'b PedersenOpening) -> PedersenOpening {
+        PedersenOpening(&self.0 - &opening.0)
     }
 }
 
@@ -137,14 +138,28 @@ define_sub_variants!(
 impl<'a, 'b> Mul<&'b Scalar> for &'a PedersenOpening {
     type Output = PedersenOpening;
 
-    fn mul(self, other: &'b Scalar) -> PedersenOpening {
-        PedersenOpening(&self.0 * other)
+    fn mul(self, scalar: &'b Scalar) -> PedersenOpening {
+        PedersenOpening(&self.0 * scalar)
     }
 }
 
 define_mul_variants!(
     LHS = PedersenOpening,
     RHS = Scalar,
+    Output = PedersenOpening
+);
+
+impl<'a, 'b> Mul<&'b PedersenOpening> for &'a Scalar {
+    type Output = PedersenOpening;
+
+    fn mul(self, opening: &'b PedersenOpening) -> PedersenOpening {
+        PedersenOpening(self * &opening.0)
+    }
+}
+
+define_mul_variants!(
+    LHS = Scalar,
+    RHS = PedersenOpening,
     Output = PedersenOpening
 );
 
@@ -162,6 +177,10 @@ impl PedersenCommitment {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<PedersenCommitment> {
+        if bytes.len() != 32 {
+            return None;
+        }
+
         Some(PedersenCommitment(
             CompressedRistretto::from_slice(bytes).decompress()?,
         ))
@@ -171,8 +190,8 @@ impl PedersenCommitment {
 impl<'a, 'b> Add<&'b PedersenCommitment> for &'a PedersenCommitment {
     type Output = PedersenCommitment;
 
-    fn add(self, other: &'b PedersenCommitment) -> PedersenCommitment {
-        PedersenCommitment(&self.0 + &other.0)
+    fn add(self, commitment: &'b PedersenCommitment) -> PedersenCommitment {
+        PedersenCommitment(&self.0 + &commitment.0)
     }
 }
 
@@ -185,8 +204,8 @@ define_add_variants!(
 impl<'a, 'b> Sub<&'b PedersenCommitment> for &'a PedersenCommitment {
     type Output = PedersenCommitment;
 
-    fn sub(self, other: &'b PedersenCommitment) -> PedersenCommitment {
-        PedersenCommitment(&self.0 - &other.0)
+    fn sub(self, commitment: &'b PedersenCommitment) -> PedersenCommitment {
+        PedersenCommitment(&self.0 - &commitment.0)
     }
 }
 
@@ -199,14 +218,28 @@ define_sub_variants!(
 impl<'a, 'b> Mul<&'b Scalar> for &'a PedersenCommitment {
     type Output = PedersenCommitment;
 
-    fn mul(self, other: &'b Scalar) -> PedersenCommitment {
-        PedersenCommitment(&self.0 * other)
+    fn mul(self, scalar: &'b Scalar) -> PedersenCommitment {
+        PedersenCommitment(scalar * &self.0)
     }
 }
 
 define_mul_variants!(
     LHS = PedersenCommitment,
     RHS = Scalar,
+    Output = PedersenCommitment
+);
+
+impl<'a, 'b> Mul<&'b PedersenCommitment> for &'a Scalar {
+    type Output = PedersenCommitment;
+
+    fn mul(self, commitment: &'b PedersenCommitment) -> PedersenCommitment {
+        PedersenCommitment(self * &commitment.0)
+    }
+}
+
+define_mul_variants!(
+    LHS = Scalar,
+    RHS = PedersenCommitment,
     Output = PedersenCommitment
 );
 
@@ -256,6 +289,7 @@ mod tests {
         let comm_addition = Pedersen::with(amt_0 * amt_1, &(open * scalar));
 
         assert_eq!(comm_addition, comm * scalar);
+        assert_eq!(comm_addition, scalar * comm);
     }
 
     #[test]
@@ -267,6 +301,9 @@ mod tests {
         let decoded = PedersenCommitment::from_bytes(&encoded).unwrap();
 
         assert_eq!(comm, decoded);
+
+        // incorrect length encoding
+        assert_eq!(PedersenCommitment::from_bytes(&[0; 33]), None);
     }
 
     #[test]
@@ -277,6 +314,9 @@ mod tests {
         let decoded = PedersenOpening::from_bytes(&encoded).unwrap();
 
         assert_eq!(open, decoded);
+
+        // incorrect length encoding
+        assert_eq!(PedersenOpening::from_bytes(&[0; 33]), None);
     }
 
     #[test]

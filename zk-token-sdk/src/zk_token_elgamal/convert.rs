@@ -46,7 +46,7 @@ impl From<PodRistrettoPoint> for pod::DecryptHandle {
     }
 }
 
-#[cfg(not(target_arch = "bpf"))]
+#[cfg(not(target_os = "solana"))]
 mod target_arch {
     use {
         super::pod,
@@ -57,16 +57,18 @@ mod target_arch {
                 elgamal::{DecryptHandle, ElGamalCiphertext, ElGamalPubkey},
                 pedersen::PedersenCommitment,
             },
-            errors::ProofError,
+            errors::{ProofError, ProofVerificationError},
             instruction::{
                 transfer::{TransferAmountEncryption, TransferPubkeys},
                 transfer_with_fee::{FeeEncryption, FeeParameters, TransferWithFeePubkeys},
             },
             range_proof::{errors::RangeProofError, RangeProof},
             sigma_proofs::{
-                equality_proof::{CtxtCommEqualityProof, CtxtCtxtEqualityProof},
+                ctxt_comm_equality_proof::CiphertextCommitmentEqualityProof,
+                ctxt_ctxt_equality_proof::CiphertextCiphertextEqualityProof,
                 errors::*,
                 fee_proof::FeeSigmaProof,
+                pubkey_proof::PubkeyValidityProof,
                 validity_proof::{AggregatedValidityProof, ValidityProof},
                 zero_balance_proof::ZeroBalanceProof,
             },
@@ -81,9 +83,11 @@ mod target_arch {
         }
     }
 
-    impl From<PodScalar> for Scalar {
-        fn from(pod: PodScalar) -> Self {
-            Scalar::from_bits(pod.0)
+    impl TryFrom<PodScalar> for Scalar {
+        type Error = ProofError;
+
+        fn try_from(pod: PodScalar) -> Result<Self, Self::Error> {
+            Scalar::from_canonical_bytes(pod.0).ok_or(ProofError::CiphertextDeserialization)
         }
     }
 
@@ -97,7 +101,7 @@ mod target_arch {
         type Error = ProofError;
 
         fn try_from(ct: pod::ElGamalCiphertext) -> Result<Self, Self::Error> {
-            Self::from_bytes(&ct.0).ok_or(ProofError::InconsistentCTData)
+            Self::from_bytes(&ct.0).ok_or(ProofError::CiphertextDeserialization)
         }
     }
 
@@ -111,7 +115,7 @@ mod target_arch {
         type Error = ProofError;
 
         fn try_from(pk: pod::ElGamalPubkey) -> Result<Self, Self::Error> {
-            Self::from_bytes(&pk.0).ok_or(ProofError::InconsistentCTData)
+            Self::from_bytes(&pk.0).ok_or(ProofError::CiphertextDeserialization)
         }
     }
 
@@ -134,23 +138,23 @@ mod target_arch {
     }
 
     // For proof verification, interpret pod::PedersenComm directly as CompressedRistretto
-    #[cfg(not(target_arch = "bpf"))]
+    #[cfg(not(target_os = "solana"))]
     impl From<pod::PedersenCommitment> for CompressedRistretto {
         fn from(pod: pod::PedersenCommitment) -> Self {
             Self(pod.0)
         }
     }
 
-    #[cfg(not(target_arch = "bpf"))]
+    #[cfg(not(target_os = "solana"))]
     impl TryFrom<pod::PedersenCommitment> for PedersenCommitment {
         type Error = ProofError;
 
         fn try_from(pod: pod::PedersenCommitment) -> Result<Self, Self::Error> {
-            Self::from_bytes(&pod.0).ok_or(ProofError::InconsistentCTData)
+            Self::from_bytes(&pod.0).ok_or(ProofError::CiphertextDeserialization)
         }
     }
 
-    #[cfg(not(target_arch = "bpf"))]
+    #[cfg(not(target_os = "solana"))]
     impl From<DecryptHandle> for pod::DecryptHandle {
         fn from(handle: DecryptHandle) -> Self {
             Self(handle.to_bytes())
@@ -158,19 +162,19 @@ mod target_arch {
     }
 
     // For proof verification, interpret pod::PedersenDecHandle as CompressedRistretto
-    #[cfg(not(target_arch = "bpf"))]
+    #[cfg(not(target_os = "solana"))]
     impl From<pod::DecryptHandle> for CompressedRistretto {
         fn from(pod: pod::DecryptHandle) -> Self {
             Self(pod.0)
         }
     }
 
-    #[cfg(not(target_arch = "bpf"))]
+    #[cfg(not(target_os = "solana"))]
     impl TryFrom<pod::DecryptHandle> for DecryptHandle {
         type Error = ProofError;
 
         fn try_from(pod: pod::DecryptHandle) -> Result<Self, Self::Error> {
-            Self::from_bytes(&pod.0).ok_or(ProofError::InconsistentCTData)
+            Self::from_bytes(&pod.0).ok_or(ProofError::CiphertextDeserialization)
         }
     }
 
@@ -184,34 +188,34 @@ mod target_arch {
         type Error = ProofError;
 
         fn try_from(ct: pod::AeCiphertext) -> Result<Self, Self::Error> {
-            Self::from_bytes(&ct.0).ok_or(ProofError::InconsistentCTData)
+            Self::from_bytes(&ct.0).ok_or(ProofError::CiphertextDeserialization)
         }
     }
 
-    impl From<CtxtCommEqualityProof> for pod::CtxtCommEqualityProof {
-        fn from(proof: CtxtCommEqualityProof) -> Self {
+    impl From<CiphertextCommitmentEqualityProof> for pod::CiphertextCommitmentEqualityProof {
+        fn from(proof: CiphertextCommitmentEqualityProof) -> Self {
             Self(proof.to_bytes())
         }
     }
 
-    impl TryFrom<pod::CtxtCommEqualityProof> for CtxtCommEqualityProof {
+    impl TryFrom<pod::CiphertextCommitmentEqualityProof> for CiphertextCommitmentEqualityProof {
         type Error = EqualityProofError;
 
-        fn try_from(pod: pod::CtxtCommEqualityProof) -> Result<Self, Self::Error> {
+        fn try_from(pod: pod::CiphertextCommitmentEqualityProof) -> Result<Self, Self::Error> {
             Self::from_bytes(&pod.0)
         }
     }
 
-    impl From<CtxtCtxtEqualityProof> for pod::CtxtCtxtEqualityProof {
-        fn from(proof: CtxtCtxtEqualityProof) -> Self {
+    impl From<CiphertextCiphertextEqualityProof> for pod::CiphertextCiphertextEqualityProof {
+        fn from(proof: CiphertextCiphertextEqualityProof) -> Self {
             Self(proof.to_bytes())
         }
     }
 
-    impl TryFrom<pod::CtxtCtxtEqualityProof> for CtxtCtxtEqualityProof {
+    impl TryFrom<pod::CiphertextCiphertextEqualityProof> for CiphertextCiphertextEqualityProof {
         type Error = EqualityProofError;
 
-        fn try_from(pod: pod::CtxtCtxtEqualityProof) -> Result<Self, Self::Error> {
+        fn try_from(pod: pod::CiphertextCiphertextEqualityProof) -> Result<Self, Self::Error> {
             Self::from_bytes(&pod.0)
         }
     }
@@ -272,12 +276,26 @@ mod target_arch {
         }
     }
 
+    impl From<PubkeyValidityProof> for pod::PubkeyValidityProof {
+        fn from(proof: PubkeyValidityProof) -> Self {
+            Self(proof.to_bytes())
+        }
+    }
+
+    impl TryFrom<pod::PubkeyValidityProof> for PubkeyValidityProof {
+        type Error = PubkeyValidityProofError;
+
+        fn try_from(pod: pod::PubkeyValidityProof) -> Result<Self, Self::Error> {
+            Self::from_bytes(&pod.0)
+        }
+    }
+
     impl TryFrom<RangeProof> for pod::RangeProof64 {
         type Error = RangeProofError;
 
         fn try_from(proof: RangeProof) -> Result<Self, Self::Error> {
             if proof.ipp_proof.serialized_size() != 448 {
-                return Err(RangeProofError::Format);
+                return Err(ProofVerificationError::Deserialization.into());
             }
 
             let mut buf = [0_u8; 672];
@@ -301,13 +319,13 @@ mod target_arch {
         }
     }
 
-    #[cfg(not(target_arch = "bpf"))]
+    #[cfg(not(target_os = "solana"))]
     impl TryFrom<RangeProof> for pod::RangeProof128 {
         type Error = RangeProofError;
 
         fn try_from(proof: RangeProof) -> Result<Self, Self::Error> {
             if proof.ipp_proof.serialized_size() != 512 {
-                return Err(RangeProofError::Format);
+                return Err(ProofVerificationError::Deserialization.into());
             }
 
             let mut buf = [0_u8; 736];
@@ -331,13 +349,13 @@ mod target_arch {
         }
     }
 
-    #[cfg(not(target_arch = "bpf"))]
+    #[cfg(not(target_os = "solana"))]
     impl TryFrom<RangeProof> for pod::RangeProof256 {
         type Error = RangeProofError;
 
         fn try_from(proof: RangeProof) -> Result<Self, Self::Error> {
             if proof.ipp_proof.serialized_size() != 576 {
-                return Err(RangeProofError::Format);
+                return Err(ProofVerificationError::Deserialization.into());
             }
 
             let mut buf = [0_u8; 800];
@@ -478,7 +496,7 @@ mod target_arch {
     }
 }
 
-#[cfg(target_arch = "bpf")]
+#[cfg(target_os = "solana")]
 #[allow(unused_variables)]
 mod target_arch {}
 
