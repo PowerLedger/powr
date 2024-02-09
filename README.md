@@ -14,7 +14,7 @@ Node Terms and Conditions set out in the Terms and Conditions file.
 By downloading, installing and using the Powerledger Node Software and/or connecting to the Powerledger
 Blockchain you agree to the Terms and Conditions set out in the Terms and Conditions.
 
-All software is Copyright © 2023 Power Ledger Pty Ltd unless indicated otherwise.  Unauthorised use
+All software is Copyright © 2023 Powerledger AG unless indicated otherwise.  Unauthorised use
 prohibited. All Rights Reserved.
 
 ## powr validator node configuration
