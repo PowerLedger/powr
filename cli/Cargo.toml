@@ -44,7 +44,7 @@ solana-transaction-status = { path = "../transaction-status", version = "=1.14.2
 solana-version = { path = "../version", version = "=1.14.29" }
 solana-vote-program = { path = "../programs/vote", version = "=1.14.29" }
 solana_rbpf = "=0.2.31"
-spl-memo = { path= "../../powr-program-library/memo/program", version = "=3.0.1", features = ["no-entrypoint"] }
+spl-memo = { version = "=3.0.1", features = ["no-entrypoint"] }
 thiserror = "1.0.31"
 tiny-bip39 = "0.8.2"
 

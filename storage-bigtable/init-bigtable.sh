@@ -22,6 +22,6 @@ for table in blocks tx tx-by-addr; do
     "${cbt[@]}" createtable $table
     "${cbt[@]}" createfamily $table x
     "${cbt[@]}" setgcpolicy $table x maxversions=1
-    "${cbt[@]}" setgcpolicy $table x maxage=1825d
+    "${cbt[@]}" setgcpolicy $table x maxage=360d
   )
 done

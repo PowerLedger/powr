@@ -169,7 +169,7 @@ impl TowerVersions {
     }
 }
 
-#[frozen_abi(digest = "BfeSJNsfQeX6JU7dmezv1s1aSvR5SoyxKRRZ4ubTh2mt")]
+#[frozen_abi(digest = "F2LpNgXygZAqWwGUCn8rTWTYGd8LhQS7tT1e5FYDWCDj")]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, AbiExample)]
 pub struct Tower {
     pub node_pubkey: Pubkey,

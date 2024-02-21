@@ -189,7 +189,7 @@ mod test {
                 stake: 20,
                 activation_epoch: 2,
                 deactivation_epoch: std::u64::MAX,
-                warmup_cooldown_rate: 800.0,
+                warmup_cooldown_rate: 0.25,
             },
             credits_observed: 10,
         };
@@ -217,7 +217,7 @@ mod test {
                         stake: 20.to_string(),
                         activation_epoch: 2.to_string(),
                         deactivation_epoch: std::u64::MAX.to_string(),
-                        warmup_cooldown_rate: 800.0,
+                        warmup_cooldown_rate: 0.25,
                     },
                     credits_observed: 10,
                 })

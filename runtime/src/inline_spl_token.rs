@@ -1,10 +1,10 @@
 /// Partial SPL Token declarations inlined to avoid an external dependency on the spl-token crate
 use solana_sdk::pubkey::{Pubkey, PUBKEY_BYTES};
 
-solana_sdk::declare_id!("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo");
+solana_sdk::declare_id!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
 pub(crate) mod program_v3_4_0 {
-    solana_sdk::declare_id!("H1wdhTBp4BeTM11DubiqzDbppNPUUagGtv3uhMmkxFDW");
+    solana_sdk::declare_id!("NToK4t5AQzxPNpUA84DkxgfXaVDbDQQjpHKCqsbY46B");
 }
 
 /*
@@ -72,7 +72,7 @@ impl GenericTokenAccount for Account {
 }
 
 pub mod native_mint {
-    solana_sdk::declare_id!("Powr111111111111111111111111111111111111112");
+    solana_sdk::declare_id!("So11111111111111111111111111111111111111112");
 
     /*
         Mint {

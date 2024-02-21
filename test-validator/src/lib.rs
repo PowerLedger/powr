@@ -627,9 +627,9 @@ impl TestValidator {
         let validator_identity = Keypair::new();
         let validator_vote_account = Keypair::new();
         let validator_stake_account = Keypair::new();
-        let validator_identity_lamports = sol_to_lamports(963_000_000.);
-        let validator_stake_lamports = sol_to_lamports(1.0);
-        let mint_lamports = sol_to_lamports(0.);
+        let validator_identity_lamports = sol_to_lamports(500.);
+        let validator_stake_lamports = sol_to_lamports(1_000_000.);
+        let mint_lamports = sol_to_lamports(500_000_000.);
 
         let mut accounts = config.accounts.clone();
         for (address, account) in solana_program_test::programs::spl_programs(&config.rent) {
@@ -659,7 +659,7 @@ impl TestValidator {
             validator_identity_lamports,
             config.fee_rate_governor.clone(),
             config.rent,
-            solana_sdk::genesis_config::ClusterType::MainnetBeta,
+            solana_sdk::genesis_config::ClusterType::Development,
             accounts.into_iter().collect(),
         );
         genesis_config.epoch_schedule = config
@@ -724,12 +724,10 @@ impl TestValidator {
 
         write_keypair_file(
             &validator_vote_account,
-            ledger_path.join("vote-account-keypair.json").to_str().unwrap(),
-        )?;
-
-        write_keypair_file(
-            &validator_stake_account,
-            ledger_path.join("stake-account-keypair.json").to_str().unwrap(),
+            ledger_path
+                .join("vote-account-keypair.json")
+                .to_str()
+                .unwrap(),
         )?;
 
         Ok(ledger_path)
