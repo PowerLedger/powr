@@ -6,19 +6,19 @@ use solana_sdk::{
 };
 
 mod spl_token {
-    solana_sdk::declare_id!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+    solana_sdk::declare_id!("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo");
 }
 mod spl_token_2022 {
     solana_sdk::declare_id!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 }
 mod spl_memo_1_0 {
-    solana_sdk::declare_id!("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo");
+    solana_sdk::declare_id!("MemobGYbxnEG8DZ26obYMiqk7GC2Kda5nGoaaUBYtdL");
 }
 mod spl_memo_3_0 {
-    solana_sdk::declare_id!("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+    solana_sdk::declare_id!("MemobGYbxnEG8DZ26obYMiqk7GC2Kda5nGoaaUBYtdL");
 }
 mod spl_associated_token_account {
-    solana_sdk::declare_id!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+    solana_sdk::declare_id!("ATokenqZm7F6ZkbeSGZss84Vrk2nEXacBQGHscAsjq5c");
 }
 
 static SPL_PROGRAMS: &[(Pubkey, Pubkey, &[u8])] = &[

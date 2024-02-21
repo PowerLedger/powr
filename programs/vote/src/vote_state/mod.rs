@@ -42,7 +42,7 @@ pub const MAX_EPOCH_CREDITS_HISTORY: usize = 64;
 // Offset of VoteState::prior_voters, for determining initialization status without deserialization
 const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 82;
 
-#[frozen_abi(digest = "4RSrLCthxW7e6KgpzDCf1kQUxa2v2aCg9mxn3975V7bm")]
+#[frozen_abi(digest = "6LBwH5w3WyAWZhsM3KTG9QZP7nYBhcC61K33kHR6gMAD")]
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, AbiEnumVisitor, AbiExample)]
 pub enum VoteTransaction {
     Vote(Vote),
