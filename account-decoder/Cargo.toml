@@ -23,8 +23,8 @@ solana-address-lookup-table-program = { path = "../programs/address-lookup-table
 solana-config-program = { path = "../programs/config", version = "=1.14.29" }
 solana-sdk = { path = "../sdk", version = "=1.14.29" }
 solana-vote-program = { path = "../programs/vote", version = "=1.14.29" }
-spl-token = { version = "=3.5.0", features = ["no-entrypoint"] }
-spl-token-2022 = { version = "=0.6.1", features = ["no-entrypoint"] }
+spl-token = { path= "../../powr-program-library/token/program", version = "=3.5.0", features = ["no-entrypoint"] }
+spl-token-2022 = { path= "../../powr-program-library/token/program-2022", version = "=0.6.1", features = ["no-entrypoint"] }
 thiserror = "1.0"
 zstd = "0.11.2"
 
