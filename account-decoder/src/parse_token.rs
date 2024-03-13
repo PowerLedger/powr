@@ -20,7 +20,7 @@ use {
 // solana_sdk::pubkey::Pubkey
 pub(crate) fn spl_token_id() -> Pubkey {
     // Pubkey::new_from_array(spl_token::id().to_bytes())
-    Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo")
+    Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap();
 }
 
 // A helper function to convert spl_token_2022::id() as spl_sdk::pubkey::Pubkey to
