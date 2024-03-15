@@ -18,6 +18,7 @@ use {
         solana_program::program_pack::Pack,
         state::{Account as SplTokenAccount, Mint},
     },
+    std::str::FromStr,
 };
 
 pub fn update_token_args(client: &RpcClient, args: &mut Option<SplTokenArgs>) -> Result<(), Error> {
