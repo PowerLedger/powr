@@ -3,7 +3,7 @@ use {
         args::{DistributeTokensArgs, SplTokenArgs},
         commands::{get_fees_for_messages, Allocation, Error, FundingSource},
     },
-    solana_sdk::pubkey::Pubkey,
+    spl_token::solana_program::pubkey::Pubkey,
     console::style,
     solana_account_decoder::parse_token::{
         pubkey_from_spl_token, real_number_string, real_number_string_trimmed, spl_token_pubkey,
