@@ -154,7 +154,7 @@ mod test {
         let mint = Account {
             lamports: 100,
             data: data.to_vec(),
-            owner: pubkey_from_spl_token(&spl_token::id()),
+            owner: pubkey_from_spl_token(&Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap()),
             executable: false,
             rent_epoch: 0,
         };
@@ -184,7 +184,7 @@ mod test {
         let spl_token_account = Account {
             lamports: 100,
             data: data.to_vec(),
-            owner: pubkey_from_spl_token(&spl_token::id()),
+            owner: pubkey_from_spl_token(&Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap()),
             executable: false,
             rent_epoch: 0,
         };
@@ -212,7 +212,7 @@ mod test {
         let other_mint_token_account = Account {
             lamports: 100,
             data: data.to_vec(),
-            owner: pubkey_from_spl_token(&spl_token::id()),
+            owner: pubkey_from_spl_token(&Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap()),
             executable: false,
             rent_epoch: 0,
         };
@@ -263,7 +263,7 @@ mod test {
                     amount: "42".to_string(),
                     ui_amount_string: "0.42".to_string(),
                 },
-                program_id: spl_token::id().to_string(),
+                program_id: "Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo",
             })
         );
 

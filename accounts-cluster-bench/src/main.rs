@@ -137,7 +137,7 @@ fn make_create_message(
             if let Some(mint_address) = mint {
                 instructions.push(spl_token_instruction(
                     spl_token::instruction::initialize_account(
-                        &spl_token::id(),
+                        &Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap(),
                         &spl_token_pubkey(&to_pubkey),
                         &spl_token_pubkey(&mint_address),
                         &spl_token_pubkey(&base_keypair.pubkey()),
@@ -181,7 +181,7 @@ fn make_close_message(
             if spl_token {
                 Some(spl_token_instruction(
                     spl_token::instruction::close_account(
-                        &spl_token::id(),
+                        &Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap(),
                         &spl_token_pubkey(&address),
                         &spl_token_pubkey(&keypair.pubkey()),
                         &spl_token_pubkey(&base_keypair.pubkey()),
@@ -759,7 +759,7 @@ pub mod test {
                 ),
                 spl_token_instruction(
                     spl_token::instruction::initialize_mint(
-                        &spl_token::id(),
+                        &Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap(),
                         &spl_token_pubkey(&spl_mint_keypair.pubkey()),
                         &spl_token_pubkey(&spl_mint_keypair.pubkey()),
                         None,

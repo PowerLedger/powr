@@ -153,7 +153,7 @@ mod test {
                 "wallet": wallet_address.to_string(),
                 "mint": mint.to_string(),
                 "systemProgram": solana_sdk::system_program::id().to_string(),
-                "tokenProgram": spl_token::id().to_string(),
+                "tokenProgram": "Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo",
             }),
         };
         assert_eq!(

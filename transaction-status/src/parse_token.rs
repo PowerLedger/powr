@@ -1715,7 +1715,7 @@ mod test {
     #[test]
     #[allow(clippy::same_item_push)]
     fn test_parse_token_v3() {
-        test_parse_token(&spl_token::id());
+        test_parse_token(&Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap());
     }
 
     #[test]
@@ -2229,7 +2229,7 @@ mod test {
     #[test]
     #[allow(clippy::same_item_push)]
     fn test_not_enough_keys_token_v3() {
-        test_token_ix_not_enough_keys(&spl_token::id());
+        test_token_ix_not_enough_keys(&Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap());
     }
 
     #[test]

