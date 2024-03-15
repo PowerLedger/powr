@@ -3,12 +3,13 @@ use {
         args::{DistributeTokensArgs, SplTokenArgs},
         commands::{get_fees_for_messages, Allocation, Error, FundingSource},
     },
+    solana_sdk::pubkey::Pubkey,
     console::style,
     solana_account_decoder::parse_token::{
         pubkey_from_spl_token, real_number_string, real_number_string_trimmed, spl_token_pubkey,
     },
     solana_client::rpc_client::RpcClient,
-    solana_sdk::{instruction::Instruction, message::Message, native_token::lamports_to_sol, pubkey::Pubkey},
+    solana_sdk::{instruction::Instruction, message::Message, native_token::lamports_to_sol},
     solana_transaction_status::parse_token::spl_token_instruction,
     spl_associated_token_account::{
         get_associated_token_address, instruction::create_associated_token_account,
