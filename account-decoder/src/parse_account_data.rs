@@ -1,17 +1,15 @@
 use {
     crate::{
         parse_address_lookup_table::parse_address_lookup_table,
-        parse_bpf_loader::parse_bpf_upgradeable_loader,
-        parse_config::parse_config,
-        parse_nonce::parse_nonce,
-        parse_stake::parse_stake,
-        parse_sysvar::parse_sysvar,
-        parse_token::{parse_token, spl_token_2022_id, spl_token_id},
-        parse_vote::parse_vote,
+        parse_bpf_loader::parse_bpf_upgradeable_loader, parse_config::parse_config,
+        parse_nonce::parse_nonce, parse_stake::parse_stake, parse_sysvar::parse_sysvar,
+        parse_token::parse_token, parse_vote::parse_vote,
     },
     inflector::Inflector,
     serde_json::Value,
-    solana_sdk::{instruction::InstructionError, pubkey::Pubkey, stake, system_program, sysvar},
+    solana_sdk::{
+        instruction::InstructionError, pubkey::Pubkey, stake, system_program, sysvar, vote,
+    },
     std::collections::HashMap,
     thiserror::Error,
 };
@@ -23,7 +21,7 @@ lazy_static! {
     static ref STAKE_PROGRAM_ID: Pubkey = stake::program::id();
     static ref SYSTEM_PROGRAM_ID: Pubkey = system_program::id();
     static ref SYSVAR_PROGRAM_ID: Pubkey = sysvar::id();
-    static ref VOTE_PROGRAM_ID: Pubkey = solana_vote_program::id();
+    static ref VOTE_PROGRAM_ID: Pubkey = vote::program::id();
     pub static ref PARSABLE_PROGRAM_IDS: HashMap<Pubkey, ParsableAccount> = {
         let mut m = HashMap::new();
         m.insert(
@@ -36,8 +34,8 @@ lazy_static! {
         );
         m.insert(*CONFIG_PROGRAM_ID, ParsableAccount::Config);
         m.insert(*SYSTEM_PROGRAM_ID, ParsableAccount::Nonce);
-        m.insert(spl_token_id(), ParsableAccount::SplToken);
-        m.insert(spl_token_2022_id(), ParsableAccount::SplToken2022);
+        m.insert(spl_token::id(), ParsableAccount::SplToken);
+        m.insert(spl_token_2022::id(), ParsableAccount::SplToken2022);
         m.insert(*STAKE_PROGRAM_ID, ParsableAccount::Stake);
         m.insert(*SYSVAR_PROGRAM_ID, ParsableAccount::Sysvar);
         m.insert(*VOTE_PROGRAM_ID, ParsableAccount::Vote);
@@ -85,7 +83,7 @@ pub enum ParsableAccount {
     Vote,
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub struct AccountAdditionalData {
     pub spl_token_decimals: Option<u8>,
 }
@@ -117,7 +115,7 @@ pub fn parse_account_data(
         ParsableAccount::Vote => serde_json::to_value(parse_vote(data)?)?,
     };
     Ok(ParsedAccount {
-        program: format!("{:?}", program_name).to_kebab_case(),
+        program: format!("{program_name:?}").to_kebab_case(),
         parsed: parsed_json,
         space: data.len() as u64,
     })
@@ -127,11 +125,16 @@ pub fn parse_account_data(
 mod test {
     use {
         super::*,
-        solana_sdk::nonce::{
-            state::{Data, Versions},
-            State,
+        solana_sdk::{
+            nonce::{
+                state::{Data, Versions},
+                State,
+            },
+            vote::{
+                program::id as vote_program_id,
+                state::{VoteState, VoteStateVersions},
+            },
         },
-        solana_vote_program::vote_state::{VoteState, VoteStateVersions},
     };
 
     #[test]
@@ -147,7 +150,7 @@ mod test {
         VoteState::serialize(&versioned, &mut vote_account_data).unwrap();
         let parsed = parse_account_data(
             &account_pubkey,
-            &solana_vote_program::id(),
+            &vote_program_id(),
             &vote_account_data,
             None,
         )

@@ -16,15 +16,10 @@ use {
     std::str::FromStr,
 };
 
-// A helper function to convert spl_token::id() as spl_sdk::pubkey::Pubkey to
-// solana_sdk::pubkey::Pubkey
 pub(crate) fn spl_token_id() -> Pubkey {
-    // Pubkey::new_from_array(spl_token::id().to_bytes())
     Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap()
 }
 
-// A helper function to convert spl_token_2022::id() as spl_sdk::pubkey::Pubkey to
-// solana_sdk::pubkey::Pubkey
 pub(crate) fn spl_token_2022_id() -> Pubkey {
     Pubkey::new_from_array(spl_token_2022::id().to_bytes())
 }
@@ -41,21 +36,31 @@ pub fn is_known_spl_token_id(program_id: &Pubkey) -> bool {
 
 // A helper function to convert spl_token::native_mint::id() as spl_sdk::pubkey::Pubkey to
 // solana_sdk::pubkey::Pubkey
+#[deprecated(
+    since = "1.16.0",
+    note = "Pubkey conversions no longer needed. Please use spl_token::native_mint::id() directly"
+)]
 pub fn spl_token_native_mint() -> Pubkey {
     Pubkey::new_from_array(spl_token::native_mint::id().to_bytes())
 }
 
 // The program id of the `spl_token_native_mint` account
+#[deprecated(
+    since = "1.16.0",
+    note = "Pubkey conversions no longer needed. Please use spl_token::id() directly"
+)]
 pub fn spl_token_native_mint_program_id() -> Pubkey {
     spl_token_id()
 }
 
 // A helper function to convert a solana_sdk::pubkey::Pubkey to spl_sdk::pubkey::Pubkey
+#[deprecated(since = "1.16.0", note = "Pubkey conversions no longer needed")]
 pub fn spl_token_pubkey(pubkey: &Pubkey) -> SplTokenPubkey {
     SplTokenPubkey::new_from_array(pubkey.to_bytes())
 }
 
 // A helper function to convert a spl_sdk::pubkey::Pubkey to solana_sdk::pubkey::Pubkey
+#[deprecated(since = "1.16.0", note = "Pubkey conversions no longer needed")]
 pub fn pubkey_from_spl_token(pubkey: &SplTokenPubkey) -> Pubkey {
     Pubkey::new_from_array(pubkey.to_bytes())
 }
@@ -233,7 +238,7 @@ impl UiTokenAmount {
     pub fn real_number_string(&self) -> String {
         real_number_string(
             u64::from_str(&self.amount).unwrap_or_default(),
-            self.decimals as u8,
+            self.decimals,
         )
     }
 
@@ -243,7 +248,7 @@ impl UiTokenAmount {
         } else {
             real_number_string_trimmed(
                 u64::from_str(&self.amount).unwrap_or_default(),
-                self.decimals as u8,
+                self.decimals,
             )
         }
     }
@@ -293,12 +298,10 @@ mod test {
     use {
         super::*,
         crate::parse_token_extension::{UiMemoTransfer, UiMintCloseAuthority},
-        spl_token_2022::{
-            extension::{
-                immutable_owner::ImmutableOwner, memo_transfer::MemoTransfer,
-                mint_close_authority::MintCloseAuthority, ExtensionType, StateWithExtensionsMut,
-            },
-            pod::OptionalNonZeroPubkey,
+        spl_pod::optional_keys::OptionalNonZeroPubkey,
+        spl_token_2022::extension::{
+            immutable_owner::ImmutableOwner, memo_transfer::MemoTransfer,
+            mint_close_authority::MintCloseAuthority, ExtensionType, StateWithExtensionsMut,
         },
     };
 
@@ -509,10 +512,11 @@ mod test {
             delegate: COption::None,
             delegated_amount: 0,
         };
-        let account_size = ExtensionType::get_account_len::<Account>(&[
+        let account_size = ExtensionType::try_calculate_account_len::<Account>(&[
             ExtensionType::ImmutableOwner,
             ExtensionType::MemoTransfer,
-        ]);
+        ])
+        .unwrap();
         let mut account_data = vec![0; account_size];
         let mut account_state =
             StateWithExtensionsMut::<Account>::unpack_uninitialized(&mut account_data).unwrap();
@@ -589,7 +593,8 @@ mod test {
     fn test_parse_token_mint_with_extensions() {
         let owner_pubkey = SplTokenPubkey::new_from_array([3; 32]);
         let mint_size =
-            ExtensionType::get_account_len::<Mint>(&[ExtensionType::MintCloseAuthority]);
+            ExtensionType::try_calculate_account_len::<Mint>(&[ExtensionType::MintCloseAuthority])
+                .unwrap();
         let mint_base = Mint {
             mint_authority: COption::Some(owner_pubkey),
             supply: 42,
