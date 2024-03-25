@@ -1,4 +1,5 @@
 use {
+    solana_poh::poh_recorder::RecordTransactionsTimings,
     solana_program_runtime::timings::ExecuteTimings,
     solana_sdk::{clock::Slot, saturating_add_assign},
     std::time::Instant,
@@ -9,6 +10,7 @@ pub struct LeaderExecuteAndCommitTimings {
     pub collect_balances_us: u64,
     pub load_execute_us: u64,
     pub freeze_lock_us: u64,
+    pub last_blockhash_us: u64,
     pub record_us: u64,
     pub commit_us: u64,
     pub find_and_send_votes_us: u64,
@@ -21,6 +23,7 @@ impl LeaderExecuteAndCommitTimings {
         saturating_add_assign!(self.collect_balances_us, other.collect_balances_us);
         saturating_add_assign!(self.load_execute_us, other.load_execute_us);
         saturating_add_assign!(self.freeze_lock_us, other.freeze_lock_us);
+        saturating_add_assign!(self.last_blockhash_us, other.last_blockhash_us);
         saturating_add_assign!(self.record_us, other.record_us);
         saturating_add_assign!(self.commit_us, other.commit_us);
         saturating_add_assign!(self.find_and_send_votes_us, other.find_and_send_votes_us);
@@ -37,6 +40,7 @@ impl LeaderExecuteAndCommitTimings {
             ("collect_balances_us", self.collect_balances_us as i64, i64),
             ("load_execute_us", self.load_execute_us as i64, i64),
             ("freeze_lock_us", self.freeze_lock_us as i64, i64),
+            ("last_blockhash_us", self.last_blockhash_us as i64, i64),
             ("record_us", self.record_us as i64, i64),
             ("commit_us", self.commit_us as i64, i64),
             (
@@ -67,24 +71,6 @@ impl LeaderExecuteAndCommitTimings {
                 i64
             ),
         );
-    }
-}
-
-#[derive(Default, Debug)]
-pub struct RecordTransactionsTimings {
-    pub execution_results_to_transactions_us: u64,
-    pub hash_us: u64,
-    pub poh_record_us: u64,
-}
-
-impl RecordTransactionsTimings {
-    pub fn accumulate(&mut self, other: &RecordTransactionsTimings) {
-        saturating_add_assign!(
-            self.execution_results_to_transactions_us,
-            other.execution_results_to_transactions_us
-        );
-        saturating_add_assign!(self.hash_us, other.hash_us);
-        saturating_add_assign!(self.poh_record_us, other.poh_record_us);
     }
 }
 
@@ -224,9 +210,6 @@ impl ProcessBufferedPacketsTimings {
 
 #[derive(Debug, Default)]
 pub(crate) struct ConsumeBufferedPacketsTimings {
-    // Time spent grabbing poh recorder lock
-    pub poh_recorder_lock_us: u64,
-
     // Time spent processing transactions
     pub process_packets_transactions_us: u64,
 }
@@ -237,11 +220,6 @@ impl ConsumeBufferedPacketsTimings {
             "banking_stage-leader_slot_consume_buffered_packets_timings",
             ("id", id as i64, i64),
             ("slot", slot as i64, i64),
-            (
-                "poh_recorder_lock_us",
-                self.poh_recorder_lock_us as i64,
-                i64
-            ),
             (
                 "process_packets_transactions_us",
                 self.process_packets_transactions_us as i64,

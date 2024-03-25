@@ -6,7 +6,7 @@ use {
         pubkey::Pubkey,
         signature::{Signature, Signer},
     },
-    solana_vote_program::vote_state::{BlockTimestamp, Vote, VoteState},
+    solana_vote_program::vote_state::{vote_state_1_14_11::VoteState1_14_11, BlockTimestamp, Vote},
 };
 
 #[frozen_abi(digest = "7phMrqmBo2D3rXPdhBj8CpjRvvmx9qgpcU4cDGkL3W9q")]
@@ -15,7 +15,7 @@ pub struct Tower1_7_14 {
     pub(crate) node_pubkey: Pubkey,
     pub(crate) threshold_depth: usize,
     pub(crate) threshold_size: f64,
-    pub(crate) vote_state: VoteState,
+    pub(crate) vote_state: VoteState1_14_11,
     pub(crate) last_vote: Vote,
     #[serde(skip)]
     // The blockhash used in the last vote transaction, may or may not equal the

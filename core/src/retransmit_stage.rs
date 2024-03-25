@@ -8,7 +8,6 @@ use {
     lru::LruCache,
     rand::Rng,
     rayon::{prelude::*, ThreadPool, ThreadPoolBuilder},
-    solana_client::rpc_response::SlotUpdate,
     solana_gossip::{
         cluster_info::ClusterInfo, legacy_contact_info::LegacyContactInfo as ContactInfo,
     },
@@ -17,9 +16,10 @@ use {
         shred::{self, ShredId},
     },
     solana_measure::measure::Measure,
-    solana_perf::sigverify::Deduper,
+    solana_perf::deduper::Deduper,
     solana_rayon_threadlimit::get_thread_count,
     solana_rpc::{max_slots::MaxSlots, rpc_subscriptions::RpcSubscriptions},
+    solana_rpc_client_api::response::SlotUpdate,
     solana_runtime::{bank::Bank, bank_forks::BankForks},
     solana_sdk::{clock::Slot, pubkey::Pubkey, timing::timestamp},
     solana_streamer::{
@@ -374,10 +374,11 @@ pub fn retransmitter(
     let mut rng = rand::thread_rng();
     let mut shred_deduper = ShredDeduper::<2>::new(&mut rng, DEDUPER_NUM_BITS);
     let mut stats = RetransmitStats::new(Instant::now());
+    #[allow(clippy::manual_clamp)]
     let num_threads = get_thread_count().min(8).max(sockets.len());
     let thread_pool = ThreadPoolBuilder::new()
         .num_threads(num_threads)
-        .thread_name(|i| format!("solRetransmit{:02}", i))
+        .thread_name(|i| format!("solRetransmit{i:02}"))
         .build()
         .unwrap();
     Builder::new()

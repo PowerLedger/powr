@@ -4,14 +4,18 @@ use {
         GetTransactionPriorityDetails, TransactionPriorityDetails,
     },
     solana_sdk::{
+        feature_set,
         hash::Hash,
         message::Message,
         sanitize::SanitizeError,
         short_vec::decode_shortu16_len,
         signature::Signature,
-        transaction::{SanitizedVersionedTransaction, VersionedTransaction},
+        transaction::{
+            AddressLoader, SanitizedTransaction, SanitizedVersionedTransaction,
+            VersionedTransaction,
+        },
     },
-    std::{cmp::Ordering, mem::size_of},
+    std::{cmp::Ordering, mem::size_of, sync::Arc},
     thiserror::Error,
 };
 
@@ -28,6 +32,8 @@ pub enum DeserializedPacketError {
     SanitizeError(#[from] SanitizeError),
     #[error("transaction failed prioritization")]
     PrioritizationFailure,
+    #[error("vote transaction failure")]
+    VoteTransactionError,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -40,20 +46,22 @@ pub struct ImmutableDeserializedPacket {
 }
 
 impl ImmutableDeserializedPacket {
-    pub fn new(
-        packet: Packet,
-        priority_details: Option<TransactionPriorityDetails>,
-    ) -> Result<Self, DeserializedPacketError> {
+    pub fn new(packet: Packet) -> Result<Self, DeserializedPacketError> {
         let versioned_transaction: VersionedTransaction = packet.deserialize_slice(..)?;
         let sanitized_transaction = SanitizedVersionedTransaction::try_from(versioned_transaction)?;
         let message_bytes = packet_message(&packet)?;
         let message_hash = Message::hash_raw_message(message_bytes);
-        let is_simple_vote = packet.meta.is_simple_vote_tx();
+        let is_simple_vote = packet.meta().is_simple_vote_tx();
 
         // drop transaction if prioritization fails.
-        let priority_details = priority_details
-            .or_else(|| sanitized_transaction.get_transaction_priority_details())
+        let mut priority_details = sanitized_transaction
+            .get_transaction_priority_details(packet.meta().round_compute_unit_price())
             .ok_or(DeserializedPacketError::PrioritizationFailure)?;
+
+        // set priority to zero for vote transactions
+        if is_simple_vote {
+            priority_details.priority = 0;
+        };
 
         Ok(Self {
             original_packet: packet,
@@ -86,6 +94,28 @@ impl ImmutableDeserializedPacket {
 
     pub fn compute_unit_limit(&self) -> u64 {
         self.priority_details.compute_unit_limit
+    }
+
+    // This function deserializes packets into transactions, computes the blake3 hash of transaction
+    // messages, and verifies secp256k1 instructions.
+    pub fn build_sanitized_transaction(
+        &self,
+        feature_set: &Arc<feature_set::FeatureSet>,
+        votes_only: bool,
+        address_loader: impl AddressLoader,
+    ) -> Option<SanitizedTransaction> {
+        if votes_only && !self.is_simple_vote() {
+            return None;
+        }
+        let tx = SanitizedTransaction::try_new(
+            self.transaction().clone(),
+            *self.message_hash(),
+            self.is_simple_vote(),
+            address_loader,
+        )
+        .ok()?;
+        tx.verify_precompiles(feature_set).ok()?;
+        Some(tx)
     }
 }
 
@@ -129,8 +159,8 @@ mod tests {
             1,
             Hash::new_unique(),
         );
-        let packet = Packet::from_data(None, &tx).unwrap();
-        let deserialized_packet = ImmutableDeserializedPacket::new(packet, None);
+        let packet = Packet::from_data(None, tx).unwrap();
+        let deserialized_packet = ImmutableDeserializedPacket::new(packet);
 
         assert!(matches!(deserialized_packet, Ok(_)));
     }

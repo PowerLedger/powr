@@ -1,16 +1,13 @@
 //! The `shred_fetch_stage` pulls shreds from UDP sockets and sends it to a channel.
 
 use {
-    crate::{cluster_nodes::check_feature_activation, serve_repair::ServeRepair},
+    crate::serve_repair::ServeRepair,
     crossbeam_channel::{unbounded, Sender},
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::shred::{should_discard_shred, ShredFetchStats},
     solana_perf::packet::{PacketBatch, PacketBatchRecycler, PacketFlags},
-    solana_runtime::{bank::Bank, bank_forks::BankForks},
-    solana_sdk::{
-        clock::{Slot, DEFAULT_MS_PER_SLOT},
-        feature_set,
-    },
+    solana_runtime::bank_forks::BankForks,
+    solana_sdk::clock::DEFAULT_MS_PER_SLOT,
     solana_streamer::streamer::{self, PacketBatchReceiver, StreamerReceiveStats},
     std::{
         net::UdpSocket,
@@ -45,25 +42,27 @@ impl ShredFetchStage {
             .as_ref()
             .map(|(_, cluster_info)| cluster_info.keypair().clone());
 
-        // In the case of bank_forks=None, setup to accept any slot range
-        let mut root_bank = bank_forks.read().unwrap().root_bank();
-        let mut last_root = 0;
-        let mut last_slot = std::u64::MAX;
-        let mut slots_per_epoch = 0;
-
+        let (mut last_root, mut slots_per_epoch, mut last_slot) = {
+            let bank_forks_r = bank_forks.read().unwrap();
+            let root_bank = bank_forks_r.root_bank();
+            (
+                root_bank.slot(),
+                root_bank.get_slots_in_epoch(root_bank.epoch()),
+                bank_forks_r.highest_slot(),
+            )
+        };
         let mut stats = ShredFetchStats::default();
 
         for mut packet_batch in recvr {
             if last_updated.elapsed().as_millis() as u64 > DEFAULT_MS_PER_SLOT {
                 last_updated = Instant::now();
-                {
+                let root_bank = {
                     let bank_forks_r = bank_forks.read().unwrap();
-                    last_root = bank_forks_r.root();
-                    let working_bank = bank_forks_r.working_bank();
-                    last_slot = working_bank.slot();
-                    root_bank = bank_forks_r.root_bank();
-                    slots_per_epoch = root_bank.get_slots_in_epoch(root_bank.epoch());
-                }
+                    last_slot = bank_forks_r.highest_slot();
+                    bank_forks_r.root_bank()
+                };
+                last_root = root_bank.slot();
+                slots_per_epoch = root_bank.get_slots_in_epoch(root_bank.epoch());
                 keypair = repair_context
                     .as_ref()
                     .map(|(_, cluster_info)| cluster_info.keypair().clone());
@@ -85,23 +84,14 @@ impl ShredFetchStage {
 
             // Limit shreds to 2 epochs away.
             let max_slot = last_slot + 2 * slots_per_epoch;
-            let should_drop_merkle_shreds =
-                |shred_slot| should_drop_merkle_shreds(shred_slot, &root_bank);
             let turbine_disabled = turbine_disabled.load(Ordering::Relaxed);
-            for packet in packet_batch.iter_mut() {
+            for packet in packet_batch.iter_mut().filter(|p| !p.meta().discard()) {
                 if turbine_disabled
-                    || should_discard_shred(
-                        packet,
-                        last_root,
-                        max_slot,
-                        shred_version,
-                        should_drop_merkle_shreds,
-                        &mut stats,
-                    )
+                    || should_discard_shred(packet, last_root, max_slot, shred_version, &mut stats)
                 {
-                    packet.meta.set_discard(true);
+                    packet.meta_mut().set_discard(true);
                 } else {
-                    packet.meta.flags.insert(flags);
+                    packet.meta_mut().flags.insert(flags);
                 }
             }
             stats.maybe_submit(name, STATS_SUBMIT_CADENCE);
@@ -134,7 +124,7 @@ impl ShredFetchStage {
                     packet_sender.clone(),
                     recycler.clone(),
                     Arc::new(StreamerReceiveStats::new("packet_modifier")),
-                    1,
+                    Duration::from_millis(1), // coalesce
                     true,
                     None,
                 )
@@ -232,19 +222,6 @@ impl ShredFetchStage {
     }
 }
 
-#[must_use]
-fn should_drop_merkle_shreds(shred_slot: Slot, root_bank: &Bank) -> bool {
-    check_feature_activation(
-        &feature_set::keep_merkle_shreds::id(),
-        shred_slot,
-        root_bank,
-    ) && !check_feature_activation(
-        &feature_set::drop_merkle_shreds::id(),
-        shred_slot,
-        root_bank,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use {
@@ -285,7 +262,6 @@ mod tests {
             last_root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats,
         ));
         let coding = solana_ledger::shred::Shredder::generate_coding_shreds(
@@ -299,7 +275,6 @@ mod tests {
             last_root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats,
         ));
     }
@@ -321,7 +296,6 @@ mod tests {
             last_root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats,
         ));
         assert_eq!(stats.index_overrun, 1);
@@ -343,18 +317,12 @@ mod tests {
             3,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats,
         ));
         assert_eq!(stats.slot_out_of_range, 1);
 
         assert!(should_discard_shred(
-            &packet,
-            last_root,
-            max_slot,
-            345,       // shred_version
-            |_| false, // should_drop_merkle_shreds
-            &mut stats,
+            &packet, last_root, max_slot, /*shred_version:*/ 345, &mut stats,
         ));
         assert_eq!(stats.shred_version_mismatch, 1);
 
@@ -364,7 +332,6 @@ mod tests {
             last_root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats,
         ));
 
@@ -386,7 +353,6 @@ mod tests {
             last_root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats,
         ));
 
@@ -398,7 +364,6 @@ mod tests {
             last_root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats,
         ));
     }

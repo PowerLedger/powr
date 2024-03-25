@@ -1,22 +1,19 @@
 //! The `fetch_stage` batches input from a UDP socket and sends it to a channel.
 
 use {
-    crate::{
-        banking_stage::HOLD_TRANSACTIONS_SLOT_OFFSET,
-        result::{Error, Result},
-    },
+    crate::result::{Error, Result},
     crossbeam_channel::{unbounded, RecvTimeoutError},
-    solana_client::connection_cache::DEFAULT_TPU_ENABLE_UDP,
     solana_metrics::{inc_new_counter_debug, inc_new_counter_info},
     solana_perf::{packet::PacketBatchRecycler, recycler::Recycler},
     solana_poh::poh_recorder::PohRecorder,
     solana_sdk::{
-        clock::DEFAULT_TICKS_PER_SLOT,
+        clock::{DEFAULT_TICKS_PER_SLOT, HOLD_TRANSACTIONS_SLOT_OFFSET},
         packet::{Packet, PacketFlags},
     },
     solana_streamer::streamer::{
         self, PacketBatchReceiver, PacketBatchSender, StreamerReceiveStats,
     },
+    solana_tpu_client::tpu_client::DEFAULT_TPU_ENABLE_UDP,
     std::{
         net::UdpSocket,
         sync::{
@@ -33,14 +30,13 @@ pub struct FetchStage {
 }
 
 impl FetchStage {
-    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         sockets: Vec<UdpSocket>,
         tpu_forwards_sockets: Vec<UdpSocket>,
         tpu_vote_sockets: Vec<UdpSocket>,
         exit: &Arc<AtomicBool>,
         poh_recorder: &Arc<RwLock<PohRecorder>>,
-        coalesce_ms: u64,
+        coalesce: Duration,
     ) -> (Self, PacketBatchReceiver, PacketBatchReceiver) {
         let (sender, receiver) = unbounded();
         let (vote_sender, vote_receiver) = unbounded();
@@ -56,7 +52,7 @@ impl FetchStage {
                 &forward_sender,
                 forward_receiver,
                 poh_recorder,
-                coalesce_ms,
+                coalesce,
                 None,
                 DEFAULT_TPU_ENABLE_UDP,
             ),
@@ -76,7 +72,7 @@ impl FetchStage {
         forward_sender: &PacketBatchSender,
         forward_receiver: PacketBatchReceiver,
         poh_recorder: &Arc<RwLock<PohRecorder>>,
-        coalesce_ms: u64,
+        coalesce: Duration,
         in_vote_only_mode: Option<Arc<AtomicBool>>,
         tpu_enable_udp: bool,
     ) -> Self {
@@ -93,7 +89,7 @@ impl FetchStage {
             forward_sender,
             forward_receiver,
             poh_recorder,
-            coalesce_ms,
+            coalesce,
             in_vote_only_mode,
             tpu_enable_udp,
         )
@@ -105,7 +101,7 @@ impl FetchStage {
         poh_recorder: &Arc<RwLock<PohRecorder>>,
     ) -> Result<()> {
         let mark_forwarded = |packet: &mut Packet| {
-            packet.meta.flags |= PacketFlags::FORWARDED;
+            packet.meta_mut().flags |= PacketFlags::FORWARDED;
         };
 
         let mut packet_batch = recvr.recv()?;
@@ -152,7 +148,7 @@ impl FetchStage {
         forward_sender: &PacketBatchSender,
         forward_receiver: PacketBatchReceiver,
         poh_recorder: &Arc<RwLock<PohRecorder>>,
-        coalesce_ms: u64,
+        coalesce: Duration,
         in_vote_only_mode: Option<Arc<AtomicBool>>,
         tpu_enable_udp: bool,
     ) -> Self {
@@ -170,7 +166,7 @@ impl FetchStage {
                         sender.clone(),
                         recycler.clone(),
                         tpu_stats.clone(),
-                        coalesce_ms,
+                        coalesce,
                         true,
                         in_vote_only_mode.clone(),
                     )
@@ -191,7 +187,7 @@ impl FetchStage {
                         forward_sender.clone(),
                         recycler.clone(),
                         tpu_forward_stats.clone(),
-                        coalesce_ms,
+                        coalesce,
                         true,
                         in_vote_only_mode.clone(),
                     )
@@ -211,7 +207,7 @@ impl FetchStage {
                     vote_sender.clone(),
                     recycler.clone(),
                     tpu_vote_stats.clone(),
-                    coalesce_ms,
+                    coalesce,
                     true,
                     None,
                 )

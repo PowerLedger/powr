@@ -5,10 +5,10 @@ use {
     solana_ledger::{
         leader_schedule_cache::LeaderScheduleCache, shred, sigverify_shreds::verify_shreds_gpu,
     },
-    solana_perf::{self, packet::PacketBatch, recycler_cache::RecyclerCache, sigverify::Deduper},
+    solana_perf::{self, deduper::Deduper, packet::PacketBatch, recycler_cache::RecyclerCache},
     solana_rayon_threadlimit::get_thread_count,
     solana_runtime::{bank::Bank, bank_forks::BankForks},
-    solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Signer},
+    solana_sdk::{clock::Slot, pubkey::Pubkey},
     std::{
         collections::HashMap,
         sync::{Arc, RwLock},
@@ -50,12 +50,11 @@ pub(crate) fn spawn_shred_sigverify(
             if deduper.maybe_reset(&mut rng, DEDUPER_FALSE_POSITIVE_RATE, DEDUPER_RESET_CYCLE) {
                 stats.num_deduper_saturations += 1;
             }
-            // We can't store the pubkey outside the loop
-            // because the identity might be hot swapped.
-            let self_pubkey = cluster_info.keypair().pubkey();
             match run_shred_sigverify(
                 &thread_pool,
-                &self_pubkey,
+                // We can't store the pubkey outside the loop
+                // because the identity might be hot swapped.
+                &cluster_info.id(),
                 &bank_forks,
                 &leader_schedule_cache,
                 &recycler_cache,
@@ -106,13 +105,13 @@ fn run_shred_sigverify<const K: usize>(
             .par_iter_mut()
             .flatten()
             .filter(|packet| {
-                !packet.meta.discard()
+                !packet.meta().discard()
                     && packet
                         .data(..)
                         .map(|data| deduper.dedup(data))
                         .unwrap_or(true)
             })
-            .map(|packet| packet.meta.set_discard(true))
+            .map(|packet| packet.meta_mut().set_discard(true))
             .count()
     });
     verify_packets(
@@ -128,7 +127,7 @@ fn run_shred_sigverify<const K: usize>(
     let shreds: Vec<_> = packets
         .iter()
         .flat_map(PacketBatch::iter)
-        .filter(|packet| !packet.meta.discard() && !packet.meta.repair())
+        .filter(|packet| !packet.meta().discard() && !packet.meta().repair())
         .filter_map(shred::layout::get_shred)
         .map(<[u8]>::to_vec)
         .collect();
@@ -172,13 +171,13 @@ fn get_slot_leaders(
     let mut leaders = HashMap::<Slot, Option<Pubkey>>::new();
     for batch in batches {
         for packet in batch.iter_mut() {
-            if packet.meta.discard() {
+            if packet.meta().discard() {
                 continue;
             }
             let shred = shred::layout::get_shred(packet);
             let slot = match shred.and_then(shred::layout::get_slot) {
                 None => {
-                    packet.meta.set_discard(true);
+                    packet.meta_mut().set_discard(true);
                     continue;
                 }
                 Some(slot) => slot,
@@ -186,10 +185,10 @@ fn get_slot_leaders(
             let leader = leaders.entry(slot).or_insert_with(|| {
                 let leader = leader_schedule_cache.slot_leader_at(slot, Some(bank))?;
                 // Discard the shred if the slot leader is the node itself.
-                (&leader != self_pubkey).then(|| leader)
+                (&leader != self_pubkey).then_some(leader)
             });
             if leader.is_none() {
-                packet.meta.set_discard(true);
+                packet.meta_mut().set_discard(true);
             }
         }
     }
@@ -200,7 +199,7 @@ fn count_discards(packets: &[PacketBatch]) -> usize {
     packets
         .iter()
         .flat_map(PacketBatch::iter)
-        .filter(|packet| packet.meta.discard())
+        .filter(|packet| packet.meta().discard())
         .count()
 }
 
@@ -306,7 +305,7 @@ mod tests {
         );
         shred.sign(&leader_keypair);
         batches[0][0].buffer_mut()[..shred.payload().len()].copy_from_slice(shred.payload());
-        batches[0][0].meta.size = shred.payload().len();
+        batches[0][0].meta_mut().size = shred.payload().len();
 
         let mut shred = Shred::new_from_data(
             0,
@@ -321,7 +320,7 @@ mod tests {
         let wrong_keypair = Keypair::new();
         shred.sign(&wrong_keypair);
         batches[0][1].buffer_mut()[..shred.payload().len()].copy_from_slice(shred.payload());
-        batches[0][1].meta.size = shred.payload().len();
+        batches[0][1].meta_mut().size = shred.payload().len();
 
         let thread_pool = ThreadPoolBuilder::new().num_threads(3).build().unwrap();
         verify_packets(
@@ -332,7 +331,7 @@ mod tests {
             &RecyclerCache::warmed(),
             &mut batches,
         );
-        assert!(!batches[0][0].meta.discard());
-        assert!(batches[0][1].meta.discard());
+        assert!(!batches[0][0].meta().discard());
+        assert!(batches[0][1].meta().discard());
     }
 }
