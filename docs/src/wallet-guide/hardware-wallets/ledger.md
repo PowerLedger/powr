@@ -2,15 +2,19 @@
 title: Ledger Nano
 ---
 
-This page describes how to use a Ledger Nano S or Nano X to interact with Solana
-using the command line tools.
+This page describes how to use a Ledger Nano S or Nano X to interact with Powerledger chain
+using the Solana command line tools.
+
+Because Powerledger chain uses the same key derivation method as Solana, Solana wallets are compatible with Powerledger chain.
 
 ## Before You Begin
 
 - [Set up a Nano with the Solana App](https://support.ledger.com/hc/en-us/articles/360016265659-Solana-SOL-?docs=true)
 - [Install the Solana command-line tools](../../cli/install-solana-cli-tools.md)
 
-## Use Ledger Nano with Solana CLI
+## Use Ledger Nano on Powerledger chain 
+
+Because Powerledger chain uses the same key derivation method as Solana, The Solana application on Ledger Nano is compatible with the Powerledger blockchain
 
 1. Ensure the Ledger Live application is closed
 2. Plug your Nano into your computer's USB port
@@ -26,7 +30,7 @@ solana-keygen pubkey usb://ledger
 ```
 
 This confirms your Ledger device is connected properly and in the correct state
-to interact with the Solana CLI. The command returns your Ledger's unique
+to interact with the Powerledger chain via the Solana CLI. The command returns your Ledger's unique
 _wallet ID_. When you have multiple Nano devices connected to the same
 computer, you can use your wallet ID to specify which Ledger hardware wallet
 you want to use. If you only plan to use a single Nano on your computer
@@ -96,12 +100,12 @@ You can also view the balance of any account address on the Accounts tab in the
 [Explorer](https://explorer.solana.com/accounts)
 and paste the address in the box to view the balance in you web browser.
 
-Note: Any address with a balance of 0 SOL, such as a newly created one on your
+Note: Any address with a balance of 0 PLBC tokens, such as a newly created one on your
 Ledger, will show as "Not Found" in the explorer. Empty accounts and non-existent
 accounts are treated the same in Solana. This will change when your account
-address has some SOL in it.
+address has some PLBC tokens in it.
 
-### Send SOL from a Nano
+### Send PLBC tokens from a Nano
 
 To send some tokens from an address controlled by your Nano, you will
 need to use the device to sign a transaction, using the same keypair URL you
@@ -120,7 +124,7 @@ solana transfer RECIPIENT_ADDRESS AMOUNT --keypair KEYPAIR_URL_OF_SENDER
 
 Below is a full example. First, an address is viewed at a certain keypair URL.
 Second, the balance of that address is checked. Lastly, a transfer transaction
-is entered to send `1` SOL to the recipient address `7cvkjYAkUYs4W8XcXsca7cBrEGFeSUjeZmKoNBvEwyri`.
+is entered to send `1` PLBC token to the recipient address `7cvkjYAkUYs4W8XcXsca7cBrEGFeSUjeZmKoNBvEwyri`.
 When you hit Enter for a transfer command, you will be prompted to approve the
 transaction details on your Ledger device. On the device, use the right and
 left buttons to review the transaction details. If they look correct, click
@@ -144,8 +148,9 @@ Signature: kemu9jDEuPirKNRKiHan7ycybYsZp7pFefAdvWZRq5VRHCLgXTXaFVw3pfh87MQcWX4kQ
 After approving the transaction on your device, the program will display the
 transaction signature, and wait for the maximum number of confirmations (32)
 before returning. This only takes a few seconds, and then the transaction is
-finalized on the Solana network. You can view details of this or any other
+finalized on the Powerledger blockchain network. You can view details of this or any other
 transaction by going to the Transaction tab in the
+<!-- TODO include link to our own explorer -->
 [Explorer](https://explorer.solana.com/transactions)
 and paste in the transaction signature.
 

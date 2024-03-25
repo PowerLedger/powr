@@ -2,21 +2,21 @@
 title: Paper Wallet
 ---
 
-This document describes how to create and use a paper wallet with the Solana CLI
+This document describes how to create and use a paper wallet on the Powerldger chain with the Solana CLI
 tools.
 
 > We do not intend to advise on how to _securely_ create or manage paper wallets. Please research the security concerns carefully.
 
 ## Overview
 
-Solana provides a key generation tool to derive keys from
+Powerleger provides a key generation tool to derive keys using the Solana CLI tool from
 [BIP39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki)-compliant
 seed phrases. Solana CLI commands for running a validator and staking tokens all
 support keypair input via seed phrases.
 
 ## Paper Wallet Usage
 
-Solana commands can be run without ever saving a keypair to disk on a machine.
+Solana's CLI tool commands can be run without ever saving a keypair to disk on a machine.
 If avoiding writing a private key to disk is a security concern of yours, you've
 come to the right place.
 
@@ -127,7 +127,7 @@ solana-keygen pubkey --help
 
 ### Hierarchical Derivation
 
-The solana-cli supports
+The solana-cli tool supports
 [BIP32](https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki) and
 [BIP44](https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki)
 hierarchical derivation of private keys from your seed phrase and passphrase by
@@ -146,7 +146,7 @@ To use a derivation path other than solana's standard BIP44, you can supply `?fu
 solana-keygen pubkey prompt://?full-path=m/44/2017/0/1
 ```
 
-Because Solana uses Ed25519 keypairs, as per
+Because Powerledger chain uses Ed25519 keypairs, just like Solana, as per
 [SLIP-0010](https://github.com/satoshilabs/slips/blob/master/slip-0010.md) all
 derivation-path indexes will be promoted to hardened indexes -- eg.
 `?key=0'/0'`, `?full-path=m/44'/2017'/0'/1'` -- regardless of whether ticks are
@@ -181,7 +181,7 @@ Next, configure the `solana` CLI tool to
 [connect to a particular cluster](../cli/choose-a-cluster.md):
 
 ```bash
-solana config set --url <CLUSTER URL> # (i.e. https://api.mainnet-beta.solana.com)
+solana config set --url <CLUSTER URL> # (i.e. https://powr-api.mainnet.powerledger.io)
 ```
 
 Finally, to check the balance, run the following command:

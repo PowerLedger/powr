@@ -2,10 +2,10 @@
 title: Command Line Wallets
 ---
 
-Solana supports several different types of wallets that can be used to interface
-directly with the Solana command-line tools.
+Powerledger chain supports several different types of wallets that can be used to interface
+directly with the Powerledger chain using the Solana command-line tools.
 
-To use a Command Line Wallet, you must first [install the Solana CLI tools](../cli/install-solana-cli-tools.md)
+To use a Command Line Wallet, you must first [install version 1.13.7 of the Solana CLI tools](../cli/install-solana-cli-tools.md)
 
 ## File System Wallet
 

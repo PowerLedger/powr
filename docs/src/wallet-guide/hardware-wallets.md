@@ -1,5 +1,5 @@
 ---
-title: Using Hardware Wallets on the Solana CLI
+title: Using Hardware Wallets on the Powerledger chain with the Solana CLI Tools
 ---
 
 Signing a transaction requires a private key, but storing a private
@@ -10,7 +10,7 @@ physical device called a _hardware wallet_. A hardware wallet is a
 small handheld device that stores private keys and provides some
 interface for signing transactions.
 
-The Solana CLI has first class support for hardware wallets. Anywhere
+The Solana CLI tool which the Powerledger chain uses has first class support for hardware wallets. Anywhere
 you use a keypair filepath (denoted as `<KEYPAIR>` in usage docs), you
 can pass a _keypair URL_ that uniquely identifies a keypair in a
 hardware wallet.
@@ -22,6 +22,8 @@ The Solana CLI supports the following hardware wallets:
 - [Ledger Nano S and Ledger Nano X](hardware-wallets/ledger.md)
 
 ## Specify a Keypair URL
+
+Powerledger uses the same key format as the Solana chain.
 
 Solana defines a keypair URL format to uniquely locate any Solana keypair on a
 hardware wallet connected to your computer.
@@ -47,7 +49,7 @@ usb://ledger/BsNsvfXqQTtJnagwFWdBS7FBXgnsK8VZ5CmuznN85swK?key=0/0
 
 All derivation paths implicitly include the prefix `44'/501'`, which indicates
 the path follows the [BIP44 specifications](https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki)
-and that any derived keys are Solana keys (Coin type 501). The single quote
+and that any derived keys are Solana keys (Coin type 501) that are compatible with the Powerledger chain. The single quote
 indicates a "hardened" derivation. Because Solana uses Ed25519 keypairs, all
 derivations are hardened and therefore adding the quote is optional and
 unnecessary.

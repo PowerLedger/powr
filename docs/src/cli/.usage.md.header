@@ -2,7 +2,7 @@
 title: CLI Usage Reference
 ---
 
-The [solana-cli crate](https://crates.io/crates/solana-cli) provides a command-line interface tool for Solana
+The [solana-cli crate](https://crates.io/crates/solana-cli) provides a command-line interface tool that cacn be used to interface with the Powerledger blockchain
 
 ## Examples
 
@@ -16,7 +16,7 @@ $ solana-keygen pubkey
 <PUBKEY>
 ```
 
-### Airdrop SOL/Lamports
+### Airdrop POWR
 
 ```bash
 // Command
@@ -24,6 +24,7 @@ $ solana airdrop 1
 
 // Return
 "1 SOL"
+// CLI tools will refer to the native POWR blockchain tokens as SOL
 ```
 
 ### Get Balance

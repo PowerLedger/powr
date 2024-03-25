@@ -1,5 +1,5 @@
 ---
-title: Staking on Solana
+title: Staking on Powerledger chain
 ---
 
 _Note before reading: All references to increases in values are in absolute
@@ -72,26 +72,23 @@ will be of a different type than one used to simply send and receive tokens.
 
 Follow the wallet's instructions for selecting a validator.  You can get
 information about potentially performant validators from the links below.
-The Solana Foundation does not recommend any particular validator.
+The Powerledger Foundation does not recommend any particular validator.
+<!-- TODO: Confirm Powerledger foundation name -->
 
-The Mainnet Beta validators introduce themselves and their services on this
-Solana Forum thread:
+The Current validators are listed on this website:
 
-- https://forums.solana.com/t/validator-information-thread
+- https://powerledger.io/validator
 
-The site solanabeach.io is built and maintained by one of our validators,
-Staking Facilities. It provides a some high-level graphical information about
+The site https://dashboard.powerledger.io provides a some high-level information about
 the network as a whole, as well as a list of each validator and some recent
 performance statistics about each one.
-
-- https://solanabeach.io
 
 To view block production statistics, use the Solana command-line tools:
 
 - `solana validators`
 - `solana block-production`
 
-The Solana team does not make recommendations on how to interpret this
+The Powerledger team does not make recommendations on how to interpret this
 information. Do your own due diligence.
 
 #### Delegate your Stake
