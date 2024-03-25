@@ -26,20 +26,19 @@ use {
         return_signers_with_config, CliEpochVotingHistory, CliLockout, CliVoteAccount,
         ReturnSignersConfig,
     },
-    solana_client::{
-        blockhash_query::BlockhashQuery, nonce_utils, rpc_client::RpcClient,
-        rpc_config::RpcGetVoteAccountsConfig,
-    },
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
+    solana_rpc_client::rpc_client::RpcClient,
+    solana_rpc_client_api::config::RpcGetVoteAccountsConfig,
+    solana_rpc_client_nonce_utils::blockhash_query::BlockhashQuery,
     solana_sdk::{
-        account::Account, commitment_config::CommitmentConfig, message::Message,
+        account::Account, commitment_config::CommitmentConfig, feature, message::Message,
         native_token::lamports_to_sol, pubkey::Pubkey, system_instruction::SystemError,
         transaction::Transaction,
     },
     solana_vote_program::{
         vote_error::VoteError,
-        vote_instruction::{self, withdraw},
-        vote_state::{VoteAuthorize, VoteInit, VoteState},
+        vote_instruction::{self, withdraw, CreateVoteAccountConfig},
+        vote_state::{VoteAuthorize, VoteInit, VoteState, VoteStateVersions},
     },
     std::sync::Arc,
 };
@@ -339,7 +338,7 @@ impl VoteSubCommands for App<'_, '_> {
                         .long("num-rewards-epochs")
                         .takes_value(true)
                         .value_name("NUM")
-                        .validator(|s| is_within_range(s, 1, 10))
+                        .validator(|s| is_within_range(s, 1..=10))
                         .default_value_if("with_rewards", None, "1")
                         .requires("with_rewards")
                         .help("Display rewards for NUM recent epochs, max 10 [default: latest epoch only]"),
@@ -801,6 +800,13 @@ pub fn process_create_vote_account(
     let fee_payer = config.signers[fee_payer];
     let nonce_authority = config.signers[nonce_authority];
 
+    let is_feature_active = (!sign_only)
+        .then(solana_sdk::feature_set::vote_state_add_vote_latency::id)
+        .and_then(|feature_address| rpc_client.get_account(&feature_address).ok())
+        .and_then(|account| feature::from_account(&account))
+        .map_or(false, |feature| feature.activated_at.is_some());
+    let space = VoteStateVersions::vote_state_size_of(is_feature_active) as u64;
+
     let build_message = |lamports| {
         let vote_init = VoteInit {
             node_pubkey: identity_pubkey,
@@ -808,28 +814,27 @@ pub fn process_create_vote_account(
             authorized_withdrawer,
             commission,
         };
-
-        let ixs = if let Some(seed) = seed {
-            vote_instruction::create_account_with_seed(
-                &config.signers[0].pubkey(), // from
-                &vote_account_address,       // to
-                &vote_account_pubkey,        // base
-                seed,                        // seed
-                &vote_init,
-                lamports,
-            )
-            .with_memo(memo)
-            .with_compute_unit_price(compute_unit_price)
-        } else {
-            vote_instruction::create_account(
-                &config.signers[0].pubkey(),
-                &vote_account_pubkey,
-                &vote_init,
-                lamports,
-            )
-            .with_memo(memo)
-            .with_compute_unit_price(compute_unit_price)
+        let mut create_vote_account_config = CreateVoteAccountConfig {
+            space,
+            ..CreateVoteAccountConfig::default()
         };
+        let to = if let Some(seed) = seed {
+            create_vote_account_config.with_seed = Some((&vote_account_pubkey, seed));
+            &vote_account_address
+        } else {
+            &vote_account_pubkey
+        };
+
+        let ixs = vote_instruction::create_account_with_config(
+            &config.signers[0].pubkey(),
+            to,
+            &vote_init,
+            lamports,
+            create_vote_account_config,
+        )
+        .with_memo(memo)
+        .with_compute_unit_price(compute_unit_price);
+
         if let Some(nonce_account) = &nonce_account {
             Message::new_with_nonce(
                 ixs,
@@ -861,11 +866,10 @@ pub fn process_create_vote_account(
         {
             if let Some(vote_account) = response.value {
                 let err_msg = if vote_account.owner == solana_vote_program::id() {
-                    format!("Vote account {} already exists", vote_account_address)
+                    format!("Vote account {vote_account_address} already exists")
                 } else {
                     format!(
-                        "Account {} already exists and is not a vote account",
-                        vote_account_address
+                        "Account {vote_account_address} already exists and is not a vote account"
                     )
                 };
                 return Err(CliError::BadParameter(err_msg).into());
@@ -873,7 +877,7 @@ pub fn process_create_vote_account(
         }
 
         if let Some(nonce_account) = &nonce_account {
-            let nonce_account = nonce_utils::get_account_with_commitment(
+            let nonce_account = solana_rpc_client_nonce_utils::get_account_with_commitment(
                 rpc_client,
                 nonce_account,
                 config.commitment,
@@ -944,8 +948,7 @@ pub fn process_vote_authorize(
                 if let Some(signer) = new_authorized_signer {
                     if signer.is_interactive() {
                         return Err(CliError::BadParameter(format!(
-                            "invalid new authorized vote signer {:?}. Interactive vote signers not supported",
-                            new_authorized_pubkey
+                            "invalid new authorized vote signer {new_authorized_pubkey:?}. Interactive vote signers not supported"
                         )).into());
                     }
                 }
@@ -1010,7 +1013,7 @@ pub fn process_vote_authorize(
     } else {
         tx.try_sign(&config.signers, recent_blockhash)?;
         if let Some(nonce_account) = &nonce_account {
-            let nonce_account = nonce_utils::get_account_with_commitment(
+            let nonce_account = solana_rpc_client_nonce_utils::get_account_with_commitment(
                 rpc_client,
                 nonce_account,
                 config.commitment,
@@ -1086,7 +1089,7 @@ pub fn process_vote_update_validator(
     } else {
         tx.try_sign(&config.signers, recent_blockhash)?;
         if let Some(nonce_account) = &nonce_account {
-            let nonce_account = nonce_utils::get_account_with_commitment(
+            let nonce_account = solana_rpc_client_nonce_utils::get_account_with_commitment(
                 rpc_client,
                 nonce_account,
                 config.commitment,
@@ -1155,7 +1158,7 @@ pub fn process_vote_update_commission(
     } else {
         tx.try_sign(&config.signers, recent_blockhash)?;
         if let Some(nonce_account) = &nonce_account {
-            let nonce_account = nonce_utils::get_account_with_commitment(
+            let nonce_account = solana_rpc_client_nonce_utils::get_account_with_commitment(
                 rpc_client,
                 nonce_account,
                 config.commitment,
@@ -1182,13 +1185,12 @@ pub(crate) fn get_vote_account(
         .get_account_with_commitment(vote_account_pubkey, commitment_config)?
         .value
         .ok_or_else(|| {
-            CliError::RpcRequestError(format!("{:?} account does not exist", vote_account_pubkey))
+            CliError::RpcRequestError(format!("{vote_account_pubkey:?} account does not exist"))
         })?;
 
     if vote_account.owner != solana_vote_program::id() {
         return Err(CliError::RpcRequestError(format!(
-            "{:?} is not a vote account",
-            vote_account_pubkey
+            "{vote_account_pubkey:?} is not a vote account"
         ))
         .into());
     }
@@ -1237,7 +1239,7 @@ pub fn process_show_vote_account(
             match crate::stake::fetch_epoch_rewards(rpc_client, vote_account_address, num_epochs) {
                 Ok(rewards) => Some(rewards),
                 Err(error) => {
-                    eprintln!("Failed to fetch epoch rewards: {:?}", error);
+                    eprintln!("Failed to fetch epoch rewards: {error:?}");
                     None
                 }
             }
@@ -1346,7 +1348,7 @@ pub fn process_withdraw_from_vote_account(
     } else {
         tx.try_sign(&config.signers, recent_blockhash)?;
         if let Some(nonce_account) = &nonce_account {
-            let nonce_account = nonce_utils::get_account_with_commitment(
+            let nonce_account = solana_rpc_client_nonce_utils::get_account_with_commitment(
                 rpc_client,
                 nonce_account,
                 config.commitment,
@@ -1388,8 +1390,7 @@ pub fn process_close_vote_account(
     {
         if vote_account.activated_stake != 0 {
             return Err(format!(
-                "Cannot close a vote account with active stake: {}",
-                vote_account_pubkey
+                "Cannot close a vote account with active stake: {vote_account_pubkey}"
             )
             .into());
         }
@@ -1428,7 +1429,7 @@ mod tests {
     use {
         super::*,
         crate::{clap_app::get_clap_app, cli::parse_command},
-        solana_client::blockhash_query,
+        solana_rpc_client_nonce_utils::blockhash_query,
         solana_sdk::{
             hash::Hash,
             signature::{read_keypair_file, write_keypair, Keypair, Signer},
@@ -1460,7 +1461,7 @@ mod tests {
         let default_signer = DefaultSigner::new("", &default_keypair_file);
 
         let blockhash = Hash::default();
-        let blockhash_string = format!("{}", blockhash);
+        let blockhash_string = format!("{blockhash}");
         let nonce_account = Pubkey::new_unique();
 
         // Test VoteAuthorize SubCommand

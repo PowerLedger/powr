@@ -12,27 +12,26 @@ use {
     solana_cli_output::{
         display::println_name_value, CliSignature, CliValidatorsSortOrder, OutputFormat,
     },
-    solana_client::{
-        blockhash_query::BlockhashQuery,
-        client_error::{ClientError, Result as ClientResult},
-        nonce_utils,
-        rpc_client::RpcClient,
-        rpc_config::{
-            RpcLargestAccountsFilter, RpcSendTransactionConfig, RpcTransactionLogsFilter,
-        },
-    },
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
+    solana_rpc_client::rpc_client::RpcClient,
+    solana_rpc_client_api::{
+        client_error::{Error as ClientError, Result as ClientResult},
+        config::{RpcLargestAccountsFilter, RpcSendTransactionConfig, RpcTransactionLogsFilter},
+    },
+    solana_rpc_client_nonce_utils::blockhash_query::BlockhashQuery,
     solana_sdk::{
         clock::{Epoch, Slot},
         commitment_config::CommitmentConfig,
         decode_error::DecodeError,
         hash::Hash,
         instruction::InstructionError,
+        offchain_message::OffchainMessage,
         pubkey::Pubkey,
         signature::{Signature, Signer, SignerError},
         stake::{instruction::LockupArgs, state::Lockup},
         transaction::{TransactionError, VersionedTransaction},
     },
+    solana_tpu_client::tpu_client::DEFAULT_TPU_ENABLE_UDP,
     solana_vote_program::vote_state::VoteAuthorize,
     std::{collections::HashMap, error, io::stdout, str::FromStr, sync::Arc, time::Duration},
     thiserror::Error,
@@ -59,6 +58,10 @@ pub enum CliCommand {
     Inflation(InflationCliCommand),
     Fees {
         blockhash: Option<Hash>,
+    },
+    FindProgramDerivedAddress {
+        seeds: Vec<Vec<u8>>,
+        program_id: Pubkey,
     },
     FirstAvailableBlock,
     GetBlock {
@@ -168,13 +171,7 @@ pub enum CliCommand {
         compute_unit_price: Option<u64>,
     },
     // Program Deployment
-    Deploy {
-        program_location: String,
-        address: Option<SignerIndex>,
-        use_deprecated_loader: bool,
-        allow_excessive_balance: bool,
-        skip_fee_check: bool,
-    },
+    Deploy,
     Program(ProgramCliCommand),
     // Stake Commands
     CreateStakeAccount {
@@ -238,6 +235,7 @@ pub enum CliCommand {
         lamports: u64,
         fee_payer: SignerIndex,
         compute_unit_price: Option<u64>,
+        rent_exempt_reserve: Option<u64>,
     },
     MergeStake {
         stake_account_pubkey: Pubkey,
@@ -442,6 +440,14 @@ pub enum CliCommand {
     },
     // Address lookup table commands
     AddressLookupTable(AddressLookupTableCliCommand),
+    SignOffchainMessage {
+        message: OffchainMessage,
+    },
+    VerifyOffchainSignature {
+        signer_pubkey: Option<Pubkey>,
+        signature: Signature,
+        message: OffchainMessage,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -465,13 +471,15 @@ pub enum CliError {
     #[error("Account {2} has insufficient funds for spend ({0} SOL) + fee ({1} SOL)")]
     InsufficientFundsForSpendAndFee(f64, f64, Pubkey),
     #[error(transparent)]
-    InvalidNonce(nonce_utils::Error),
+    InvalidNonce(solana_rpc_client_nonce_utils::Error),
     #[error("Dynamic program error: {0}")]
     DynamicProgramError(String),
     #[error("RPC request error: {0}")]
     RpcRequestError(String),
     #[error("Keypair file not found: {0}")]
     KeypairFileNotFound(String),
+    #[error("Invalid signature")]
+    InvalidSignature,
 }
 
 impl From<Box<dyn error::Error>> for CliError {
@@ -480,10 +488,12 @@ impl From<Box<dyn error::Error>> for CliError {
     }
 }
 
-impl From<nonce_utils::Error> for CliError {
-    fn from(error: nonce_utils::Error) -> Self {
+impl From<solana_rpc_client_nonce_utils::Error> for CliError {
+    fn from(error: solana_rpc_client_nonce_utils::Error) -> Self {
         match error {
-            nonce_utils::Error::Client(client_error) => Self::RpcRequestError(client_error),
+            solana_rpc_client_nonce_utils::Error::Client(client_error) => {
+                Self::RpcRequestError(client_error)
+            }
             _ => Self::InvalidNonce(error),
         }
     }
@@ -503,6 +513,7 @@ pub struct CliConfig<'a> {
     pub send_transaction_config: RpcSendTransactionConfig,
     pub confirm_transaction_initial_timeout: Duration,
     pub address_labels: HashMap<String, String>,
+    pub use_quic: bool,
 }
 
 impl CliConfig<'_> {
@@ -550,6 +561,7 @@ impl Default for CliConfig<'_> {
                 u64::from_str(DEFAULT_CONFIRM_TX_TIMEOUT_SECONDS).unwrap(),
             ),
             address_labels: HashMap::new(),
+            use_quic: !DEFAULT_TPU_ENABLE_UDP,
         }
     }
 }
@@ -666,26 +678,11 @@ pub fn parse_command(
         }
         ("upgrade-nonce-account", Some(matches)) => parse_upgrade_nonce_account(matches),
         // Program Deployment
-        ("deploy", Some(matches)) => {
-            let (address_signer, _address) = signer_of(matches, "address_signer", wallet_manager)?;
-            let mut signers = vec![default_signer.signer_from_path(matches, wallet_manager)?];
-            let address = address_signer.map(|signer| {
-                signers.push(signer);
-                1
-            });
-            let skip_fee_check = matches.is_present("skip_fee_check");
-
-            Ok(CliCommandInfo {
-                command: CliCommand::Deploy {
-                    program_location: matches.value_of("program_location").unwrap().to_string(),
-                    address,
-                    use_deprecated_loader: matches.is_present("use_deprecated_loader"),
-                    allow_excessive_balance: matches.is_present("allow_excessive_balance"),
-                    skip_fee_check,
-                },
-                signers,
-            })
-        }
+        ("deploy", Some(_matches)) => clap::Error::with_description(
+            "`solana deploy` has been replaced with `solana program deploy`",
+            clap::ErrorKind::UnrecognizedSubcommand,
+        )
+        .exit(),
         ("program", Some(matches)) => {
             parse_program_subcommand(matches, default_signer, wallet_manager)
         }
@@ -810,6 +807,9 @@ pub fn parse_command(
         ("create-address-with-seed", Some(matches)) => {
             parse_create_address_with_seed(matches, default_signer, wallet_manager)
         }
+        ("find-program-derived-address", Some(matches)) => {
+            parse_find_program_derived_address(matches)
+        }
         ("decode-transaction", Some(matches)) => parse_decode_transaction(matches),
         ("resolve-signer", Some(matches)) => {
             let signer_path = resolve_signer(matches, "signer", wallet_manager)?;
@@ -819,6 +819,12 @@ pub fn parse_command(
             })
         }
         ("transfer", Some(matches)) => parse_transfer(matches, default_signer, wallet_manager),
+        ("sign-offchain-message", Some(matches)) => {
+            parse_sign_offchain_message(matches, default_signer, wallet_manager)
+        }
+        ("verify-offchain-signature", Some(matches)) => {
+            parse_verify_offchain_signature(matches, default_signer, wallet_manager)
+        }
         //
         ("", None) => {
             eprintln!("{}", matches.usage());
@@ -840,7 +846,7 @@ pub fn process_command(config: &CliConfig) -> ProcessResult {
         if config.keypair_path.starts_with("usb://") {
             let pubkey = config
                 .pubkey()
-                .map(|pubkey| format!("{:?}", pubkey))
+                .map(|pubkey| format!("{pubkey:?}"))
                 .unwrap_or_else(|_| "Unavailable".to_string());
             println_name_value("Pubkey:", &pubkey);
         }
@@ -889,6 +895,9 @@ pub fn process_command(config: &CliConfig) -> ProcessResult {
         CliCommand::Fees { ref blockhash } => process_fees(&rpc_client, config, blockhash.as_ref()),
         CliCommand::Feature(feature_subcommand) => {
             process_feature_subcommand(&rpc_client, config, feature_subcommand)
+        }
+        CliCommand::FindProgramDerivedAddress { seeds, program_id } => {
+            process_find_program_derived_address(config, seeds, program_id)
         }
         CliCommand::FirstAvailableBlock => process_first_available_block(&rpc_client),
         CliCommand::GetBlock { slot } => process_get_block(&rpc_client, config, *slot),
@@ -1082,23 +1091,13 @@ pub fn process_command(config: &CliConfig) -> ProcessResult {
         ),
 
         // Program Deployment
+        CliCommand::Deploy => {
+            // This command is not supported any longer
+            // Error message is printed on the previous stage
+            std::process::exit(1);
+        }
 
         // Deploy a custom program to the chain
-        CliCommand::Deploy {
-            program_location,
-            address,
-            use_deprecated_loader,
-            allow_excessive_balance,
-            skip_fee_check,
-        } => process_deploy(
-            rpc_client,
-            config,
-            program_location,
-            *address,
-            *use_deprecated_loader,
-            *allow_excessive_balance,
-            *skip_fee_check,
-        ),
         CliCommand::Program(program_subcommand) => {
             process_program_subcommand(rpc_client, config, program_subcommand)
         }
@@ -1217,6 +1216,7 @@ pub fn process_command(config: &CliConfig) -> ProcessResult {
             lamports,
             fee_payer,
             compute_unit_price,
+            rent_exempt_reserve,
         } => process_split_stake(
             &rpc_client,
             config,
@@ -1233,6 +1233,7 @@ pub fn process_command(config: &CliConfig) -> ProcessResult {
             *lamports,
             *fee_payer,
             compute_unit_price.as_ref(),
+            rent_exempt_reserve.as_ref(),
         ),
         CliCommand::MergeStake {
             stake_account_pubkey,
@@ -1632,11 +1633,18 @@ pub fn process_command(config: &CliConfig) -> ProcessResult {
             derived_address_program_id.as_ref(),
             compute_unit_price.as_ref(),
         ),
-
         // Address Lookup Table Commands
         CliCommand::AddressLookupTable(subcommand) => {
             process_address_lookup_table_subcommand(rpc_client, config, subcommand)
         }
+        CliCommand::SignOffchainMessage { message } => {
+            process_sign_offchain_message(config, message)
+        }
+        CliCommand::VerifyOffchainSignature {
+            signer_pubkey,
+            signature,
+            message,
+        } => process_verify_offchain_signature(config, signer_pubkey, signature, message),
     }
 }
 
@@ -1710,13 +1718,13 @@ where
 mod tests {
     use {
         super::*,
-        serde_json::{json, Value},
-        solana_client::{
-            blockhash_query,
-            mock_sender_for_cli::SIGNATURE,
-            rpc_request::RpcRequest,
-            rpc_response::{Response, RpcResponseContext},
+        serde_json::json,
+        solana_rpc_client::mock_sender_for_cli::SIGNATURE,
+        solana_rpc_client_api::{
+            request::RpcRequest,
+            response::{Response, RpcResponseContext},
         },
+        solana_rpc_client_nonce_utils::blockhash_query,
         solana_sdk::{
             pubkey::Pubkey,
             signature::{
@@ -1726,7 +1734,6 @@ mod tests {
             transaction::TransactionError,
         },
         solana_transaction_status::TransactionConfirmationStatus,
-        std::path::PathBuf,
     };
 
     fn make_tmp_path(name: &str) -> String {
@@ -1823,7 +1830,7 @@ mod tests {
         let test_commands = get_clap_app("test", "desc", "version");
 
         let pubkey = solana_sdk::pubkey::new_rand();
-        let pubkey_string = format!("{}", pubkey);
+        let pubkey_string = format!("{pubkey}");
 
         let default_keypair = Keypair::new();
         let keypair_file = make_tmp_path("keypair_file");
@@ -1894,8 +1901,8 @@ mod tests {
         );
 
         // Test Confirm Subcommand
-        let signature = Signature::new(&[1; 64]);
-        let signature_string = format!("{:?}", signature);
+        let signature = Signature::from([1; 64]);
+        let signature_string = format!("{signature:?}");
         let test_confirm =
             test_commands
                 .clone()
@@ -1958,51 +1965,6 @@ mod tests {
             }
         );
 
-        // Test Deploy Subcommand
-        let test_command =
-            test_commands
-                .clone()
-                .get_matches_from(vec!["test", "deploy", "/Users/test/program.o"]);
-        assert_eq!(
-            parse_command(&test_command, &default_signer, &mut None).unwrap(),
-            CliCommandInfo {
-                command: CliCommand::Deploy {
-                    program_location: "/Users/test/program.o".to_string(),
-                    address: None,
-                    use_deprecated_loader: false,
-                    allow_excessive_balance: false,
-                    skip_fee_check: false,
-                },
-                signers: vec![read_keypair_file(&keypair_file).unwrap().into()],
-            }
-        );
-
-        let custom_address = Keypair::new();
-        let custom_address_file = make_tmp_path("custom_address_file");
-        write_keypair_file(&custom_address, &custom_address_file).unwrap();
-        let test_command = test_commands.clone().get_matches_from(vec![
-            "test",
-            "deploy",
-            "/Users/test/program.o",
-            &custom_address_file,
-        ]);
-        assert_eq!(
-            parse_command(&test_command, &default_signer, &mut None).unwrap(),
-            CliCommandInfo {
-                command: CliCommand::Deploy {
-                    program_location: "/Users/test/program.o".to_string(),
-                    address: Some(1),
-                    use_deprecated_loader: false,
-                    allow_excessive_balance: false,
-                    skip_fee_check: false,
-                },
-                signers: vec![
-                    read_keypair_file(&keypair_file).unwrap().into(),
-                    read_keypair_file(&custom_address_file).unwrap().into(),
-                ],
-            }
-        );
-
         // Test ResolveSigner Subcommand, SignerSource::Filepath
         let test_resolve_signer =
             test_commands
@@ -2011,7 +1973,7 @@ mod tests {
         assert_eq!(
             parse_command(&test_resolve_signer, &default_signer, &mut None).unwrap(),
             CliCommandInfo {
-                command: CliCommand::ResolveSigner(Some(keypair_file)),
+                command: CliCommand::ResolveSigner(Some(keypair_file.clone())),
                 signers: vec![],
             }
         );
@@ -2025,6 +1987,43 @@ mod tests {
             CliCommandInfo {
                 command: CliCommand::ResolveSigner(Some(pubkey.to_string())),
                 signers: vec![],
+            }
+        );
+
+        // Test SignOffchainMessage
+        let test_sign_offchain = test_commands.clone().get_matches_from(vec![
+            "test",
+            "sign-offchain-message",
+            "Test Message",
+        ]);
+        let message = OffchainMessage::new(0, b"Test Message").unwrap();
+        assert_eq!(
+            parse_command(&test_sign_offchain, &default_signer, &mut None).unwrap(),
+            CliCommandInfo {
+                command: CliCommand::SignOffchainMessage {
+                    message: message.clone()
+                },
+                signers: vec![read_keypair_file(&keypair_file).unwrap().into()],
+            }
+        );
+
+        // Test VerifyOffchainSignature
+        let signature = keypair.sign_message(&message.serialize().unwrap());
+        let test_verify_offchain = test_commands.clone().get_matches_from(vec![
+            "test",
+            "verify-offchain-signature",
+            "Test Message",
+            &signature.to_string(),
+        ]);
+        assert_eq!(
+            parse_command(&test_verify_offchain, &default_signer, &mut None).unwrap(),
+            CliCommandInfo {
+                command: CliCommand::VerifyOffchainSignature {
+                    signer_pubkey: None,
+                    signature,
+                    message
+                },
+                signers: vec![read_keypair_file(&keypair_file).unwrap().into()],
             }
         );
     }
@@ -2057,7 +2056,11 @@ mod tests {
         };
         assert_eq!(process_command(&config).unwrap(), "0.00000005 SOL");
 
-        let good_signature = Signature::new(&bs58::decode(SIGNATURE).into_vec().unwrap());
+        let good_signature = bs58::decode(SIGNATURE)
+            .into_vec()
+            .map(Signature::try_from)
+            .unwrap()
+            .unwrap();
         config.command = CliCommand::Confirm(good_signature);
         assert_eq!(
             process_command(&config).unwrap(),
@@ -2232,6 +2235,7 @@ mod tests {
             lamports: 30,
             fee_payer: 0,
             compute_unit_price: None,
+            rent_exempt_reserve: None,
         };
         config.signers = vec![&keypair, &split_stake_account];
         let result = process_command(&config);
@@ -2287,13 +2291,21 @@ mod tests {
 
         // sig_not_found case
         config.rpc_client = Some(Arc::new(RpcClient::new_mock("sig_not_found".to_string())));
-        let missing_signature = Signature::new(&bs58::decode("5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW").into_vec().unwrap());
+        let missing_signature = bs58::decode("5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW")
+            .into_vec()
+            .map(Signature::try_from)
+            .unwrap()
+            .unwrap();
         config.command = CliCommand::Confirm(missing_signature);
         assert_eq!(process_command(&config).unwrap(), "Not found");
 
         // Tx error case
         config.rpc_client = Some(Arc::new(RpcClient::new_mock("account_in_use".to_string())));
-        let any_signature = Signature::new(&bs58::decode(SIGNATURE).into_vec().unwrap());
+        let any_signature = bs58::decode(SIGNATURE)
+            .into_vec()
+            .map(Signature::try_from)
+            .unwrap()
+            .unwrap();
         config.command = CliCommand::Confirm(any_signature);
         assert_eq!(
             process_command(&config).unwrap(),
@@ -2373,63 +2385,23 @@ mod tests {
 
         config.command = CliCommand::GetTransactionCount;
         assert!(process_command(&config).is_err());
-    }
 
-    #[test]
-    fn test_cli_deploy() {
-        solana_logger::setup();
-        let mut pathbuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        pathbuf.push("tests");
-        pathbuf.push("fixtures");
-        pathbuf.push("noop");
-        pathbuf.set_extension("so");
-
-        // Success case
-        let mut config = CliConfig::default();
-        let account_info_response = json!(Response {
-            context: RpcResponseContext {
-                slot: 1,
-                api_version: None
-            },
-            value: Value::Null,
-        });
-        let mut mocks = HashMap::new();
-        mocks.insert(RpcRequest::GetAccountInfo, account_info_response);
-        let rpc_client = RpcClient::new_mock_with_mocks("".to_string(), mocks);
-
-        config.rpc_client = Some(Arc::new(rpc_client));
-        let default_keypair = Keypair::new();
-        config.signers = vec![&default_keypair];
-
-        config.command = CliCommand::Deploy {
-            program_location: pathbuf.to_str().unwrap().to_string(),
-            address: None,
-            use_deprecated_loader: false,
-            allow_excessive_balance: false,
-            skip_fee_check: false,
+        let message = OffchainMessage::new(0, b"Test Message").unwrap();
+        config.command = CliCommand::SignOffchainMessage {
+            message: message.clone(),
         };
-        config.output_format = OutputFormat::JsonCompact;
+        config.signers = vec![&keypair];
         let result = process_command(&config);
-        let json: Value = serde_json::from_str(&result.unwrap()).unwrap();
-        let program_id = json
-            .as_object()
-            .unwrap()
-            .get("programId")
-            .unwrap()
-            .as_str()
-            .unwrap();
+        assert!(result.is_ok());
 
-        assert!(program_id.parse::<Pubkey>().is_ok());
-
-        // Failure case
-        config.command = CliCommand::Deploy {
-            program_location: "bad/file/location.so".to_string(),
-            address: None,
-            use_deprecated_loader: false,
-            allow_excessive_balance: false,
-            skip_fee_check: false,
+        config.command = CliCommand::VerifyOffchainSignature {
+            signer_pubkey: None,
+            signature: result.unwrap().parse().unwrap(),
+            message,
         };
-        assert!(process_command(&config).is_err());
+        config.signers = vec![&keypair];
+        let result = process_command(&config);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -2574,7 +2546,7 @@ mod tests {
 
         //Test Transfer Subcommand, submit offline `from`
         let from_sig = from_keypair.sign_message(&[0u8]);
-        let from_signer = format!("{}={}", from_pubkey, from_sig);
+        let from_signer = format!("{from_pubkey}={from_sig}");
         let test_transfer = test_commands.clone().get_matches_from(vec![
             "test",
             "transfer",

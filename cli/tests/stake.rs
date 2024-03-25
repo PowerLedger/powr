@@ -6,16 +6,16 @@ use {
         cli::{process_command, request_and_confirm_airdrop, CliCommand, CliConfig},
         spend_utils::SpendAmount,
         stake::StakeAuthorizationIndexed,
-        test_utils::{check_ready, wait_for_next_epoch},
+        test_utils::{check_ready, wait_for_next_epoch_plus_n_slots},
     },
     solana_cli_output::{parse_sign_only_reply_string, OutputFormat},
-    solana_client::{
-        blockhash_query::{self, BlockhashQuery},
-        nonce_utils,
-        rpc_client::RpcClient,
-        rpc_response::{RpcStakeActivation, StakeActivationState},
-    },
     solana_faucet::faucet::run_local_faucet,
+    solana_rpc_client::rpc_client::RpcClient,
+    solana_rpc_client_api::{
+        request::DELINQUENT_VALIDATOR_SLOT_DISTANCE,
+        response::{RpcStakeActivation, StakeActivationState},
+    },
+    solana_rpc_client_nonce_utils::blockhash_query::{self, BlockhashQuery},
     solana_sdk::{
         account_utils::StateMut,
         commitment_config::CommitmentConfig,
@@ -161,7 +161,7 @@ fn test_stake_redelegation() {
     process_command(&config).unwrap();
 
     // wait for new epoch
-    wait_for_next_epoch(&rpc_client);
+    wait_for_next_epoch_plus_n_slots(&rpc_client, 0);
 
     // `stake_keypair` should now be delegated to `vote_keypair` and fully activated
     let stake_account = rpc_client.get_account(&stake_keypair.pubkey()).unwrap();
@@ -203,7 +203,7 @@ fn test_stake_redelegation() {
     // wait for a new epoch to ensure the `Redelegate` happens as soon as possible in the epoch
     // to reduce the risk of a race condition when checking the stake account correctly enters the
     // deactivating state for the remainder of the current epoch
-    wait_for_next_epoch(&rpc_client);
+    wait_for_next_epoch_plus_n_slots(&rpc_client, 0);
 
     // Redelegate to `vote2_keypair` via `stake2_keypair
     config.signers = vec![&default_signer, &stake2_keypair];
@@ -254,7 +254,7 @@ fn test_stake_redelegation() {
     check_balance!(50_000_000_000, &rpc_client, &stake2_keypair.pubkey());
 
     // wait for new epoch
-    wait_for_next_epoch(&rpc_client);
+    wait_for_next_epoch_plus_n_slots(&rpc_client, 0);
 
     // `stake_keypair` should now be deactivated
     assert_eq!(
@@ -297,8 +297,23 @@ fn test_stake_delegation_force() {
     let mint_pubkey = mint_keypair.pubkey();
     let authorized_withdrawer = Keypair::new().pubkey();
     let faucet_addr = run_local_faucet(mint_keypair, None);
-    let test_validator =
-        TestValidator::with_no_fees(mint_pubkey, Some(faucet_addr), SocketAddrSpace::Unspecified);
+    let slots_per_epoch = 32;
+    let test_validator = TestValidatorGenesis::default()
+        .fee_rate_governor(FeeRateGovernor::new(0, 0))
+        .rent(Rent {
+            lamports_per_byte_year: 1,
+            exemption_threshold: 1.0,
+            ..Rent::default()
+        })
+        .epoch_schedule(EpochSchedule::custom(
+            slots_per_epoch,
+            slots_per_epoch,
+            /* enable_warmup_epochs = */ false,
+        ))
+        .faucet_addr(Some(faucet_addr))
+        .warp_slot(DELINQUENT_VALIDATOR_SLOT_DISTANCE * 2) // get out in front of the cli voter delinquency check
+        .start_with_mint_address(mint_pubkey, SocketAddrSpace::Unspecified)
+        .expect("validator start failed");
 
     let rpc_client =
         RpcClient::new_with_commitment(test_validator.rpc_url(), CommitmentConfig::processed());
@@ -347,7 +362,7 @@ fn test_stake_delegation_force() {
         withdrawer: None,
         withdrawer_signer: None,
         lockup: Lockup::default(),
-        amount: SpendAmount::Some(50_000_000_000),
+        amount: SpendAmount::Some(25_000_000_000),
         sign_only: false,
         dump_transaction_message: false,
         blockhash_query: BlockhashQuery::All(blockhash_query::Source::Cluster),
@@ -360,10 +375,54 @@ fn test_stake_delegation_force() {
     };
     process_command(&config).unwrap();
 
-    // Delegate stake fails (vote account had never voted)
+    // Delegate stake succeeds despite no votes, because voter has zero stake
     config.signers = vec![&default_signer];
     config.command = CliCommand::DelegateStake {
         stake_account_pubkey: stake_keypair.pubkey(),
+        vote_account_pubkey: vote_keypair.pubkey(),
+        stake_authority: 0,
+        force: false,
+        sign_only: false,
+        dump_transaction_message: false,
+        blockhash_query: BlockhashQuery::default(),
+        nonce_account: None,
+        nonce_authority: 0,
+        memo: None,
+        fee_payer: 0,
+        redelegation_stake_account: None,
+        compute_unit_price: None,
+    };
+    process_command(&config).unwrap();
+
+    // Create a second stake account
+    let stake_keypair2 = Keypair::new();
+    config.signers = vec![&default_signer, &stake_keypair2];
+    config.command = CliCommand::CreateStakeAccount {
+        stake_account: 1,
+        seed: None,
+        staker: None,
+        withdrawer: None,
+        withdrawer_signer: None,
+        lockup: Lockup::default(),
+        amount: SpendAmount::Some(25_000_000_000),
+        sign_only: false,
+        dump_transaction_message: false,
+        blockhash_query: BlockhashQuery::All(blockhash_query::Source::Cluster),
+        nonce_account: None,
+        nonce_authority: 0,
+        memo: None,
+        fee_payer: 0,
+        from: 0,
+        compute_unit_price: None,
+    };
+    process_command(&config).unwrap();
+
+    wait_for_next_epoch_plus_n_slots(&rpc_client, 1);
+
+    // Delegate stake2 fails because voter has not voted, but is now staked
+    config.signers = vec![&default_signer];
+    config.command = CliCommand::DelegateStake {
+        stake_account_pubkey: stake_keypair2.pubkey(),
         vote_account_pubkey: vote_keypair.pubkey(),
         stake_authority: 0,
         force: false,
@@ -381,7 +440,7 @@ fn test_stake_delegation_force() {
 
     // But if we force it, it works anyway!
     config.command = CliCommand::DelegateStake {
-        stake_account_pubkey: stake_keypair.pubkey(),
+        stake_account_pubkey: stake_keypair2.pubkey(),
         vote_account_pubkey: vote_keypair.pubkey(),
         stake_authority: 0,
         force: true,
@@ -814,12 +873,12 @@ fn test_nonced_stake_delegation_and_deactivation() {
     process_command(&config).unwrap();
 
     // Fetch nonce hash
-    let nonce_hash = nonce_utils::get_account_with_commitment(
+    let nonce_hash = solana_rpc_client_nonce_utils::get_account_with_commitment(
         &rpc_client,
         &nonce_account.pubkey(),
         CommitmentConfig::processed(),
     )
-    .and_then(|ref a| nonce_utils::data_from_account(a))
+    .and_then(|ref a| solana_rpc_client_nonce_utils::data_from_account(a))
     .unwrap()
     .blockhash();
 
@@ -846,12 +905,12 @@ fn test_nonced_stake_delegation_and_deactivation() {
     process_command(&config).unwrap();
 
     // Fetch nonce hash
-    let nonce_hash = nonce_utils::get_account_with_commitment(
+    let nonce_hash = solana_rpc_client_nonce_utils::get_account_with_commitment(
         &rpc_client,
         &nonce_account.pubkey(),
         CommitmentConfig::processed(),
     )
-    .and_then(|ref a| nonce_utils::data_from_account(a))
+    .and_then(|ref a| solana_rpc_client_nonce_utils::data_from_account(a))
     .unwrap()
     .blockhash();
 
@@ -1123,12 +1182,12 @@ fn test_stake_authorize() {
     process_command(&config).unwrap();
 
     // Fetch nonce hash
-    let nonce_hash = nonce_utils::get_account_with_commitment(
+    let nonce_hash = solana_rpc_client_nonce_utils::get_account_with_commitment(
         &rpc_client,
         &nonce_account.pubkey(),
         CommitmentConfig::processed(),
     )
-    .and_then(|ref a| nonce_utils::data_from_account(a))
+    .and_then(|ref a| solana_rpc_client_nonce_utils::data_from_account(a))
     .unwrap()
     .blockhash();
 
@@ -1193,12 +1252,12 @@ fn test_stake_authorize() {
     };
     assert_eq!(current_authority, online_authority_pubkey);
 
-    let new_nonce_hash = nonce_utils::get_account_with_commitment(
+    let new_nonce_hash = solana_rpc_client_nonce_utils::get_account_with_commitment(
         &rpc_client,
         &nonce_account.pubkey(),
         CommitmentConfig::processed(),
     )
-    .and_then(|ref a| nonce_utils::data_from_account(a))
+    .and_then(|ref a| solana_rpc_client_nonce_utils::data_from_account(a))
     .unwrap()
     .blockhash();
     assert_ne!(nonce_hash, new_nonce_hash);
@@ -1408,6 +1467,10 @@ fn test_stake_split() {
     config.json_rpc_url = test_validator.rpc_url();
     config.signers = vec![&default_signer];
 
+    let minimum_balance = rpc_client
+        .get_minimum_balance_for_rent_exemption(StakeState::size_of())
+        .unwrap();
+
     let mut config_offline = CliConfig::recent_for_tests();
     config_offline.json_rpc_url = String::default();
     config_offline.signers = vec![&offline_signer];
@@ -1435,10 +1498,7 @@ fn test_stake_split() {
     check_balance!(1_000_000_000_000, &rpc_client, &offline_pubkey);
 
     // Create stake account, identity is authority
-    let stake_balance = rpc_client
-        .get_minimum_balance_for_rent_exemption(StakeState::size_of())
-        .unwrap()
-        + 10_000_000_000;
+    let stake_balance = minimum_balance + 10_000_000_000;
     let stake_keypair = keypair_from_seed(&[0u8; 32]).unwrap();
     let stake_account_pubkey = stake_keypair.pubkey();
     config.signers.push(&stake_keypair);
@@ -1481,12 +1541,12 @@ fn test_stake_split() {
     check_balance!(minimum_nonce_balance, &rpc_client, &nonce_account.pubkey());
 
     // Fetch nonce hash
-    let nonce_hash = nonce_utils::get_account_with_commitment(
+    let nonce_hash = solana_rpc_client_nonce_utils::get_account_with_commitment(
         &rpc_client,
         &nonce_account.pubkey(),
         CommitmentConfig::processed(),
     )
-    .and_then(|ref a| nonce_utils::data_from_account(a))
+    .and_then(|ref a| solana_rpc_client_nonce_utils::data_from_account(a))
     .unwrap()
     .blockhash();
 
@@ -1508,6 +1568,7 @@ fn test_stake_split() {
         lamports: 2 * stake_balance,
         fee_payer: 0,
         compute_unit_price: None,
+        rent_exempt_reserve: Some(minimum_balance),
     };
     config_offline.output_format = OutputFormat::JsonCompact;
     let sig_response = process_command(&config_offline).unwrap();
@@ -1532,10 +1593,15 @@ fn test_stake_split() {
         lamports: 2 * stake_balance,
         fee_payer: 0,
         compute_unit_price: None,
+        rent_exempt_reserve: None,
     };
     process_command(&config).unwrap();
-    check_balance!(8 * stake_balance, &rpc_client, &stake_account_pubkey,);
-    check_balance!(2 * stake_balance, &rpc_client, &split_account.pubkey(),);
+    check_balance!(8 * stake_balance, &rpc_client, &stake_account_pubkey);
+    check_balance!(
+        2 * stake_balance + minimum_balance,
+        &rpc_client,
+        &split_account.pubkey()
+    );
 }
 
 #[test]
@@ -1759,12 +1825,12 @@ fn test_stake_set_lockup() {
     check_balance!(minimum_nonce_balance, &rpc_client, &nonce_account_pubkey);
 
     // Fetch nonce hash
-    let nonce_hash = nonce_utils::get_account_with_commitment(
+    let nonce_hash = solana_rpc_client_nonce_utils::get_account_with_commitment(
         &rpc_client,
         &nonce_account.pubkey(),
         CommitmentConfig::processed(),
     )
-    .and_then(|ref a| nonce_utils::data_from_account(a))
+    .and_then(|ref a| solana_rpc_client_nonce_utils::data_from_account(a))
     .unwrap()
     .blockhash();
 
@@ -1888,12 +1954,12 @@ fn test_offline_nonced_create_stake_account_and_withdraw() {
     process_command(&config).unwrap();
 
     // Fetch nonce hash
-    let nonce_hash = nonce_utils::get_account_with_commitment(
+    let nonce_hash = solana_rpc_client_nonce_utils::get_account_with_commitment(
         &rpc_client,
         &nonce_account.pubkey(),
         CommitmentConfig::processed(),
     )
-    .and_then(|ref a| nonce_utils::data_from_account(a))
+    .and_then(|ref a| solana_rpc_client_nonce_utils::data_from_account(a))
     .unwrap()
     .blockhash();
 
@@ -1951,12 +2017,12 @@ fn test_offline_nonced_create_stake_account_and_withdraw() {
     check_balance!(50_000_000_000, &rpc_client, &stake_pubkey);
 
     // Fetch nonce hash
-    let nonce_hash = nonce_utils::get_account_with_commitment(
+    let nonce_hash = solana_rpc_client_nonce_utils::get_account_with_commitment(
         &rpc_client,
         &nonce_account.pubkey(),
         CommitmentConfig::processed(),
     )
-    .and_then(|ref a| nonce_utils::data_from_account(a))
+    .and_then(|ref a| solana_rpc_client_nonce_utils::data_from_account(a))
     .unwrap()
     .blockhash();
 
@@ -2007,12 +2073,12 @@ fn test_offline_nonced_create_stake_account_and_withdraw() {
     check_balance!(50_000_000_000, &rpc_client, &recipient_pubkey);
 
     // Fetch nonce hash
-    let nonce_hash = nonce_utils::get_account_with_commitment(
+    let nonce_hash = solana_rpc_client_nonce_utils::get_account_with_commitment(
         &rpc_client,
         &nonce_account.pubkey(),
         CommitmentConfig::processed(),
     )
-    .and_then(|ref a| nonce_utils::data_from_account(a))
+    .and_then(|ref a| solana_rpc_client_nonce_utils::data_from_account(a))
     .unwrap()
     .blockhash();
 
