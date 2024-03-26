@@ -45,18 +45,16 @@ use {
     log::*,
     rand::{thread_rng, Rng},
     solana_bench_tps::{bench::generate_and_fund_keypairs, bench_tps_client::BenchTpsClient},
-    solana_client::{
-        connection_cache::{ConnectionCache, DEFAULT_TPU_CONNECTION_POOL_SIZE},
-        rpc_client::RpcClient,
-        tpu_connection::TpuConnection,
-    },
+    solana_client::{connection_cache::ConnectionCache, tpu_connection::TpuConnection},
     solana_core::serve_repair::{RepairProtocol, RepairRequestHeader, ServeRepair},
     solana_dos::cli::*,
     solana_gossip::{
+        contact_info::Protocol,
         gossip_service::{discover, get_multi_client},
         legacy_contact_info::LegacyContactInfo as ContactInfo,
     },
     solana_measure::measure::Measure,
+    solana_rpc_client::rpc_client::RpcClient,
     solana_sdk::{
         hash::Hash,
         instruction::CompiledInstruction,
@@ -70,6 +68,7 @@ use {
         transaction::Transaction,
     },
     solana_streamer::socket::SocketAddrSpace,
+    solana_tpu_client::tpu_client::DEFAULT_TPU_CONNECTION_POOL_SIZE,
     std::{
         net::{SocketAddr, UdpSocket},
         process::exit,
@@ -106,7 +105,9 @@ impl TransactionGenerator {
     fn new(transaction_params: TransactionParams) -> Self {
         TransactionGenerator {
             blockhash: Hash::default(),
-            last_generated: (Instant::now() - Duration::from_secs(100)), //to force generation when generate is called
+            last_generated: Instant::now()
+                .checked_sub(Duration::from_secs(100))
+                .unwrap(), //to force generation when generate is called
             transaction_params,
         }
     }
@@ -255,8 +256,13 @@ fn create_sender_thread(
 ) -> thread::JoinHandle<()> {
     // ConnectionCache is used instead of client because it gives ~6% higher pps
     let connection_cache = match tpu_use_quic {
-        true => ConnectionCache::new(DEFAULT_TPU_CONNECTION_POOL_SIZE),
-        false => ConnectionCache::with_udp(DEFAULT_TPU_CONNECTION_POOL_SIZE),
+        true => ConnectionCache::new_quic(
+            "connection_cache_dos_quic",
+            DEFAULT_TPU_CONNECTION_POOL_SIZE,
+        ),
+        false => {
+            ConnectionCache::with_udp("connection_cache_dos_udp", DEFAULT_TPU_CONNECTION_POOL_SIZE)
+        }
     };
     let connection = connection_cache.get_connection(target);
 
@@ -285,7 +291,7 @@ fn create_sender_thread(
                         Ok(tx_batch) => {
                             let len = tx_batch.batch.len();
                             let mut measure_send_txs = Measure::start("measure_send_txs");
-                            let res = connection.send_wire_transaction_batch_async(tx_batch.batch);
+                            let res = connection.send_data_batch_async(tx_batch.batch);
 
                             measure_send_txs.stop();
                             time_send_ns += measure_send_txs.as_ns();
@@ -414,7 +420,13 @@ fn get_target(
     nodes: &[ContactInfo],
     mode: Mode,
     entrypoint_addr: SocketAddr,
+    tpu_use_quic: bool,
 ) -> Option<(Pubkey, SocketAddr)> {
+    let protocol = if tpu_use_quic {
+        Protocol::QUIC
+    } else {
+        Protocol::UDP
+    };
     let mut target = None;
     if nodes.is_empty() {
         // skip-gossip case
@@ -427,16 +439,18 @@ fn get_target(
         info!("ADDR = {}", entrypoint_addr);
 
         for node in nodes {
-            if node.gossip == entrypoint_addr {
-                info!("{}", node.gossip);
+            if node.gossip().ok() == Some(entrypoint_addr) {
+                info!("{:?}", node.gossip());
                 target = match mode {
-                    Mode::Gossip => Some((node.id, node.gossip)),
-                    Mode::Tvu => Some((node.id, node.tvu)),
-                    Mode::TvuForwards => Some((node.id, node.tvu_forwards)),
-                    Mode::Tpu => Some((node.id, node.tpu)),
-                    Mode::TpuForwards => Some((node.id, node.tpu_forwards)),
-                    Mode::Repair => Some((node.id, node.repair)),
-                    Mode::ServeRepair => Some((node.id, node.serve_repair)),
+                    Mode::Gossip => Some((*node.pubkey(), node.gossip().unwrap())),
+                    Mode::Tvu => Some((*node.pubkey(), node.tvu(Protocol::UDP).unwrap())),
+                    Mode::TvuForwards => Some((*node.pubkey(), node.tvu_forwards().unwrap())),
+                    Mode::Tpu => Some((*node.pubkey(), node.tpu(protocol).unwrap())),
+                    Mode::TpuForwards => {
+                        Some((*node.pubkey(), node.tpu_forwards(protocol).unwrap()))
+                    }
+                    Mode::Repair => Some((*node.pubkey(), node.repair().unwrap())),
+                    Mode::ServeRepair => Some((*node.pubkey(), node.serve_repair().unwrap())),
                     Mode::Rpc => None,
                 };
                 break;
@@ -457,9 +471,9 @@ fn get_rpc_client(
 
     // find target node
     for node in nodes {
-        if node.gossip == entrypoint_addr {
-            info!("{}", node.gossip);
-            return Ok(RpcClient::new_socket(node.rpc));
+        if node.gossip().ok() == Some(entrypoint_addr) {
+            info!("{:?}", node.gossip());
+            return Ok(RpcClient::new_socket(node.rpc().unwrap()));
         }
     }
     Err("Node with entrypoint_addr was not found")
@@ -538,7 +552,7 @@ fn create_payers<T: 'static + BenchTpsClient + Send + Sync>(
         let res =
             generate_and_fund_keypairs(client.unwrap().clone(), &funding_key, size, 1_000_000)
                 .unwrap_or_else(|e| {
-                    eprintln!("Error could not fund keys: {:?}", e);
+                    eprintln!("Error could not fund keys: {e:?}");
                     exit(1);
                 });
         res.into_iter().map(Some).collect()
@@ -591,11 +605,11 @@ fn run_dos_transactions<T: 'static + BenchTpsClient + Send + Sync>(
         })
         .collect();
     if let Err(err) = sender_thread.join() {
-        println!("join() failed with: {:?}", err);
+        println!("join() failed with: {err:?}");
     }
     for t_generator in tx_generator_threads {
         if let Err(err) = t_generator.join() {
-            println!("join() failed with: {:?}", err);
+            println!("join() failed with: {err:?}");
         }
     }
 }
@@ -606,8 +620,12 @@ fn run_dos<T: 'static + BenchTpsClient + Send + Sync>(
     client: Option<Arc<T>>,
     params: DosClientParameters,
 ) {
-    let target = get_target(nodes, params.mode, params.entrypoint_addr);
-
+    let target = get_target(
+        nodes,
+        params.mode,
+        params.entrypoint_addr,
+        params.tpu_use_quic,
+    );
     if params.mode == Mode::Rpc {
         // creating rpc_client because get_account, get_program_accounts are not implemented for BenchTpsClient
         let rpc_client =
@@ -742,7 +760,7 @@ fn main() {
             Some(&cmd_params.entrypoint_addr),
             None,                              // num_nodes
             Duration::from_secs(60),           // timeout
-            None,                              // find_node_by_pubkey
+            None,                              // find_nodes_by_pubkey
             Some(&cmd_params.entrypoint_addr), // find_node_by_gossip_addr
             None,                              // my_gossip_addr
             0,                                 // my_shred_version
@@ -757,8 +775,14 @@ fn main() {
         });
 
         let connection_cache = match cmd_params.tpu_use_quic {
-            true => ConnectionCache::new(DEFAULT_TPU_CONNECTION_POOL_SIZE),
-            false => ConnectionCache::with_udp(DEFAULT_TPU_CONNECTION_POOL_SIZE),
+            true => ConnectionCache::new_quic(
+                "connection_cache_dos_quic",
+                DEFAULT_TPU_CONNECTION_POOL_SIZE,
+            ),
+            false => ConnectionCache::with_udp(
+                "connection_cache_dos_udp",
+                DEFAULT_TPU_CONNECTION_POOL_SIZE,
+            ),
         };
         let (client, num_clients) = get_multi_client(
             &validators,
@@ -789,6 +813,7 @@ pub mod test {
         solana_client::thin_client::ThinClient,
         solana_core::validator::ValidatorConfig,
         solana_faucet::faucet::run_local_faucet,
+        solana_gossip::contact_info::LegacyContactInfo,
         solana_local_cluster::{
             cluster::Cluster,
             local_cluster::{ClusterConfig, LocalCluster},
@@ -812,7 +837,7 @@ pub mod test {
             &solana_sdk::pubkey::new_rand(),
             timestamp(),
         )];
-        let entrypoint_addr = nodes[0].gossip;
+        let entrypoint_addr = nodes[0].gossip().unwrap();
 
         run_dos_no_client(
             &nodes,
@@ -896,7 +921,11 @@ pub mod test {
         assert_eq!(cluster.validators.len(), num_nodes);
 
         let nodes = cluster.get_node_pubkeys();
-        let node = cluster.get_contact_info(&nodes[0]).unwrap().clone();
+        let node = cluster
+            .get_contact_info(&nodes[0])
+            .map(LegacyContactInfo::try_from)
+            .unwrap()
+            .unwrap();
         let nodes_slice = [node];
 
         // send random transactions to TPU
@@ -905,7 +934,7 @@ pub mod test {
             &nodes_slice,
             10,
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 1024,
                 data_type: DataType::Random,
@@ -929,12 +958,19 @@ pub mod test {
         assert_eq!(cluster.validators.len(), num_nodes);
 
         let nodes = cluster.get_node_pubkeys();
-        let node = cluster.get_contact_info(&nodes[0]).unwrap().clone();
+        let node = cluster
+            .get_contact_info(&nodes[0])
+            .map(LegacyContactInfo::try_from)
+            .unwrap()
+            .unwrap();
         let nodes_slice = [node];
 
         let client = Arc::new(ThinClient::new(
-            cluster.entry_point_info.rpc,
-            cluster.entry_point_info.tpu,
+            cluster.entry_point_info.rpc().unwrap(),
+            cluster
+                .entry_point_info
+                .tpu(cluster.connection_cache.protocol())
+                .unwrap(),
             cluster.connection_cache.clone(),
         ));
 
@@ -944,7 +980,7 @@ pub mod test {
             10,
             Some(client.clone()),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant
                 data_type: DataType::Transaction,
@@ -971,7 +1007,7 @@ pub mod test {
             10,
             Some(client.clone()),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant
                 data_type: DataType::Transaction,
@@ -998,7 +1034,7 @@ pub mod test {
             10,
             Some(client),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant
                 data_type: DataType::Transaction,
@@ -1061,12 +1097,19 @@ pub mod test {
         cluster.transfer(&cluster.funding_keypair, &faucet_pubkey, 100_000_000);
 
         let nodes = cluster.get_node_pubkeys();
-        let node = cluster.get_contact_info(&nodes[0]).unwrap().clone();
+        let node = cluster
+            .get_contact_info(&nodes[0])
+            .map(LegacyContactInfo::try_from)
+            .unwrap()
+            .unwrap();
         let nodes_slice = [node];
 
         let client = Arc::new(ThinClient::new(
-            cluster.entry_point_info.rpc,
-            cluster.entry_point_info.tpu,
+            cluster.entry_point_info.rpc().unwrap(),
+            cluster
+                .entry_point_info
+                .tpu(cluster.connection_cache.protocol())
+                .unwrap(),
             cluster.connection_cache.clone(),
         ));
 
@@ -1077,7 +1120,7 @@ pub mod test {
             10,
             Some(client.clone()),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant if not random
                 data_type: DataType::Transaction,
@@ -1106,7 +1149,7 @@ pub mod test {
             10,
             Some(client.clone()),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant if not random
                 data_type: DataType::Transaction,
@@ -1134,7 +1177,7 @@ pub mod test {
             10,
             Some(client.clone()),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant if not random
                 data_type: DataType::Transaction,
@@ -1162,7 +1205,7 @@ pub mod test {
             10,
             Some(client),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant if not random
                 data_type: DataType::Transaction,
