@@ -97,7 +97,7 @@ pub fn create_genesis_config_with_vote_accounts(
         mint_lamports,
         voting_keypairs,
         stakes,
-        ClusterType::Development,
+        ClusterType::MainnetBeta,
     )
 }
 
@@ -182,7 +182,7 @@ pub fn create_genesis_config_with_leader(
         VALIDATOR_LAMPORTS,
         FeeRateGovernor::new(0, 0), // most tests can't handle transaction fees
         Rent::free(),               // most tests don't expect rent
-        ClusterType::Development,
+        ClusterType::MainnetBeta,
         vec![],
     );
 
