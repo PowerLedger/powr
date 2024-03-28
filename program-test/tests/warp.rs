@@ -82,7 +82,7 @@ async fn setup_vote(context: &mut ProgramTestContext) -> Pubkey {
     let vote_lamports = Rent::default().minimum_balance(VoteState::size_of());
     let vote_keypair = Keypair::new();
     let user_keypair = Keypair::new();
-    instructions.append(&mut vote_instruction::create_account(
+    instructions.append(&mut vote_instruction::create_account_with_config(
         &context.payer.pubkey(),
         &vote_keypair.pubkey(),
         &VoteInit {
@@ -91,6 +91,10 @@ async fn setup_vote(context: &mut ProgramTestContext) -> Pubkey {
             ..VoteInit::default()
         },
         vote_lamports,
+        vote_instruction::CreateVoteAccountConfig {
+            space: vote_state::VoteStateVersions::vote_state_size_of(true) as u64,
+            ..vote_instruction::CreateVoteAccountConfig::default()
+        },
     ));
 
     let transaction = Transaction::new_signed_with_payer(
@@ -274,7 +278,7 @@ async fn stake_rewards_from_warp() {
     assert_eq!(
         stake
             .delegation
-            .stake_activating_and_deactivating(clock.epoch, Some(&stake_history)),
+            .stake_activating_and_deactivating(clock.epoch, Some(&stake_history), None),
         StakeActivationStatus::with_effective(stake.delegation.stake),
     );
 }
@@ -390,7 +394,7 @@ async fn stake_rewards_filter_bench_core(num_stake_accounts: u64) {
     assert_eq!(
         stake
             .delegation
-            .stake_activating_and_deactivating(clock.epoch, Some(&stake_history)),
+            .stake_activating_and_deactivating(clock.epoch, Some(&stake_history), None),
         StakeActivationStatus::with_effective(stake.delegation.stake),
     );
 }

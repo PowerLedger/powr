@@ -1,14 +1,18 @@
 #![allow(clippy::integer_arithmetic)]
+
 use {
     solana_runtime::{
         bank::Bank,
         bank_client::BankClient,
+        epoch_accounts_hash::EpochAccountsHash,
         genesis_utils::{create_genesis_config_with_leader, GenesisConfigInfo},
     },
     solana_sdk::{
         account::from_account,
         account_utils::StateMut,
         client::SyncClient,
+        epoch_schedule::{EpochSchedule, MINIMUM_SLOTS_PER_EPOCH},
+        hash::Hash,
         message::Message,
         pubkey::Pubkey,
         rent::Rent,
@@ -61,7 +65,7 @@ fn fill_epoch_with_votes(
             &[vote_instruction::vote(
                 &vote_pubkey,
                 &vote_pubkey,
-                Vote::new(vec![parent.slot() as u64], parent.hash()),
+                Vote::new(vec![parent.slot()], parent.hash()),
             )],
             Some(&mint_pubkey),
         );
@@ -84,6 +88,7 @@ fn warmed_up(bank: &Bank, stake_pubkey: &Pubkey) -> bool {
                 )
                 .unwrap(),
             ),
+            bank.new_warmup_cooldown_rate_epoch(),
         )
 }
 
@@ -98,6 +103,7 @@ fn get_staked(bank: &Bank, stake_pubkey: &Pubkey) -> u64 {
                 )
                 .unwrap(),
             ),
+            bank.new_warmup_cooldown_rate_epoch(),
         )
 }
 
@@ -278,10 +284,18 @@ fn test_stake_account_lifetime() {
         &solana_sdk::pubkey::new_rand(),
         2_000_000_000,
     );
+    genesis_config.epoch_schedule = EpochSchedule::new(MINIMUM_SLOTS_PER_EPOCH);
     genesis_config.rent = Rent::default();
     let bank = Bank::new_for_tests(&genesis_config);
     let mint_pubkey = mint_keypair.pubkey();
     let mut bank = Arc::new(bank);
+    // Need to set the EAH to Valid so that `Bank::new_from_parent()` doesn't panic during freeze
+    // when parent is in the EAH calculation window.
+    bank.rc
+        .accounts
+        .accounts_db
+        .epoch_accounts_hash_manager
+        .set_valid(EpochAccountsHash::new(Hash::new_unique()), bank.slot());
     let bank_client = BankClient::new_shared(&bank);
 
     let (vote_balance, stake_rent_exempt_reserve, stake_minimum_delegation) = {
@@ -295,7 +309,7 @@ fn test_stake_account_lifetime() {
 
     // Create Vote Account
     let message = Message::new(
-        &vote_instruction::create_account(
+        &vote_instruction::create_account_with_config(
             &mint_pubkey,
             &vote_pubkey,
             &VoteInit {
@@ -305,6 +319,10 @@ fn test_stake_account_lifetime() {
                 commission: 50,
             },
             vote_balance,
+            vote_instruction::CreateVoteAccountConfig {
+                space: VoteStateVersions::vote_state_size_of(true) as u64,
+                ..vote_instruction::CreateVoteAccountConfig::default()
+            },
         ),
         Some(&mint_pubkey),
     );
@@ -408,15 +426,21 @@ fn test_stake_account_lifetime() {
     let split_stake_keypair = Keypair::new();
     let split_stake_pubkey = split_stake_keypair.pubkey();
 
+    bank.transfer(
+        stake_rent_exempt_reserve,
+        &mint_keypair,
+        &split_stake_pubkey,
+    )
+    .unwrap();
     let bank_client = BankClient::new_shared(&bank);
+
     // Test split
     let split_starting_delegation = stake_minimum_delegation + bonus_delegation;
-    let split_starting_balance = split_starting_delegation + stake_rent_exempt_reserve;
     let message = Message::new(
         &stake_instruction::split(
             &stake_pubkey,
             &stake_pubkey,
-            split_starting_balance,
+            split_starting_delegation,
             &split_stake_pubkey,
         ),
         Some(&mint_pubkey),
@@ -431,7 +455,7 @@ fn test_stake_account_lifetime() {
         get_staked(&bank, &split_stake_pubkey),
         split_starting_delegation,
     );
-    let stake_remaining_balance = balance - split_starting_balance;
+    let stake_remaining_balance = balance - split_starting_delegation;
 
     // Deactivate the split
     let message = Message::new(
@@ -560,7 +584,7 @@ fn test_create_stake_account_from_seed() {
 
     // Create Vote Account
     let message = Message::new(
-        &vote_instruction::create_account(
+        &vote_instruction::create_account_with_config(
             &mint_pubkey,
             &vote_pubkey,
             &VoteInit {
@@ -570,6 +594,10 @@ fn test_create_stake_account_from_seed() {
                 commission: 50,
             },
             10,
+            vote_instruction::CreateVoteAccountConfig {
+                space: VoteStateVersions::vote_state_size_of(true) as u64,
+                ..vote_instruction::CreateVoteAccountConfig::default()
+            },
         ),
         Some(&mint_pubkey),
     );

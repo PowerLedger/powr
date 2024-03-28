@@ -19,7 +19,7 @@ use {
     thiserror::Error,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct LegacyMessage<'a> {
     /// Legacy message
     pub message: Cow<'a, legacy::Message>,
@@ -66,7 +66,7 @@ impl<'a> LegacyMessage<'a> {
 }
 
 /// Sanitized message of a transaction.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum SanitizedMessage {
     /// Sanitized legacy message
     Legacy(LegacyMessage<'static>),
@@ -194,6 +194,14 @@ impl SanitizedMessage {
         match self {
             Self::Legacy(message) => message.account_keys(),
             Self::V0(message) => message.account_keys(),
+        }
+    }
+
+    /// Returns the list of account keys used for account lookup tables.
+    pub fn message_address_table_lookups(&self) -> &[v0::MessageAddressTableLookup] {
+        match self {
+            Self::Legacy(_message) => &[],
+            Self::V0(message) => &message.message.address_table_lookups,
         }
     }
 
@@ -461,6 +469,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::get_first)]
     fn test_is_writable_account_cache() {
         let key0 = Pubkey::new_unique();
         let key1 = Pubkey::new_unique();

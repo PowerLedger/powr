@@ -10,7 +10,7 @@ fn main() -> Result<(), std::io::Error> {
     let mut protos = Vec::new();
     for proto_file in &proto_files {
         let proto = proto_base_path.join(proto_file);
-        println!("cargo::rerun-if-changed={}", proto.display());
+        println!("cargo:rerun-if-changed={}", proto.display());
         protos.push(proto);
     }
 
@@ -19,11 +19,11 @@ fn main() -> Result<(), std::io::Error> {
         .build_server(false)
         .type_attribute(
             "TransactionErrorType",
-            "#[cfg_attr(test, derive(enum_iterator::IntoEnumIterator))]",
+            "#[cfg_attr(test, derive(enum_iterator::Sequence))]",
         )
         .type_attribute(
             "InstructionErrorType",
-            "#[cfg_attr(test, derive(enum_iterator::IntoEnumIterator))]",
+            "#[cfg_attr(test, derive(enum_iterator::Sequence))]",
         )
         .compile(&protos, &[proto_base_path])
 }

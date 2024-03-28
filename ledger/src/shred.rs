@@ -345,7 +345,7 @@ impl Shred {
         let payload = self.payload();
         let size = payload.len();
         packet.buffer_mut()[..size].copy_from_slice(&payload[..]);
-        packet.meta.size = size;
+        packet.meta_mut().size = size;
     }
 
     // TODO: Should this sanitize output?
@@ -565,7 +565,7 @@ pub mod layout {
 
     fn get_shred_size(packet: &Packet) -> Option<usize> {
         let size = packet.data(..)?.len();
-        if packet.meta.repair() {
+        if packet.meta().repair() {
             size.checked_sub(SIZE_OF_NONCE)
         } else {
             Some(size)
@@ -578,7 +578,10 @@ pub mod layout {
     }
 
     pub(crate) fn get_signature(shred: &[u8]) -> Option<Signature> {
-        Some(Signature::new(shred.get(..SIZE_OF_SIGNATURE)?))
+        shred
+            .get(..SIZE_OF_SIGNATURE)
+            .map(Signature::try_from)?
+            .ok()
     }
 
     pub(crate) const fn get_signature_range() -> Range<usize> {
@@ -659,7 +662,7 @@ pub mod layout {
         match get_shred_variant(shred).ok()? {
             ShredVariant::LegacyCode | ShredVariant::LegacyData => {
                 let offsets = self::legacy::SIGNED_MESSAGE_OFFSETS;
-                (offsets.end <= shred.len()).then(|| offsets)
+                (offsets.end <= shred.len()).then_some(offsets)
             }
             // Merkle shreds sign merkle tree root which can be recovered from
             // the merkle proof embedded in the payload but itself is not
@@ -669,7 +672,7 @@ pub mod layout {
         }
     }
 
-    pub(crate) fn get_reference_tick(shred: &[u8]) -> Result<u8, Error> {
+    pub fn get_reference_tick(shred: &[u8]) -> Result<u8, Error> {
         if get_shred_type(shred)? != ShredType::Data {
             return Err(Error::InvalidShredType);
         }
@@ -892,7 +895,6 @@ pub fn should_discard_shred(
     root: Slot,
     max_slot: Slot,
     shred_version: u16,
-    should_drop_merkle_shreds: impl Fn(Slot) -> bool,
     stats: &mut ShredFetchStats,
 ) -> bool {
     debug_assert!(root < max_slot);
@@ -981,15 +983,9 @@ pub fn should_discard_shred(
     match shred_variant {
         ShredVariant::LegacyCode | ShredVariant::LegacyData => (),
         ShredVariant::MerkleCode(_) => {
-            if should_drop_merkle_shreds(slot) {
-                return true;
-            }
             stats.num_shreds_merkle_code = stats.num_shreds_merkle_code.saturating_add(1);
         }
         ShredVariant::MerkleData(_) => {
-            if should_drop_merkle_shreds(slot) {
-                return true;
-            }
             stats.num_shreds_merkle_data = stats.num_shreds_merkle_data.saturating_add(1);
         }
     }
@@ -1189,62 +1185,56 @@ mod tests {
             root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats
         ));
         assert_eq!(stats, ShredFetchStats::default());
 
-        packet.meta.size = OFFSET_OF_SHRED_VARIANT;
+        packet.meta_mut().size = OFFSET_OF_SHRED_VARIANT;
         assert!(should_discard_shred(
             &packet,
             root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats
         ));
         assert_eq!(stats.index_overrun, 1);
 
-        packet.meta.size = OFFSET_OF_SHRED_INDEX;
+        packet.meta_mut().size = OFFSET_OF_SHRED_INDEX;
         assert!(should_discard_shred(
             &packet,
             root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats
         ));
         assert_eq!(stats.index_overrun, 2);
 
-        packet.meta.size = OFFSET_OF_SHRED_INDEX + 1;
+        packet.meta_mut().size = OFFSET_OF_SHRED_INDEX + 1;
         assert!(should_discard_shred(
             &packet,
             root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats
         ));
         assert_eq!(stats.index_overrun, 3);
 
-        packet.meta.size = OFFSET_OF_SHRED_INDEX + SIZE_OF_SHRED_INDEX - 1;
+        packet.meta_mut().size = OFFSET_OF_SHRED_INDEX + SIZE_OF_SHRED_INDEX - 1;
         assert!(should_discard_shred(
             &packet,
             root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats
         ));
         assert_eq!(stats.index_overrun, 4);
 
-        packet.meta.size = OFFSET_OF_SHRED_INDEX + SIZE_OF_SHRED_INDEX + 2;
+        packet.meta_mut().size = OFFSET_OF_SHRED_INDEX + SIZE_OF_SHRED_INDEX + 2;
         assert!(should_discard_shred(
             &packet,
             root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats
         ));
         assert_eq!(stats.bad_parent_offset, 1);
@@ -1265,7 +1255,6 @@ mod tests {
             root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats
         ));
 
@@ -1285,7 +1274,6 @@ mod tests {
             root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats
         ));
         assert_eq!(1, stats.index_out_of_bounds);
@@ -1306,7 +1294,6 @@ mod tests {
             root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats
         ));
         packet.buffer_mut()[OFFSET_OF_SHRED_VARIANT] = u8::MAX;
@@ -1316,7 +1303,6 @@ mod tests {
             root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats
         ));
         assert_eq!(1, stats.bad_shred_type);
@@ -1328,7 +1314,6 @@ mod tests {
             root,
             max_slot,
             shred_version,
-            |_| false, // should_drop_merkle_shreds
             &mut stats
         ));
         assert_eq!(1, stats.bad_shred_type);
@@ -1557,7 +1542,7 @@ mod tests {
         });
         let mut packet = Packet::default();
         packet.buffer_mut()[..payload.len()].copy_from_slice(&payload);
-        packet.meta.size = payload.len();
+        packet.meta_mut().size = payload.len();
         assert_eq!(shred.bytes_to_store(), payload);
         assert_eq!(shred, Shred::new_from_serialized_shred(payload).unwrap());
         verify_shred_layout(&shred, &packet);
@@ -1590,7 +1575,7 @@ mod tests {
         let payload = bs58_decode(PAYLOAD);
         let mut packet = Packet::default();
         packet.buffer_mut()[..payload.len()].copy_from_slice(&payload);
-        packet.meta.size = payload.len();
+        packet.meta_mut().size = payload.len();
         assert_eq!(shred.bytes_to_store(), payload);
         assert_eq!(shred, Shred::new_from_serialized_shred(payload).unwrap());
         verify_shred_layout(&shred, &packet);
@@ -1630,7 +1615,7 @@ mod tests {
         });
         let mut packet = Packet::default();
         packet.buffer_mut()[..payload.len()].copy_from_slice(&payload);
-        packet.meta.size = payload.len();
+        packet.meta_mut().size = payload.len();
         assert_eq!(shred.bytes_to_store(), payload);
         assert_eq!(shred, Shred::new_from_serialized_shred(payload).unwrap());
         verify_shred_layout(&shred, &packet);

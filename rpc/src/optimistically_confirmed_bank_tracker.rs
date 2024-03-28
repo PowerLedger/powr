@@ -11,7 +11,7 @@
 use {
     crate::rpc_subscriptions::RpcSubscriptions,
     crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
-    solana_client::rpc_response::{SlotTransactionStats, SlotUpdate},
+    solana_rpc_client_api::response::{SlotTransactionStats, SlotUpdate},
     solana_runtime::{
         bank::Bank, bank_forks::BankForks, prioritization_fee_cache::PrioritizationFeeCache,
     },
@@ -61,7 +61,7 @@ impl std::fmt::Debug for BankNotification {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             BankNotification::OptimisticallyConfirmed(slot) => {
-                write!(f, "OptimisticallyConfirmed({:?})", slot)
+                write!(f, "OptimisticallyConfirmed({slot:?})")
             }
             BankNotification::Frozen(bank) => write!(f, "Frozen({})", bank.slot()),
             BankNotification::NewRootBank(bank) => write!(f, "Root({})", bank.slot()),

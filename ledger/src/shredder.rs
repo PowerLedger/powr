@@ -24,7 +24,7 @@ use {
 lazy_static! {
     static ref PAR_THREAD_POOL: ThreadPool = rayon::ThreadPoolBuilder::new()
         .num_threads(get_thread_count())
-        .thread_name(|ix| format!("solShredder{:02}", ix))
+        .thread_name(|i| format!("solShredder{i:02}"))
         .build()
         .unwrap();
 }
@@ -988,7 +988,7 @@ mod tests {
             // Also randomize the signatre bytes.
             let mut signature = [0u8; 64];
             rng.fill(&mut signature[..]);
-            tx.signatures = vec![Signature::new(&signature)];
+            tx.signatures = vec![Signature::from(signature)];
             tx
         })
         .take(num_tx)

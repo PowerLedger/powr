@@ -9,7 +9,7 @@ use {
     solana_vote_program::vote_state::{vote_state_1_14_11::VoteState1_14_11, BlockTimestamp, Vote},
 };
 
-#[frozen_abi(digest = "7phMrqmBo2D3rXPdhBj8CpjRvvmx9qgpcU4cDGkL3W9q")]
+#[frozen_abi(digest = "9Kc3Cpak93xdL8bCnEwMWA8ZLGCBNfqh9PLo1o5RiPyT")]
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, AbiExample)]
 pub struct Tower1_7_14 {
     pub(crate) node_pubkey: Pubkey,

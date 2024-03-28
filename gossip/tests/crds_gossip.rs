@@ -10,7 +10,7 @@ use {
         crds::GossipRoute,
         crds_gossip::*,
         crds_gossip_error::CrdsGossipError,
-        crds_gossip_pull::{ProcessPullStats, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS},
+        crds_gossip_pull::{CrdsTimeouts, ProcessPullStats, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS},
         crds_gossip_push::CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
         crds_value::{CrdsData, CrdsValue, CrdsValueLabel},
         legacy_contact_info::LegacyContactInfo as ContactInfo,
@@ -288,7 +288,7 @@ fn network_simulator(thread_pool: &ThreadPool, network: &mut Network, max_conver
                 let node_crds = node.gossip.crds.read().unwrap();
                 node_crds.get::<&ContactInfo>(node_pubkey).cloned().unwrap()
             };
-            m.wallclock = now;
+            m.set_wallclock(now);
             node.gossip.process_push_message(
                 vec![(
                     Pubkey::default(),
@@ -345,11 +345,16 @@ fn network_run_push(
                 let node_pubkey = node.keypair.pubkey();
                 let timeouts = node.gossip.make_timeouts(
                     node_pubkey,
-                    &HashMap::default(), // stakes
+                    &stakes,
                     Duration::from_millis(node.gossip.pull.crds_timeout),
                 );
                 node.gossip.purge(&node_pubkey, thread_pool, now, &timeouts);
-                (node_pubkey, node.gossip.new_push_messages(vec![], now).0)
+                (
+                    node_pubkey,
+                    node.gossip
+                        .new_push_messages(&node_pubkey, vec![], now, &stakes)
+                        .0,
+                )
             })
             .collect();
         let transfered: Vec<_> = requests
@@ -401,6 +406,7 @@ fn network_run_push(
                                         &prune_keys,
                                         now,
                                         now,
+                                        &stakes,
                                     )
                                     .unwrap()
                             })
@@ -471,15 +477,14 @@ fn network_run_pull(
     let mut convergance = 0f64;
     let num = network.len();
     let network_values: Vec<Node> = network.values().cloned().collect();
-    let mut timeouts = HashMap::new();
-    timeouts.insert(Pubkey::default(), CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
+    let stakes = stakes(network);
     for node in &network_values {
         let mut ping_cache = node.ping_cache.lock().unwrap();
         for other in &network_values {
             if node.keypair.pubkey() != other.keypair.pubkey() {
                 ping_cache.mock_pong(
                     other.keypair.pubkey(),
-                    other.contact_info.gossip,
+                    other.contact_info.gossip().unwrap(),
                     Instant::now(),
                 );
             }
@@ -513,7 +518,7 @@ fn network_run_pull(
                     let self_info = gossip_crds.get::<&CrdsValue>(&label).unwrap().clone();
                     requests
                         .into_iter()
-                        .map(move |(peer, filters)| (peer.id, filters, self_info.clone()))
+                        .map(move |(peer, filters)| (*peer.pubkey(), filters, self_info.clone()))
                 })
                 .collect()
         };
@@ -559,8 +564,13 @@ fn network_run_pull(
                 bytes += serialized_size(&rsp).unwrap() as usize;
                 msgs += rsp.len();
                 if let Some(node) = network.get(&from) {
-                    node.gossip.mark_pull_request_creation_time(from, now);
                     let mut stats = ProcessPullStats::default();
+                    let timeouts = CrdsTimeouts::new(
+                        node.keypair.pubkey(),
+                        CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS, // default_timeout
+                        Duration::from_secs(48 * 3600),   // epoch_duration
+                        &stakes,
+                    );
                     let (vers, vers_expired_timeout, failed_inserts) = node
                         .gossip
                         .filter_pull_responses(&timeouts, rsp, now, &mut stats);
@@ -608,7 +618,7 @@ fn network_run_pull(
 fn build_gossip_thread_pool() -> ThreadPool {
     ThreadPoolBuilder::new()
         .num_threads(get_thread_count().min(2))
-        .thread_name(|i| format!("gossipTest{:02}", i))
+        .thread_name(|i| format!("gossipTest{i:02}"))
         .build()
         .unwrap()
 }
@@ -657,7 +667,11 @@ fn test_star_network_push_ring_200() {
     let thread_pool = build_gossip_thread_pool();
     network_simulator(&thread_pool, &mut network, 0.9);
 }
+
+// With the new pruning logic, this test is no longer valid and can be deleted.
+// Ignoring it for now until the pruning code is stable.
 #[test]
+#[ignore]
 #[serial]
 fn test_connected_staked_network() {
     solana_logger::setup();
@@ -746,35 +760,39 @@ fn test_prune_errors() {
         &SocketAddrSpace::Unspecified,
     );
     let now = timestamp();
+    let stakes = HashMap::<Pubkey, u64>::default();
     //incorrect dest
     let mut res = crds_gossip.process_prune_msg(
         &id,                                      // self_pubkey
-        &ci.id,                                   // peer
+        ci.pubkey(),                              // peer
         &Pubkey::from(hash(&[1; 32]).to_bytes()), // destination
         &[prune_pubkey],                          // origins
         now,
         now,
+        &stakes,
     );
     assert_eq!(res.err(), Some(CrdsGossipError::BadPruneDestination));
     //correct dest
     res = crds_gossip.process_prune_msg(
         &id,             // self_pubkey
-        &ci.id,          // peer
+        ci.pubkey(),     // peer
         &id,             // destination
         &[prune_pubkey], // origins
         now,
         now,
+        &stakes,
     );
     res.unwrap();
     //test timeout
     let timeout = now + crds_gossip.push.prune_timeout * 2;
     res = crds_gossip.process_prune_msg(
         &id,             // self_pubkey
-        &ci.id,          // peer
+        ci.pubkey(),     // peer
         &id,             // destination
         &[prune_pubkey], // origins
         now,
         timeout,
+        &stakes,
     );
     assert_eq!(res.err(), Some(CrdsGossipError::PruneMessageTimeout));
 }

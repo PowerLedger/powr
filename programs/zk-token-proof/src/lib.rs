@@ -2,8 +2,9 @@
 
 use {
     bytemuck::Pod,
-    solana_program_runtime::{ic_msg, invoke_context::InvokeContext},
+    solana_program_runtime::{declare_process_instruction, ic_msg, invoke_context::InvokeContext},
     solana_sdk::{
+        feature_set,
         instruction::{InstructionError, TRANSACTION_LEVEL_STACK_HEIGHT},
         system_program,
     },
@@ -63,7 +64,7 @@ where
             return Err(InstructionError::InvalidAccountData);
         }
 
-        proof_context_account.set_data(&context_state_data)?;
+        proof_context_account.set_data(context_state_data)?;
     }
 
     Ok(())
@@ -113,59 +114,172 @@ fn process_close_proof_context(invoke_context: &mut InvokeContext) -> Result<(),
     Ok(())
 }
 
-pub fn process_instruction(
-    _first_instruction_account: usize,
-    invoke_context: &mut InvokeContext,
-) -> Result<(), InstructionError> {
-    if invoke_context.get_stack_height() != TRANSACTION_LEVEL_STACK_HEIGHT {
-        // Not supported as an inner instruction
-        return Err(InstructionError::UnsupportedProgramId);
-    }
-
-    // Consume compute units since proof verification is an expensive operation
-    {
-        let compute_meter = invoke_context.get_compute_meter();
-        // TODO: Tune the number of units consumed.  The current value is just a rough estimate
-        compute_meter.borrow_mut().consume(100_000)?;
-    }
-
+declare_process_instruction!(process_instruction, 0, |invoke_context| {
+    // Consume compute units if feature `native_programs_consume_cu` is activated
+    let native_programs_consume_cu = invoke_context
+        .feature_set
+        .is_active(&feature_set::native_programs_consume_cu::id());
     let transaction_context = &invoke_context.transaction_context;
     let instruction_context = transaction_context.get_current_instruction_context()?;
     let instruction_data = instruction_context.get_instruction_data();
     let instruction = ProofInstruction::instruction_type(instruction_data)
         .ok_or(InstructionError::InvalidInstructionData)?;
 
+    if invoke_context.get_stack_height() != TRANSACTION_LEVEL_STACK_HEIGHT
+        && instruction != ProofInstruction::CloseContextState
+    {
+        // Proof verification instructions are not supported as an inner instruction
+        return Err(InstructionError::UnsupportedProgramId);
+    }
+
     match instruction {
         ProofInstruction::CloseContextState => {
+            if native_programs_consume_cu {
+                invoke_context
+                    .consume_checked(3_300)
+                    .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            }
             ic_msg!(invoke_context, "CloseContextState");
             process_close_proof_context(invoke_context)
         }
         ProofInstruction::VerifyZeroBalance => {
-            ic_msg!(invoke_context, "VerifyCloseAccount");
+            if native_programs_consume_cu {
+                invoke_context
+                    .consume_checked(6_012)
+                    .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            }
+            ic_msg!(invoke_context, "VerifyZeroBalance");
             process_verify_proof::<ZeroBalanceProofData, ZeroBalanceProofContext>(invoke_context)
         }
         ProofInstruction::VerifyWithdraw => {
+            if native_programs_consume_cu {
+                invoke_context
+                    .consume_checked(112_454)
+                    .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            }
             ic_msg!(invoke_context, "VerifyWithdraw");
             process_verify_proof::<WithdrawData, WithdrawProofContext>(invoke_context)
         }
         ProofInstruction::VerifyCiphertextCiphertextEquality => {
-            ic_msg!(invoke_context, "VerifyWithdrawWithheldTokens");
+            if native_programs_consume_cu {
+                invoke_context
+                    .consume_checked(7_943)
+                    .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            }
+            ic_msg!(invoke_context, "VerifyCiphertextCiphertextEquality");
             process_verify_proof::<
                 CiphertextCiphertextEqualityProofData,
                 CiphertextCiphertextEqualityProofContext,
             >(invoke_context)
         }
         ProofInstruction::VerifyTransfer => {
+            if native_programs_consume_cu {
+                invoke_context
+                    .consume_checked(219_290)
+                    .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            }
             ic_msg!(invoke_context, "VerifyTransfer");
             process_verify_proof::<TransferData, TransferProofContext>(invoke_context)
         }
         ProofInstruction::VerifyTransferWithFee => {
+            if native_programs_consume_cu {
+                invoke_context
+                    .consume_checked(407_121)
+                    .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            }
             ic_msg!(invoke_context, "VerifyTransferWithFee");
             process_verify_proof::<TransferWithFeeData, TransferWithFeeProofContext>(invoke_context)
         }
         ProofInstruction::VerifyPubkeyValidity => {
+            if native_programs_consume_cu {
+                invoke_context
+                    .consume_checked(2_619)
+                    .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            }
             ic_msg!(invoke_context, "VerifyPubkeyValidity");
             process_verify_proof::<PubkeyValidityData, PubkeyValidityProofContext>(invoke_context)
         }
+        ProofInstruction::VerifyRangeProofU64 => {
+            if native_programs_consume_cu {
+                invoke_context
+                    .consume_checked(105_066)
+                    .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            }
+            ic_msg!(invoke_context, "VerifyRangeProof");
+            process_verify_proof::<RangeProofU64Data, RangeProofContext>(invoke_context)
+        }
+        ProofInstruction::VerifyBatchedRangeProofU64 => {
+            if native_programs_consume_cu {
+                invoke_context
+                    .consume_checked(111_478)
+                    .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            }
+            ic_msg!(invoke_context, "VerifyBatchedRangeProof64");
+            process_verify_proof::<BatchedRangeProofU64Data, BatchedRangeProofContext>(
+                invoke_context,
+            )
+        }
+        ProofInstruction::VerifyBatchedRangeProofU128 => {
+            if native_programs_consume_cu {
+                invoke_context
+                    .consume_checked(204_512)
+                    .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            }
+            ic_msg!(invoke_context, "VerifyBatchedRangeProof128");
+            process_verify_proof::<BatchedRangeProofU128Data, BatchedRangeProofContext>(
+                invoke_context,
+            )
+        }
+        ProofInstruction::VerifyBatchedRangeProofU256 => {
+            if native_programs_consume_cu {
+                invoke_context
+                    .consume_checked(368_000)
+                    .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            }
+            ic_msg!(invoke_context, "VerifyBatchedRangeProof256");
+            process_verify_proof::<BatchedRangeProofU256Data, BatchedRangeProofContext>(
+                invoke_context,
+            )
+        }
+        ProofInstruction::VerifyCiphertextCommitmentEquality => {
+            invoke_context
+                .consume_checked(6_424)
+                .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            ic_msg!(invoke_context, "VerifyCiphertextCommitmentEquality");
+            process_verify_proof::<
+                CiphertextCommitmentEqualityProofData,
+                CiphertextCommitmentEqualityProofContext,
+            >(invoke_context)
+        }
+        ProofInstruction::VerifyGroupedCiphertext2HandlesValidity => {
+            invoke_context
+                .consume_checked(6_440)
+                .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            ic_msg!(invoke_context, "VerifyGroupedCiphertext2HandlesValidity");
+            process_verify_proof::<
+                GroupedCiphertext2HandlesValidityProofData,
+                GroupedCiphertext2HandlesValidityProofContext,
+            >(invoke_context)
+        }
+        ProofInstruction::VerifyBatchedGroupedCiphertext2HandlesValidity => {
+            invoke_context
+                .consume_checked(12_575)
+                .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            ic_msg!(
+                invoke_context,
+                "VerifyBatchedGroupedCiphertext2HandlesValidity"
+            );
+            process_verify_proof::<
+                BatchedGroupedCiphertext2HandlesValidityProofData,
+                BatchedGroupedCiphertext2HandlesValidityProofContext,
+            >(invoke_context)
+        }
+        ProofInstruction::VerifyFeeSigma => {
+            invoke_context
+                .consume_checked(6_547)
+                .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+            ic_msg!(invoke_context, "VerifyFeeSigma");
+            process_verify_proof::<FeeSigmaProofData, FeeSigmaProofContext>(invoke_context)
+        }
     }
-}
+});

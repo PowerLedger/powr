@@ -1,14 +1,18 @@
 use {
-    crate::crds_value::MAX_WALLCLOCK,
+    crate::{
+        contact_info::{
+            get_quic_socket, sanitize_quic_offset, sanitize_socket, ContactInfo, Error, Protocol,
+            SOCKET_ADDR_UNSPECIFIED,
+        },
+        crds_value::MAX_WALLCLOCK,
+    },
     solana_sdk::{
         pubkey::Pubkey,
-        rpc_port,
         sanitize::{Sanitize, SanitizeError},
-        signature::{Keypair, Signer},
         timing::timestamp,
     },
     solana_streamer::socket::SocketAddrSpace,
-    std::net::{IpAddr, SocketAddr},
+    std::net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
 /// Structure representing a node on the network
@@ -16,31 +20,31 @@ use {
     Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, AbiExample, Deserialize, Serialize,
 )]
 pub struct LegacyContactInfo {
-    pub id: Pubkey,
+    id: Pubkey,
     /// gossip address
-    pub gossip: SocketAddr,
+    gossip: SocketAddr,
     /// address to connect to for replication
-    pub tvu: SocketAddr,
+    tvu: SocketAddr,
     /// address to forward shreds to
-    pub tvu_forwards: SocketAddr,
+    tvu_forwards: SocketAddr,
     /// address to send repair responses to
-    pub repair: SocketAddr,
+    repair: SocketAddr,
     /// transactions address
-    pub tpu: SocketAddr,
+    tpu: SocketAddr,
     /// address to forward unprocessed transactions to
-    pub tpu_forwards: SocketAddr,
+    tpu_forwards: SocketAddr,
     /// address to which to send bank state requests
-    pub tpu_vote: SocketAddr,
+    tpu_vote: SocketAddr,
     /// address to which to send JSON-RPC requests
-    pub rpc: SocketAddr,
+    rpc: SocketAddr,
     /// websocket for JSON-RPC push notifications
-    pub rpc_pubsub: SocketAddr,
+    rpc_pubsub: SocketAddr,
     /// address to send repair requests to
-    pub serve_repair: SocketAddr,
+    serve_repair: SocketAddr,
     /// latest wallclock picked
-    pub wallclock: u64,
+    wallclock: u64,
     /// node shred version
-    pub shred_version: u16,
+    shred_version: u16,
 }
 
 impl Sanitize for LegacyContactInfo {
@@ -52,6 +56,40 @@ impl Sanitize for LegacyContactInfo {
     }
 }
 
+macro_rules! get_socket {
+    ($name:ident) => {
+        pub fn $name(&self) -> Result<SocketAddr, Error> {
+            let socket = &self.$name;
+            sanitize_socket(socket)?;
+            Ok(socket).copied()
+        }
+    };
+    (@quic $name:ident) => {
+        pub fn $name(&self, protocol: Protocol) -> Result<SocketAddr, Error> {
+            let socket = &self.$name;
+            sanitize_socket(socket)?;
+            match protocol {
+                Protocol::QUIC => get_quic_socket(socket),
+                Protocol::UDP => Ok(socket).copied(),
+            }
+        }
+    };
+}
+
+macro_rules! set_socket {
+    ($name:ident, $key:ident) => {
+        pub fn $name<T>(&mut self, socket: T) -> Result<(), Error>
+        where
+            SocketAddr: From<T>,
+        {
+            let socket = SocketAddr::from(socket);
+            sanitize_socket(&socket)?;
+            self.$key = socket;
+            Ok(())
+        }
+    };
+}
+
 #[macro_export]
 macro_rules! socketaddr {
     ($ip:expr, $port:expr) => {
@@ -61,10 +99,11 @@ macro_rules! socketaddr {
         $str.parse::<std::net::SocketAddr>().unwrap()
     }};
 }
+
 #[macro_export]
 macro_rules! socketaddr_any {
     () => {
-        socketaddr!(0, 0)
+        socketaddr!(std::net::Ipv4Addr::UNSPECIFIED, 0)
     };
 }
 
@@ -92,16 +131,16 @@ impl LegacyContactInfo {
     pub fn new_localhost(id: &Pubkey, now: u64) -> Self {
         Self {
             id: *id,
-            gossip: socketaddr!("127.0.0.1:1234"),
-            tvu: socketaddr!("127.0.0.1:1235"),
-            tvu_forwards: socketaddr!("127.0.0.1:1236"),
-            repair: socketaddr!("127.0.0.1:1237"),
-            tpu: socketaddr!("127.0.0.1:1238"),
-            tpu_forwards: socketaddr!("127.0.0.1:1239"),
-            tpu_vote: socketaddr!("127.0.0.1:1240"),
-            rpc: socketaddr!("127.0.0.1:1241"),
-            rpc_pubsub: socketaddr!("127.0.0.1:1242"),
-            serve_repair: socketaddr!("127.0.0.1:1243"),
+            gossip: socketaddr!(Ipv4Addr::LOCALHOST, 1234),
+            tvu: socketaddr!(Ipv4Addr::LOCALHOST, 1235),
+            tvu_forwards: socketaddr!(Ipv4Addr::LOCALHOST, 1236),
+            repair: socketaddr!(Ipv4Addr::LOCALHOST, 1237),
+            tpu: socketaddr!(Ipv4Addr::LOCALHOST, 1238),
+            tpu_forwards: socketaddr!(Ipv4Addr::LOCALHOST, 1239),
+            tpu_vote: socketaddr!(Ipv4Addr::LOCALHOST, 1240),
+            rpc: socketaddr!(Ipv4Addr::LOCALHOST, 1241),
+            rpc_pubsub: socketaddr!(Ipv4Addr::LOCALHOST, 1242),
+            serve_repair: socketaddr!(Ipv4Addr::LOCALHOST, 1243),
             wallclock: now,
             shred_version: 0,
         }
@@ -117,69 +156,6 @@ impl LegacyContactInfo {
         node
     }
 
-    #[cfg(test)]
-    /// LegacyContactInfo with multicast addresses for adversarial testing.
-    pub fn new_multicast() -> Self {
-        let addr = socketaddr!("224.0.1.255:1000");
-        assert!(addr.ip().is_multicast());
-        Self {
-            id: solana_sdk::pubkey::new_rand(),
-            gossip: addr,
-            tvu: addr,
-            tvu_forwards: addr,
-            repair: addr,
-            tpu: addr,
-            tpu_forwards: addr,
-            tpu_vote: addr,
-            rpc: addr,
-            rpc_pubsub: addr,
-            serve_repair: addr,
-            wallclock: 0,
-            shred_version: 0,
-        }
-    }
-
-    // Used in tests
-    pub fn new_with_pubkey_socketaddr(pubkey: &Pubkey, bind_addr: &SocketAddr) -> Self {
-        fn next_port(addr: &SocketAddr, nxt: u16) -> SocketAddr {
-            let mut nxt_addr = *addr;
-            nxt_addr.set_port(addr.port() + nxt);
-            nxt_addr
-        }
-
-        let tpu = *bind_addr;
-        let gossip = next_port(bind_addr, 1);
-        let tvu = next_port(bind_addr, 2);
-        let tpu_forwards = next_port(bind_addr, 3);
-        let tvu_forwards = next_port(bind_addr, 4);
-        let repair = next_port(bind_addr, 5);
-        let rpc = SocketAddr::new(bind_addr.ip(), rpc_port::DEFAULT_RPC_PORT);
-        let rpc_pubsub = SocketAddr::new(bind_addr.ip(), rpc_port::DEFAULT_RPC_PUBSUB_PORT);
-        let serve_repair = next_port(bind_addr, 6);
-        let tpu_vote = next_port(bind_addr, 7);
-        Self {
-            id: *pubkey,
-            gossip,
-            tvu,
-            tvu_forwards,
-            repair,
-            tpu,
-            tpu_forwards,
-            tpu_vote,
-            rpc,
-            rpc_pubsub,
-            serve_repair,
-            wallclock: timestamp(),
-            shred_version: 0,
-        }
-    }
-
-    // Used in tests
-    pub fn new_with_socketaddr(bind_addr: &SocketAddr) -> Self {
-        let keypair = Keypair::new();
-        Self::new_with_pubkey_socketaddr(&keypair.pubkey(), bind_addr)
-    }
-
     // Construct a LegacyContactInfo that's only usable for gossip
     pub fn new_gossip_entry_point(gossip_addr: &SocketAddr) -> Self {
         Self {
@@ -189,6 +165,48 @@ impl LegacyContactInfo {
             ..LegacyContactInfo::default()
         }
     }
+
+    #[inline]
+    pub fn pubkey(&self) -> &Pubkey {
+        &self.id
+    }
+
+    #[inline]
+    pub fn wallclock(&self) -> u64 {
+        self.wallclock
+    }
+
+    #[inline]
+    pub fn shred_version(&self) -> u16 {
+        self.shred_version
+    }
+
+    pub fn set_pubkey(&mut self, pubkey: Pubkey) {
+        self.id = pubkey
+    }
+
+    pub fn set_wallclock(&mut self, wallclock: u64) {
+        self.wallclock = wallclock;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_shred_version(&mut self, shred_version: u16) {
+        self.shred_version = shred_version
+    }
+
+    get_socket!(gossip);
+    get_socket!(@quic tvu);
+    get_socket!(tvu_forwards);
+    get_socket!(repair);
+    get_socket!(@quic tpu);
+    get_socket!(@quic tpu_forwards);
+    get_socket!(tpu_vote);
+    get_socket!(rpc);
+    get_socket!(rpc_pubsub);
+    get_socket!(serve_repair);
+
+    set_socket!(set_gossip, gossip);
+    set_socket!(set_rpc, rpc);
 
     fn is_valid_ip(addr: IpAddr) -> bool {
         !(addr.is_unspecified() || addr.is_multicast())
@@ -204,21 +222,59 @@ impl LegacyContactInfo {
         addr.port() != 0u16 && Self::is_valid_ip(addr.ip()) && socket_addr_space.check(addr)
     }
 
-    pub fn client_facing_addr(&self) -> (SocketAddr, SocketAddr) {
-        (self.rpc, self.tpu)
-    }
-
-    pub fn valid_client_facing_addr(
+    pub(crate) fn valid_client_facing_addr(
         &self,
+        protocol: Protocol,
         socket_addr_space: &SocketAddrSpace,
     ) -> Option<(SocketAddr, SocketAddr)> {
-        if LegacyContactInfo::is_valid_address(&self.rpc, socket_addr_space)
-            && LegacyContactInfo::is_valid_address(&self.tpu, socket_addr_space)
-        {
-            Some((self.rpc, self.tpu))
-        } else {
-            None
+        Some((
+            self.rpc()
+                .ok()
+                .filter(|addr| socket_addr_space.check(addr))?,
+            self.tpu(protocol)
+                .ok()
+                .filter(|addr| socket_addr_space.check(addr))?,
+        ))
+    }
+}
+
+impl TryFrom<&ContactInfo> for LegacyContactInfo {
+    type Error = Error;
+
+    fn try_from(node: &ContactInfo) -> Result<Self, Self::Error> {
+        macro_rules! unwrap_socket {
+            ($name:ident) => {
+                node.$name().ok().unwrap_or(SOCKET_ADDR_UNSPECIFIED)
+            };
+            ($name:ident, $protocol:expr) => {
+                node.$name($protocol)
+                    .ok()
+                    .unwrap_or(SOCKET_ADDR_UNSPECIFIED)
+            };
         }
+        sanitize_quic_offset(
+            &node.tpu(Protocol::UDP).ok(),
+            &node.tpu(Protocol::QUIC).ok(),
+        )?;
+        sanitize_quic_offset(
+            &node.tpu_forwards(Protocol::UDP).ok(),
+            &node.tpu_forwards(Protocol::QUIC).ok(),
+        )?;
+        Ok(Self {
+            id: *node.pubkey(),
+            gossip: unwrap_socket!(gossip),
+            tvu: unwrap_socket!(tvu, Protocol::UDP),
+            tvu_forwards: unwrap_socket!(tvu_forwards),
+            repair: unwrap_socket!(repair),
+            tpu: unwrap_socket!(tpu, Protocol::UDP),
+            tpu_forwards: unwrap_socket!(tpu_forwards, Protocol::UDP),
+            tpu_vote: unwrap_socket!(tpu_vote),
+            rpc: unwrap_socket!(rpc),
+            rpc_pubsub: unwrap_socket!(rpc_pubsub),
+            serve_repair: unwrap_socket!(serve_repair),
+            wallclock: node.wallclock(),
+            shred_version: node.shred_version(),
+        })
     }
 }
 
@@ -228,12 +284,12 @@ mod tests {
 
     #[test]
     fn test_is_valid_address() {
-        let bad_address_port = socketaddr!("127.0.0.1:0");
+        let bad_address_port = socketaddr!(Ipv4Addr::LOCALHOST, 0);
         assert!(!LegacyContactInfo::is_valid_address(
             &bad_address_port,
             &SocketAddrSpace::Unspecified
         ));
-        let bad_address_unspecified = socketaddr!(0, 1234);
+        let bad_address_unspecified = socketaddr!(Ipv4Addr::UNSPECIFIED, 1234);
         assert!(!LegacyContactInfo::is_valid_address(
             &bad_address_unspecified,
             &SocketAddrSpace::Unspecified
@@ -243,7 +299,7 @@ mod tests {
             &bad_address_multicast,
             &SocketAddrSpace::Unspecified
         ));
-        let loopback = socketaddr!("127.0.0.1:1234");
+        let loopback = socketaddr!(Ipv4Addr::LOCALHOST, 1234);
         assert!(LegacyContactInfo::is_valid_address(
             &loopback,
             &SocketAddrSpace::Unspecified
@@ -263,21 +319,10 @@ mod tests {
         assert!(ci.tpu_vote.ip().is_unspecified());
         assert!(ci.serve_repair.ip().is_unspecified());
     }
-    #[test]
-    fn test_multicast() {
-        let ci = LegacyContactInfo::new_multicast();
-        assert!(ci.gossip.ip().is_multicast());
-        assert!(ci.tvu.ip().is_multicast());
-        assert!(ci.tpu_forwards.ip().is_multicast());
-        assert!(ci.rpc.ip().is_multicast());
-        assert!(ci.rpc_pubsub.ip().is_multicast());
-        assert!(ci.tpu.ip().is_multicast());
-        assert!(ci.tpu_vote.ip().is_multicast());
-        assert!(ci.serve_repair.ip().is_multicast());
-    }
+
     #[test]
     fn test_entry_point() {
-        let addr = socketaddr!("127.0.0.1:10");
+        let addr = socketaddr!(Ipv4Addr::LOCALHOST, 10);
         let ci = LegacyContactInfo::new_gossip_entry_point(&addr);
         assert_eq!(ci.gossip, addr);
         assert!(ci.tvu.ip().is_unspecified());
@@ -288,61 +333,22 @@ mod tests {
         assert!(ci.tpu_vote.ip().is_unspecified());
         assert!(ci.serve_repair.ip().is_unspecified());
     }
-    #[test]
-    fn test_socketaddr() {
-        let addr = socketaddr!("127.0.0.1:10");
-        let ci = LegacyContactInfo::new_with_socketaddr(&addr);
-        assert_eq!(ci.tpu, addr);
-        assert_eq!(ci.tpu_vote.port(), 17);
-        assert_eq!(ci.gossip.port(), 11);
-        assert_eq!(ci.tvu.port(), 12);
-        assert_eq!(ci.tpu_forwards.port(), 13);
-        assert_eq!(ci.rpc.port(), rpc_port::DEFAULT_RPC_PORT);
-        assert_eq!(ci.rpc_pubsub.port(), rpc_port::DEFAULT_RPC_PUBSUB_PORT);
-        assert_eq!(ci.serve_repair.port(), 16);
-    }
-
-    #[test]
-    fn replayed_data_new_with_socketaddr_with_pubkey() {
-        let keypair = Keypair::new();
-        let d1 = LegacyContactInfo::new_with_pubkey_socketaddr(
-            &keypair.pubkey(),
-            &socketaddr!("127.0.0.1:1234"),
-        );
-        assert_eq!(d1.id, keypair.pubkey());
-        assert_eq!(d1.gossip, socketaddr!("127.0.0.1:1235"));
-        assert_eq!(d1.tvu, socketaddr!("127.0.0.1:1236"));
-        assert_eq!(d1.tpu_forwards, socketaddr!("127.0.0.1:1237"));
-        assert_eq!(d1.tpu, socketaddr!("127.0.0.1:1234"));
-        assert_eq!(
-            d1.rpc,
-            socketaddr!(format!("127.0.0.1:{}", rpc_port::DEFAULT_RPC_PORT))
-        );
-        assert_eq!(
-            d1.rpc_pubsub,
-            socketaddr!(format!("127.0.0.1:{}", rpc_port::DEFAULT_RPC_PUBSUB_PORT))
-        );
-        assert_eq!(d1.tvu_forwards, socketaddr!("127.0.0.1:1238"));
-        assert_eq!(d1.repair, socketaddr!("127.0.0.1:1239"));
-        assert_eq!(d1.serve_repair, socketaddr!("127.0.0.1:1240"));
-        assert_eq!(d1.tpu_vote, socketaddr!("127.0.0.1:1241"));
-    }
 
     #[test]
     fn test_valid_client_facing() {
         let mut ci = LegacyContactInfo::default();
         assert_eq!(
-            ci.valid_client_facing_addr(&SocketAddrSpace::Unspecified),
+            ci.valid_client_facing_addr(Protocol::QUIC, &SocketAddrSpace::Unspecified),
             None
         );
-        ci.tpu = socketaddr!("127.0.0.1:123");
+        ci.tpu = socketaddr!(Ipv4Addr::LOCALHOST, 123);
         assert_eq!(
-            ci.valid_client_facing_addr(&SocketAddrSpace::Unspecified),
+            ci.valid_client_facing_addr(Protocol::QUIC, &SocketAddrSpace::Unspecified),
             None
         );
-        ci.rpc = socketaddr!("127.0.0.1:234");
+        ci.rpc = socketaddr!(Ipv4Addr::LOCALHOST, 234);
         assert!(ci
-            .valid_client_facing_addr(&SocketAddrSpace::Unspecified)
+            .valid_client_facing_addr(Protocol::QUIC, &SocketAddrSpace::Unspecified)
             .is_some());
     }
 

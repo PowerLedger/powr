@@ -14,17 +14,15 @@ use {
     indicatif::{ProgressBar, ProgressStyle},
     pickledb::PickleDb,
     serde::{Deserialize, Serialize},
-    solana_account_decoder::parse_token::{
-        pubkey_from_spl_token, real_number_string, spl_token_pubkey,
-    },
-    solana_client::{
-        client_error::{ClientError, Result as ClientResult},
-        rpc_client::RpcClient,
-        rpc_config::RpcSendTransactionConfig,
-        rpc_request::MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS,
+    solana_account_decoder::parse_token::real_number_string,
+    solana_rpc_client::rpc_client::RpcClient,
+    solana_rpc_client_api::{
+        client_error::{Error as ClientError, Result as ClientResult},
+        config::RpcSendTransactionConfig,
+        request::{MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS, MAX_MULTIPLE_ACCOUNTS},
     },
     solana_sdk::{
-        clock::{Slot, DEFAULT_MS_PER_SLOT},
+        clock::Slot,
         commitment_config::CommitmentConfig,
         hash::Hash,
         instruction::Instruction,
@@ -33,7 +31,7 @@ use {
         signature::{unique_signers, Signature, Signer},
         stake::{
             instruction::{self as stake_instruction, LockupArgs},
-            state::{Authorized, Lockup, StakeAuthorize},
+            state::{Authorized, Lockup, StakeAuthorize, StakeState},
         },
         system_instruction,
         transaction::Transaction,
@@ -49,7 +47,7 @@ use {
             Arc,
         },
         thread::sleep,
-        time::{Duration, Instant},
+        time::Duration,
     },
 };
 
@@ -76,7 +74,7 @@ impl std::fmt::Debug for FundingSources {
             if i > 0 {
                 write!(f, "/")?;
             }
-            write!(f, "{:?}", source)?;
+            write!(f, "{source:?}")?;
         }
         Ok(())
     }
@@ -108,6 +106,10 @@ pub enum Error {
     ClientError(#[from] ClientError),
     #[error("Missing lockup authority")]
     MissingLockupAuthority,
+    #[error("Missing messages")]
+    MissingMessages,
+    #[error("Error estimating message fees")]
+    FeeEstimationError,
     #[error("insufficient funds in {0:?}, requires {1}")]
     InsufficientFunds(FundingSources, String),
     #[error("Program error")]
@@ -232,12 +234,24 @@ fn distribution_instructions(
                 Some(sender_stake_args) => {
                     let stake_authority = sender_stake_args.stake_authority.pubkey();
                     let withdraw_authority = sender_stake_args.withdraw_authority.pubkey();
-                    let mut instructions = stake_instruction::split(
+                    let rent_exempt_reserve = sender_stake_args
+                        .rent_exempt_reserve
+                        .expect("SenderStakeArgs.rent_exempt_reserve should be populated");
+
+                    // Transfer some tokens to stake account to cover rent-exempt reserve.
+                    let mut instructions = vec![system_instruction::transfer(
+                        &sender_pubkey,
+                        new_stake_account_address,
+                        rent_exempt_reserve,
+                    )];
+
+                    // Split to stake account
+                    instructions.append(&mut stake_instruction::split(
                         &sender_stake_args.stake_account_address,
                         &stake_authority,
-                        allocation.amount - unlocked_sol,
+                        allocation.amount - unlocked_sol - rent_exempt_reserve,
                         new_stake_account_address,
-                    );
+                    ));
 
                     // Make the recipient the new stake authority
                     instructions.push(stake_instruction::authorize(
@@ -297,7 +311,23 @@ fn build_messages(
     stake_extras: &mut StakeExtras,
     created_accounts: &mut u64,
 ) -> Result<(), Error> {
-    for allocation in allocations.iter() {
+    let mut existing_associated_token_accounts = vec![];
+    if let Some(spl_token_args) = &args.spl_token_args {
+        let allocation_chunks = allocations.chunks(MAX_MULTIPLE_ACCOUNTS);
+        for allocation_chunk in allocation_chunks {
+            let associated_token_addresses = allocation_chunk
+                .iter()
+                .map(|x| {
+                    let wallet_address = x.recipient.parse().unwrap();
+                    get_associated_token_address(&wallet_address, &spl_token_args.mint)
+                })
+                .collect::<Vec<_>>();
+            let mut maybe_accounts = client.get_multiple_accounts(&associated_token_addresses)?;
+            existing_associated_token_accounts.append(&mut maybe_accounts);
+        }
+    }
+
+    for (i, allocation) in allocations.iter().enumerate() {
         if exit.load(Ordering::SeqCst) {
             db.dump()?;
             return Err(Error::ExitSignal);
@@ -311,14 +341,8 @@ fn build_messages(
 
         let do_create_associated_token_account = if let Some(spl_token_args) = &args.spl_token_args
         {
-            let wallet_address = allocation.recipient.parse().unwrap();
-            let associated_token_address = get_associated_token_address(
-                &wallet_address,
-                &spl_token_pubkey(&spl_token_args.mint),
-            );
-            let do_create_associated_token_account = client
-                .get_multiple_accounts(&[pubkey_from_spl_token(&associated_token_address)])?[0]
-                .is_none();
+            let do_create_associated_token_account =
+                existing_associated_token_accounts[i].is_none();
             if do_create_associated_token_account {
                 *created_accounts += 1;
             }
@@ -528,9 +552,12 @@ fn read_allocations(
 
 fn new_spinner_progress_bar() -> ProgressBar {
     let progress_bar = ProgressBar::new(42);
-    progress_bar
-        .set_style(ProgressStyle::default_spinner().template("{spinner:.green} {wide_msg}"));
-    progress_bar.enable_steady_tick(100);
+    progress_bar.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {wide_msg}")
+            .expect("ProgresStyle::template direct input to be correct"),
+    );
+    progress_bar.enable_steady_tick(Duration::from_millis(100));
     progress_bar
 }
 
@@ -730,23 +757,18 @@ fn log_transaction_confirmations(
     Ok(())
 }
 
-pub fn get_fees_for_messages(messages: &[Message], client: &RpcClient) -> Result<u64, Error> {
-    // This is an arbitrary value to get regular blockhash updates for balance checks without
-    // hitting the RPC node with too many requests
-    const BLOCKHASH_REFRESH_MILLIS: u64 = DEFAULT_MS_PER_SLOT * 32;
-
-    let mut latest_blockhash = client.get_latest_blockhash()?;
-    let mut now = Instant::now();
-    let mut fees = 0;
-    for mut message in messages.iter().cloned() {
-        if now.elapsed() > Duration::from_millis(BLOCKHASH_REFRESH_MILLIS) {
-            latest_blockhash = client.get_latest_blockhash()?;
-            now = Instant::now();
-        }
-        message.recent_blockhash = latest_blockhash;
-        fees += client.get_fee_for_message(&message)?;
-    }
-    Ok(fees)
+pub fn get_fee_estimate_for_messages(
+    messages: &[Message],
+    client: &RpcClient,
+) -> Result<u64, Error> {
+    let mut message = messages.first().ok_or(Error::MissingMessages)?.clone();
+    let latest_blockhash = client.get_latest_blockhash()?;
+    message.recent_blockhash = latest_blockhash;
+    let fee = client.get_fee_for_message(&message)?;
+    let fee_estimate = fee
+        .checked_mul(messages.len() as u64)
+        .ok_or(Error::FeeEstimationError)?;
+    Ok(fee_estimate)
 }
 
 fn check_payer_balances(
@@ -756,7 +778,7 @@ fn check_payer_balances(
     args: &DistributeTokensArgs,
 ) -> Result<(), Error> {
     let mut undistributed_tokens: u64 = allocations.iter().map(|x| x.amount).sum();
-    let fees = get_fees_for_messages(messages, client)?;
+    let fees = get_fee_estimate_for_messages(messages, client)?;
 
     let (distribution_source, unlocked_sol_source) = if let Some(stake_args) = &args.stake_args {
         let total_unlocked_sol = allocations.len() as u64 * stake_args.unlocked_sol;
@@ -830,7 +852,11 @@ fn check_payer_balances(
     Ok(())
 }
 
-pub fn process_balances(client: &RpcClient, args: &BalancesArgs) -> Result<(), Error> {
+pub fn process_balances(
+    client: &RpcClient,
+    args: &BalancesArgs,
+    exit: Arc<AtomicBool>,
+) -> Result<(), Error> {
     let allocations: Vec<Allocation> =
         read_allocations(&args.input_csv, None, false, args.spl_token_args.is_some())?;
     let allocations = merge_allocations(&allocations);
@@ -852,6 +878,10 @@ pub fn process_balances(client: &RpcClient, args: &BalancesArgs) -> Result<(), E
     );
 
     for allocation in &allocations {
+        if exit.load(Ordering::SeqCst) {
+            return Err(Error::ExitSignal);
+        }
+
         if let Some(spl_token_args) = &args.spl_token_args {
             print_token_balances(client, allocation, spl_token_args)?;
         } else {
@@ -914,7 +944,7 @@ pub fn test_process_distribute_tokens_with_client(
     let input_csv = allocations_file.path().to_str().unwrap().to_string();
     let mut wtr = csv::WriterBuilder::new().from_writer(allocations_file);
     wtr.write_record(["recipient", "amount"]).unwrap();
-    wtr.write_record(&[
+    wtr.write_record([
         alice_pubkey.to_string(),
         lamports_to_sol(expected_amount).to_string(),
     ])
@@ -1015,7 +1045,7 @@ pub fn test_process_create_stake_with_client(client: &RpcClient, sender_keypair:
     let mut wtr = csv::WriterBuilder::new().from_writer(file);
     wtr.write_record(["recipient", "amount", "lockup_date"])
         .unwrap();
-    wtr.write_record(&[
+    wtr.write_record([
         alice_pubkey.to_string(),
         lamports_to_sol(expected_amount).to_string(),
         "".to_string(),
@@ -1137,7 +1167,7 @@ pub fn test_process_distribute_stake_with_client(client: &RpcClient, sender_keyp
     let mut wtr = csv::WriterBuilder::new().from_writer(file);
     wtr.write_record(["recipient", "amount", "lockup_date"])
         .unwrap();
-    wtr.write_record(&[
+    wtr.write_record([
         alice_pubkey.to_string(),
         lamports_to_sol(expected_amount).to_string(),
         "".to_string(),
@@ -1156,11 +1186,15 @@ pub fn test_process_distribute_stake_with_client(client: &RpcClient, sender_keyp
     let output_file = NamedTempFile::new().unwrap();
     let output_path = output_file.path().to_str().unwrap().to_string();
 
+    let rent_exempt_reserve = client
+        .get_minimum_balance_for_rent_exemption(StakeState::size_of())
+        .unwrap();
     let sender_stake_args = SenderStakeArgs {
         stake_account_address,
         stake_authority: Box::new(stake_authority),
         withdraw_authority: Box::new(withdraw_authority),
         lockup_authority: None,
+        rent_exempt_reserve: Some(rent_exempt_reserve),
     };
     let stake_args = StakeArgs {
         unlocked_sol: sol_to_lamports(1.0),
@@ -1268,7 +1302,7 @@ mod tests {
     fn simple_test_validator_no_fees(pubkey: Pubkey) -> TestValidator {
         let test_validator =
             TestValidator::with_no_fees(pubkey, None, SocketAddrSpace::Unspecified);
-        test_validator.set_startup_verification_complete();
+        test_validator.set_startup_verification_complete_for_tests();
         test_validator
     }
 
@@ -1403,9 +1437,9 @@ mod tests {
         let input_csv = file.path().to_str().unwrap().to_string();
         let mut wtr = csv::WriterBuilder::new().from_writer(file);
         wtr.serialize("recipient".to_string()).unwrap();
-        wtr.serialize(&pubkey0.to_string()).unwrap();
-        wtr.serialize(&pubkey1.to_string()).unwrap();
-        wtr.serialize(&pubkey2.to_string()).unwrap();
+        wtr.serialize(pubkey0.to_string()).unwrap();
+        wtr.serialize(pubkey1.to_string()).unwrap();
+        wtr.serialize(pubkey2.to_string()).unwrap();
         wtr.flush().unwrap();
 
         let amount = sol_to_lamports(1.5);
@@ -1511,14 +1545,14 @@ mod tests {
         )); // Same recipient, same lockups
     }
 
-    const SET_LOCKUP_INDEX: usize = 5;
+    const SET_LOCKUP_INDEX: usize = 6;
 
     #[test]
     fn test_set_split_stake_lockup() {
         let lockup_date_str = "2021-01-07T00:00:00Z";
         let allocation = Allocation {
             recipient: Pubkey::default().to_string(),
-            amount: sol_to_lamports(1.0),
+            amount: sol_to_lamports(1.002_282_880),
             lockup_date: lockup_date_str.to_string(),
         };
         let stake_account_address = solana_sdk::pubkey::new_rand();
@@ -1530,6 +1564,7 @@ mod tests {
             stake_authority: Box::new(Keypair::new()),
             withdraw_authority: Box::new(Keypair::new()),
             lockup_authority: Some(Box::new(lockup_authority)),
+            rent_exempt_reserve: Some(2_282_880),
         };
         let stake_args = StakeArgs {
             lockup_authority: Some(lockup_authority_address),
@@ -1570,7 +1605,7 @@ mod tests {
         use std::env;
         let out_dir = env::var("FARF_DIR").unwrap_or_else(|_| "farf".to_string());
 
-        format!("{}/tmp/{}-{}", out_dir, name, pubkey)
+        format!("{out_dir}/tmp/{name}-{pubkey}")
     }
 
     fn initialize_check_payer_balances_inputs(
@@ -1803,6 +1838,7 @@ mod tests {
             stake_authority: Box::new(stake_authority),
             withdraw_authority: Box::new(withdraw_authority),
             lockup_authority: None,
+            rent_exempt_reserve: Some(2_282_880),
         };
 
         StakeArgs {
@@ -1815,7 +1851,7 @@ mod tests {
     fn simple_test_validator(alice: Pubkey) -> TestValidator {
         let test_validator =
             TestValidator::with_custom_fees(alice, 10_000, None, SocketAddrSpace::Unspecified);
-        test_validator.set_startup_verification_complete();
+        test_validator.set_startup_verification_complete_for_tests();
         test_validator
     }
 

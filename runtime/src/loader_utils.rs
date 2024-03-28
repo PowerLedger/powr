@@ -1,8 +1,11 @@
 use {
+    crate::{bank::Bank, bank_client::BankClient},
     serde::Serialize,
     solana_sdk::{
+        account::{AccountSharedData, WritableAccount},
         bpf_loader_upgradeable::{self, UpgradeableLoaderState},
-        client::Client,
+        client::{Client, SyncClient},
+        clock::Clock,
         instruction::{AccountMeta, Instruction},
         loader_instruction,
         message::Message,
@@ -20,7 +23,7 @@ pub fn load_program_from_file(name: &str) -> Vec<u8> {
         let current_exe = env::current_exe().unwrap();
         PathBuf::from(current_exe.parent().unwrap().parent().unwrap())
     };
-    pathbuf.push("bpf/");
+    pathbuf.push("sbf/");
     pathbuf.push(name);
     pathbuf.set_extension("so");
     let mut file = File::open(&pathbuf).unwrap_or_else(|err| {
@@ -31,7 +34,22 @@ pub fn load_program_from_file(name: &str) -> Vec<u8> {
     program
 }
 
-pub fn load_and_finalize_deprecated_program<T: Client>(
+// Creates an unverified program by bypassing the loader built-in program
+pub fn create_program(bank: &Bank, loader_id: &Pubkey, name: &str) -> Pubkey {
+    let program_id = Pubkey::new_unique();
+    let elf = load_program_from_file(name);
+    let mut program_account = AccountSharedData::new(1, elf.len(), loader_id);
+    program_account
+        .data_as_mut_slice()
+        .get_mut(..)
+        .unwrap()
+        .copy_from_slice(&elf);
+    program_account.set_executable(true);
+    bank.store_account(&program_id, &program_account);
+    program_id
+}
+
+pub fn load_and_finalize_program<T: Client>(
     bank_client: &T,
     loader_id: &Pubkey,
     program_keypair: Option<Keypair>,
@@ -73,14 +91,14 @@ pub fn load_and_finalize_deprecated_program<T: Client>(
     (program_keypair, instruction)
 }
 
-pub fn create_deprecated_program<T: Client>(
+pub fn load_program<T: Client>(
     bank_client: &T,
     loader_id: &Pubkey,
     payer_keypair: &Keypair,
     name: &str,
 ) -> Pubkey {
     let (program_keypair, instruction) =
-        load_and_finalize_deprecated_program(bank_client, loader_id, None, payer_keypair, name);
+        load_and_finalize_program(bank_client, loader_id, None, payer_keypair, name);
     let message = Message::new(&[instruction], Some(&payer_keypair.pubkey()));
     bank_client
         .send_and_confirm_message(&[payer_keypair, &program_keypair], message)
@@ -141,8 +159,8 @@ pub fn load_upgradeable_buffer<T: Client>(
     program
 }
 
-pub fn load_upgradeable_program<T: Client>(
-    bank_client: &T,
+pub fn load_upgradeable_program(
+    bank_client: &BankClient,
     from_keypair: &Keypair,
     buffer_keypair: &Keypair,
     executable_keypair: &Keypair,
@@ -181,6 +199,10 @@ pub fn load_upgradeable_program<T: Client>(
             message,
         )
         .unwrap();
+    bank_client.set_sysvar_for_tests(&Clock {
+        slot: 1,
+        ..Clock::default()
+    });
 }
 
 pub fn upgrade_program<T: Client>(

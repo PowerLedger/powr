@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 
-here="$(dirname "$0")"
-cargo="$(readlink -f "${here}/../cargo")"
-
-if [[ -z $cargo ]]; then
+if ! command -v cargo &> /dev/null ; then
   >&2 echo "Failed to find cargo. Mac readlink doesn't support -f. Consider switching
   to gnu readlink with 'brew install coreutils' and then symlink greadlink as
   /usr/local/bin/readlink."
@@ -42,12 +39,26 @@ else
   files="$(git ls-files :**Cargo.lock)"
 fi
 
+exclude_lockfiles=()
+exclude_lockfiles+=(sdk/cargo-build-sbf/tests/crates/fail/Cargo.lock)
+exclude_lockfiles+=(sdk/cargo-build-sbf/tests/crates/noop/Cargo.lock)
+
 for lock_file in $files; do
+  skip=false
+  for exclude in "${exclude_lockfiles[@]}"; do
+    if [[ "$exclude" == "$lock_file" ]]; then
+      skip=true
+      break
+    fi
+  done
+  if [[ "$skip" == "true" ]]; then
+    continue
+  fi
   if [[ -n $CI ]]; then
     echo "--- [$lock_file]: cargo " "${shifted_args[@]}" "$@"
   fi
 
-  if (set -x && cd "$(dirname "$lock_file")" && "$cargo" "${shifted_args[@]}" "$@"); then
+  if (set -x && cd "$(dirname "$lock_file")" && cargo "${shifted_args[@]}" "$@"); then
     # noop
     true
   else

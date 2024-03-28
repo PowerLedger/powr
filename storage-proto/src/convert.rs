@@ -15,9 +15,9 @@ use {
         transaction_context::TransactionReturnData,
     },
     solana_transaction_status::{
-        ConfirmedBlock, InnerInstructions, Reward, RewardType, TransactionByAddrInfo,
-        TransactionStatusMeta, TransactionTokenBalance, TransactionWithStatusMeta,
-        VersionedConfirmedBlock, VersionedTransactionWithStatusMeta,
+        ConfirmedBlock, InnerInstruction, InnerInstructions, Reward, RewardType,
+        TransactionByAddrInfo, TransactionStatusMeta, TransactionTokenBalance,
+        TransactionWithStatusMeta, VersionedConfirmedBlock, VersionedTransactionWithStatusMeta,
     },
     std::{
         convert::{TryFrom, TryInto},
@@ -25,6 +25,7 @@ use {
     },
 };
 
+#[allow(clippy::derive_partial_eq_without_eq)]
 pub mod generated {
     include!(concat!(
         env!("OUT_DIR"),
@@ -32,6 +33,7 @@ pub mod generated {
     ));
 }
 
+#[allow(clippy::derive_partial_eq_without_eq)]
 pub mod tx_by_addr {
     include!(concat!(
         env!("OUT_DIR"),
@@ -240,8 +242,9 @@ impl From<generated::Transaction> for VersionedTransaction {
             signatures: value
                 .signatures
                 .into_iter()
-                .map(|x| Signature::new(&x))
-                .collect(),
+                .map(Signature::try_from)
+                .collect::<Result<_, _>>()
+                .unwrap(),
             message: value.message.expect("message is required").into(),
         }
     }
@@ -653,6 +656,30 @@ impl From<generated::CompiledInstruction> for CompiledInstruction {
     }
 }
 
+impl From<InnerInstruction> for generated::InnerInstruction {
+    fn from(value: InnerInstruction) -> Self {
+        Self {
+            program_id_index: value.instruction.program_id_index as u32,
+            accounts: value.instruction.accounts,
+            data: value.instruction.data,
+            stack_height: value.stack_height,
+        }
+    }
+}
+
+impl From<generated::InnerInstruction> for InnerInstruction {
+    fn from(value: generated::InnerInstruction) -> Self {
+        Self {
+            instruction: CompiledInstruction {
+                program_id_index: value.program_id_index as u8,
+                accounts: value.accounts,
+                data: value.data,
+            },
+            stack_height: value.stack_height,
+        }
+    }
+}
+
 impl TryFrom<tx_by_addr::TransactionError> for TransactionError {
     type Error = &'static str;
 
@@ -716,8 +743,10 @@ impl TryFrom<tx_by_addr::TransactionError> for TransactionError {
                     47 => InstructionError::ArithmeticOverflow,
                     48 => InstructionError::UnsupportedSysvar,
                     49 => InstructionError::IllegalOwner,
-                    50 => InstructionError::MaxAccountsDataSizeExceeded,
+                    50 => InstructionError::MaxAccountsDataAllocationsExceeded,
                     51 => InstructionError::MaxAccountsExceeded,
+                    52 => InstructionError::MaxInstructionTraceLengthExceeded,
+                    53 => InstructionError::BuiltinProgramsMustConsumeComputeUnits,
                     _ => return Err("Invalid InstructionError"),
                 };
 
@@ -774,6 +803,9 @@ impl TryFrom<tx_by_addr::TransactionError> for TransactionError {
             27 => TransactionError::InvalidRentPayingAccount,
             28 => TransactionError::WouldExceedMaxVoteCostLimit,
             29 => TransactionError::WouldExceedAccountDataTotalLimit,
+            32 => TransactionError::MaxLoadedAccountsDataSizeExceeded,
+            33 => TransactionError::InvalidLoadedAccountsDataSizeLimit,
+            34 => TransactionError::ResanitizationNeeded,
             36 => TransactionError::UnbalancedTransaction,
             _ => return Err("Invalid TransactionError"),
         })
@@ -877,6 +909,15 @@ impl From<TransactionError> for tx_by_addr::TransactionError {
                 }
                 TransactionError::InsufficientFundsForRent { .. } => {
                     tx_by_addr::TransactionErrorType::InsufficientFundsForRent
+                }
+                TransactionError::MaxLoadedAccountsDataSizeExceeded => {
+                    tx_by_addr::TransactionErrorType::MaxLoadedAccountsDataSizeExceeded
+                }
+                TransactionError::InvalidLoadedAccountsDataSizeLimit => {
+                    tx_by_addr::TransactionErrorType::InvalidLoadedAccountsDataSizeLimit
+                }
+                TransactionError::ResanitizationNeeded => {
+                    tx_by_addr::TransactionErrorType::ResanitizationNeeded
                 }
                 TransactionError::UnbalancedTransaction => {
                     tx_by_addr::TransactionErrorType::UnbalancedTransaction
@@ -1035,11 +1076,17 @@ impl From<TransactionError> for tx_by_addr::TransactionError {
                             InstructionError::IllegalOwner => {
                                 tx_by_addr::InstructionErrorType::IllegalOwner
                             }
-                            InstructionError::MaxAccountsDataSizeExceeded => {
-                                tx_by_addr::InstructionErrorType::MaxAccountsDataSizeExceeded
+                            InstructionError::MaxAccountsDataAllocationsExceeded => {
+                                tx_by_addr::InstructionErrorType::MaxAccountsDataAllocationsExceeded
                             }
                             InstructionError::MaxAccountsExceeded => {
                                 tx_by_addr::InstructionErrorType::MaxAccountsExceeded
+                            }
+                            InstructionError::MaxInstructionTraceLengthExceeded => {
+                                tx_by_addr::InstructionErrorType::MaxInstructionTraceLengthExceeded
+                            }
+                            InstructionError::BuiltinProgramsMustConsumeComputeUnits => {
+                                tx_by_addr::InstructionErrorType::BuiltinProgramsMustConsumeComputeUnits
                             }
                         } as i32,
                         custom: match instruction_error {
@@ -1101,7 +1148,8 @@ impl TryFrom<tx_by_addr::TransactionByAddrInfo> for TransactionByAddrInfo {
             .transpose()?;
 
         Ok(Self {
-            signature: Signature::new(&transaction_by_addr.signature),
+            signature: Signature::try_from(transaction_by_addr.signature)
+                .map_err(|_| "Invalid Signature")?,
             err,
             index: transaction_by_addr.index,
             memo: transaction_by_addr
@@ -1128,7 +1176,7 @@ impl TryFrom<tx_by_addr::TransactionByAddr> for Vec<TransactionByAddrInfo> {
 
 #[cfg(test)]
 mod test {
-    use {super::*, enum_iterator::IntoEnumIterator};
+    use {super::*, enum_iterator::all};
 
     #[test]
     fn test_reward_type_encode() {
@@ -1162,7 +1210,11 @@ mod test {
     #[test]
     fn test_transaction_by_addr_encode() {
         let info = TransactionByAddrInfo {
-            signature: Signature::new(&bs58::decode("Nfo6rgemG1KLbk1xuNwfrQTsdxaGfLuWURHNRy9LYnDrubG7LFQZaA5obPNas9LQ6DdorJqxh2LxA3PsnWdkSrL").into_vec().unwrap()),
+            signature: bs58::decode("Nfo6rgemG1KLbk1xuNwfrQTsdxaGfLuWURHNRy9LYnDrubG7LFQZaA5obPNas9LQ6DdorJqxh2LxA3PsnWdkSrL")
+                .into_vec()
+                .map(Signature::try_from)
+                .unwrap()
+                .unwrap(),
             err: None,
             index: 5,
             memo: Some("string".to_string()),
@@ -1762,7 +1814,7 @@ mod test {
     fn test_error_enums() {
         let ix_index = 1;
         let custom_error = 42;
-        for error in tx_by_addr::TransactionErrorType::into_enum_iter() {
+        for error in all::<tx_by_addr::TransactionErrorType>() {
             match error {
                 tx_by_addr::TransactionErrorType::DuplicateInstruction
                 | tx_by_addr::TransactionErrorType::InsufficientFundsForRent => {
@@ -1776,11 +1828,11 @@ mod test {
                     let transaction_error: TransactionError = tx_by_addr_error
                         .clone()
                         .try_into()
-                        .unwrap_or_else(|_| panic!("{:?} conversion implemented?", error));
+                        .unwrap_or_else(|_| panic!("{error:?} conversion implemented?"));
                     assert_eq!(tx_by_addr_error, transaction_error.into());
                 }
                 tx_by_addr::TransactionErrorType::InstructionError => {
-                    for ix_error in tx_by_addr::InstructionErrorType::into_enum_iter() {
+                    for ix_error in all::<tx_by_addr::InstructionErrorType>() {
                         if ix_error != tx_by_addr::InstructionErrorType::Custom {
                             let tx_by_addr_error = tx_by_addr::TransactionError {
                                 transaction_error: error as i32,
@@ -1791,10 +1843,10 @@ mod test {
                                 }),
                                 transaction_details: None,
                             };
-                            let transaction_error: TransactionError =
-                                tx_by_addr_error.clone().try_into().unwrap_or_else(|_| {
-                                    panic!("{:?} conversion implemented?", ix_error)
-                                });
+                            let transaction_error: TransactionError = tx_by_addr_error
+                                .clone()
+                                .try_into()
+                                .unwrap_or_else(|_| panic!("{ix_error:?} conversion implemented?"));
                             assert_eq!(tx_by_addr_error, transaction_error.into());
                         } else {
                             let tx_by_addr_error = tx_by_addr::TransactionError {
@@ -1823,7 +1875,7 @@ mod test {
                     let transaction_error: TransactionError = tx_by_addr_error
                         .clone()
                         .try_into()
-                        .unwrap_or_else(|_| panic!("{:?} conversion implemented?", error));
+                        .unwrap_or_else(|_| panic!("{error:?} conversion implemented?"));
                     assert_eq!(tx_by_addr_error, transaction_error.into());
                 }
             }

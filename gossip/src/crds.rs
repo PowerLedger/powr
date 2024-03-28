@@ -27,6 +27,7 @@
 use {
     crate::{
         crds_entry::CrdsEntry,
+        crds_gossip_pull::CrdsTimeouts,
         crds_shards::CrdsShards,
         crds_value::{CrdsData, CrdsValue, CrdsValueLabel},
         legacy_contact_info::LegacyContactInfo as ContactInfo,
@@ -43,6 +44,7 @@ use {
         clock::Slot,
         hash::{hash, Hash},
         pubkey::Pubkey,
+        signature::Signature,
     },
     std::{
         cmp::Ordering,
@@ -55,6 +57,13 @@ use {
 const CRDS_SHARDS_BITS: u32 = 12;
 // Number of vote slots to track in an lru-cache for metrics.
 const VOTE_SLOTS_METRICS_CAP: usize = 100;
+// Required number of leading zero bits for crds signature to get reported to influx
+// mean new push messages received per minute per node
+//      testnet: ~500k,
+//      mainnet: ~280k
+// target: 1 signature reported per minute
+// log2(500k) = ~18.9.
+const SIGNATURE_SAMPLE_LEADING_ZEROS: u32 = 19;
 
 pub struct Crds {
     /// Stores the map of labels and values
@@ -81,19 +90,20 @@ pub struct Crds {
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum CrdsError {
+    DuplicatePush(/*num dups:*/ u8),
     InsertFailed,
     UnknownStakes,
 }
 
 #[derive(Clone, Copy)]
-pub enum GossipRoute {
+pub enum GossipRoute<'a> {
     LocalMessage,
     PullRequest,
     PullResponse,
-    PushMessage,
+    PushMessage(/*from:*/ &'a Pubkey),
 }
 
-type CrdsCountsArray = [usize; 11];
+type CrdsCountsArray = [usize; 12];
 
 pub(crate) struct CrdsDataStats {
     pub(crate) counts: CrdsCountsArray,
@@ -117,6 +127,8 @@ pub struct VersionedCrdsValue {
     pub(crate) local_timestamp: u64,
     /// value hash
     pub(crate) value_hash: Hash,
+    /// Number of times duplicates of this value are recevied from gossip push.
+    num_push_dups: u8,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -142,6 +154,7 @@ impl VersionedCrdsValue {
             value,
             local_timestamp,
             value_hash,
+            num_push_dups: 0u8,
         }
     }
 }
@@ -218,7 +231,7 @@ impl Crds {
                 match &value.value.data {
                     CrdsData::LegacyContactInfo(node) => {
                         self.nodes.insert(entry_index);
-                        self.shred_versions.insert(pubkey, node.shred_version);
+                        self.shred_versions.insert(pubkey, node.shred_version());
                     }
                     CrdsData::Vote(_, _) => {
                         self.votes.insert(value.ordinal, entry_index);
@@ -244,7 +257,7 @@ impl Crds {
                 self.shards.insert(entry_index, &value);
                 match &value.value.data {
                     CrdsData::LegacyContactInfo(node) => {
-                        self.shred_versions.insert(pubkey, node.shred_version);
+                        self.shred_versions.insert(pubkey, node.shred_version());
                         // self.nodes does not need to be updated since the
                         // entry at this index was and stays contact-info.
                         debug_assert_matches!(
@@ -276,17 +289,25 @@ impl Crds {
                 entry.insert(value);
                 Ok(())
             }
-            Entry::Occupied(entry) => {
+            Entry::Occupied(mut entry) => {
                 self.stats.lock().unwrap().record_fail(&value, route);
                 trace!(
                     "INSERT FAILED data: {} new.wallclock: {}",
                     value.value.label(),
                     value.value.wallclock(),
                 );
+                // Identify if the message is outdated (as opposed to
+                // duplicate) by comparing value hashes.
                 if entry.get().value_hash != value.value_hash {
                     self.purged.push_back((value.value_hash, now));
+                    Err(CrdsError::InsertFailed)
+                } else if matches!(route, GossipRoute::PushMessage(_)) {
+                    let entry = entry.get_mut();
+                    entry.num_push_dups = entry.num_push_dups.saturating_add(1);
+                    Err(CrdsError::DuplicatePush(entry.num_push_dups))
+                } else {
+                    Err(CrdsError::InsertFailed)
                 }
-                Err(CrdsError::InsertFailed)
             }
         }
     }
@@ -460,34 +481,40 @@ impl Crds {
         &self,
         thread_pool: &ThreadPool,
         now: u64,
-        timeouts: &HashMap<Pubkey, u64>,
+        timeouts: &CrdsTimeouts,
     ) -> Vec<CrdsValueLabel> {
-        let default_timeout = *timeouts
-            .get(&Pubkey::default())
-            .expect("must have default timeout");
         // Given an index of all crd values associated with a pubkey,
         // returns crds labels of old values to be evicted.
         let evict = |pubkey, index: &IndexSet<usize>| {
-            let timeout = timeouts.get(pubkey).copied().unwrap_or(default_timeout);
+            let timeout = timeouts[pubkey];
             // If the origin's contact-info hasn't expired yet then preserve
             // all associated values.
             let origin = CrdsValueLabel::LegacyContactInfo(*pubkey);
             if let Some(origin) = self.table.get(&origin) {
-                if now < origin.local_timestamp.saturating_add(timeout) {
+                if origin
+                    .value
+                    .wallclock()
+                    .min(origin.local_timestamp)
+                    .saturating_add(timeout)
+                    > now
+                {
                     return vec![];
                 }
             }
             // Otherwise check each value's timestamp individually.
             index
                 .into_iter()
-                .filter_map(|ix| {
-                    let (label, value) = self.table.get_index(*ix).unwrap();
-                    if value.local_timestamp.saturating_add(timeout) <= now {
-                        Some(label.clone())
-                    } else {
-                        None
-                    }
+                .map(|&ix| self.table.get_index(ix).unwrap())
+                .filter(|(_, entry)| {
+                    entry
+                        .value
+                        .wallclock()
+                        .min(entry.local_timestamp)
+                        .saturating_add(timeout)
+                        <= now
                 })
+                .map(|(label, _)| label)
+                .cloned()
                 .collect::<Vec<_>>()
         };
         thread_pool.install(|| {
@@ -630,24 +657,6 @@ impl Crds {
     pub(crate) fn take_stats(&self) -> CrdsStats {
         std::mem::take(&mut self.stats.lock().unwrap())
     }
-
-    // Only for tests and simulations.
-    pub(crate) fn mock_clone(&self) -> Self {
-        Self {
-            table: self.table.clone(),
-            cursor: self.cursor,
-            shards: self.shards.clone(),
-            nodes: self.nodes.clone(),
-            votes: self.votes.clone(),
-            epoch_slots: self.epoch_slots.clone(),
-            duplicate_shreds: self.duplicate_shreds.clone(),
-            records: self.records.clone(),
-            entries: self.entries.clone(),
-            purged: self.purged.clone(),
-            shred_versions: self.shred_versions.clone(),
-            stats: Mutex::<CrdsStats>::default(),
-        }
-    }
 }
 
 impl Default for CrdsDataStats {
@@ -661,13 +670,38 @@ impl Default for CrdsDataStats {
 }
 
 impl CrdsDataStats {
-    fn record_insert(&mut self, entry: &VersionedCrdsValue) {
+    fn record_insert(&mut self, entry: &VersionedCrdsValue, route: GossipRoute) {
         self.counts[Self::ordinal(entry)] += 1;
         if let CrdsData::Vote(_, vote) = &entry.value.data {
             if let Some(slot) = vote.slot() {
                 let num_nodes = self.votes.get(&slot).copied().unwrap_or_default();
                 self.votes.put(slot, num_nodes + 1);
             }
+        }
+
+        let GossipRoute::PushMessage(from) = route else {
+            return;
+        };
+
+        if should_report_message_signature(&entry.value.signature) {
+            datapoint_info!(
+                "gossip_crds_sample",
+                (
+                    "origin",
+                    entry.value.pubkey().to_string().get(..8),
+                    Option<String>
+                ),
+                (
+                    "signature",
+                    entry.value.signature.to_string().get(..8),
+                    Option<String>
+                ),
+                (
+                    "from",
+                    from.to_string().get(..8),
+                    Option<String>
+                )
+            );
         }
     }
 
@@ -680,14 +714,16 @@ impl CrdsDataStats {
             CrdsData::LegacyContactInfo(_) => 0,
             CrdsData::Vote(_, _) => 1,
             CrdsData::LowestSlot(_, _) => 2,
-            CrdsData::SnapshotHashes(_) => 3,
+            CrdsData::LegacySnapshotHashes(_) => 3,
             CrdsData::AccountsHashes(_) => 4,
             CrdsData::EpochSlots(_, _) => 5,
             CrdsData::LegacyVersion(_) => 6,
             CrdsData::Version(_) => 7,
             CrdsData::NodeInstance(_) => 8,
             CrdsData::DuplicateShred(_, _) => 9,
-            CrdsData::IncrementalSnapshotHashes(_) => 10,
+            CrdsData::SnapshotHashes(_) => 10,
+            CrdsData::ContactInfo(_) => 11,
+            // Update CrdsCountsArray if new items are added here.
         }
     }
 }
@@ -697,8 +733,8 @@ impl CrdsStats {
         match route {
             GossipRoute::LocalMessage => (),
             GossipRoute::PullRequest => (),
-            GossipRoute::PushMessage => self.push.record_insert(entry),
-            GossipRoute::PullResponse => self.pull.record_insert(entry),
+            GossipRoute::PushMessage(_) => self.push.record_insert(entry, route),
+            GossipRoute::PullResponse => self.pull.record_insert(entry, route),
         }
     }
 
@@ -706,20 +742,26 @@ impl CrdsStats {
         match route {
             GossipRoute::LocalMessage => (),
             GossipRoute::PullRequest => (),
-            GossipRoute::PushMessage => self.push.record_fail(entry),
+            GossipRoute::PushMessage(_) => self.push.record_fail(entry),
             GossipRoute::PullResponse => self.pull.record_fail(entry),
         }
     }
+}
+
+/// check if first SIGNATURE_SAMPLE_LEADING_ZEROS bits of signature are 0
+#[inline]
+fn should_report_message_signature(signature: &Signature) -> bool {
+    let Some(Ok(bytes)) = signature.as_ref().get(..8).map(<[u8; 8]>::try_from) else {
+        return false;
+    };
+    u64::from_le_bytes(bytes).trailing_zeros() >= SIGNATURE_SAMPLE_LEADING_ZEROS
 }
 
 #[cfg(test)]
 mod tests {
     use {
         super::*,
-        crate::{
-            crds_value::{new_rand_timestamp, NodeInstance, SnapshotHashes},
-            socketaddr,
-        },
+        crate::crds_value::{new_rand_timestamp, LegacySnapshotHashes, NodeInstance},
         rand::{thread_rng, Rng, SeedableRng},
         rand_chacha::ChaChaRng,
         rayon::ThreadPoolBuilder,
@@ -727,7 +769,7 @@ mod tests {
             signature::{Keypair, Signer},
             timing::timestamp,
         },
-        std::{collections::HashSet, iter::repeat_with},
+        std::{collections::HashSet, iter::repeat_with, net::Ipv4Addr, time::Duration},
     };
 
     #[test]
@@ -779,41 +821,38 @@ mod tests {
     #[test]
     fn test_update_timestamp() {
         let mut crds = Crds::default();
-        let val = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ContactInfo::new_localhost(
-            &Pubkey::default(),
-            0,
-        )));
+        let val1 = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(
+            ContactInfo::new_localhost(&Pubkey::default(), 0),
+        ));
+        let val1_hash = hash(&serialize(&val1).unwrap());
         assert_eq!(
-            crds.insert(val.clone(), 0, GossipRoute::LocalMessage),
+            crds.insert(val1.clone(), 0, GossipRoute::LocalMessage),
             Ok(())
         );
-        assert_eq!(crds.table[&val.label()].ordinal, 0);
+        assert_eq!(crds.table[&val1.label()].local_timestamp, 0);
+        assert_eq!(crds.table[&val1.label()].ordinal, 0);
 
-        let val2 = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ContactInfo::default()));
-        let value_hash = hash(&serialize(&val2).unwrap());
-        assert_eq!(val2.label().pubkey(), val.label().pubkey());
+        // `val2` is expected to overwrite `val1` based on the `wallclock` value.
+        let val2 = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(
+            ContactInfo::new_localhost(&Pubkey::default(), 1),
+        ));
+        assert_eq!(val2.label().pubkey(), val1.label().pubkey());
         assert_eq!(
-            crds.insert(val2.clone(), 0, GossipRoute::LocalMessage),
+            crds.insert(val2.clone(), 1, GossipRoute::LocalMessage),
             Ok(())
         );
+        assert_eq!(*crds.purged.back().unwrap(), (val1_hash, 1));
 
-        crds.update_record_timestamp(&val.label().pubkey(), 2);
-        assert_eq!(crds.table[&val.label()].local_timestamp, 2);
-        assert_eq!(crds.table[&val.label()].ordinal, 1);
+        assert_eq!(crds.table[&val2.label()].local_timestamp, 1);
+        assert_eq!(crds.table[&val2.label()].ordinal, 1);
+
+        crds.update_record_timestamp(&val2.label().pubkey(), 2);
         assert_eq!(crds.table[&val2.label()].local_timestamp, 2);
         assert_eq!(crds.table[&val2.label()].ordinal, 1);
 
-        crds.update_record_timestamp(&val.label().pubkey(), 1);
-        assert_eq!(crds.table[&val.label()].local_timestamp, 2);
-        assert_eq!(crds.table[&val.label()].ordinal, 1);
-
-        let mut ci = ContactInfo::default();
-        ci.wallclock += 1;
-        let val3 = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ci));
-        assert_eq!(crds.insert(val3, 3, GossipRoute::LocalMessage), Ok(()));
-        assert_eq!(*crds.purged.back().unwrap(), (value_hash, 3));
-        assert_eq!(crds.table[&val2.label()].local_timestamp, 3);
-        assert_eq!(crds.table[&val2.label()].ordinal, 2);
+        crds.update_record_timestamp(&val2.label().pubkey(), 1);
+        assert_eq!(crds.table[&val2.label()].local_timestamp, 2);
+        assert_eq!(crds.table[&val2.label()].ordinal, 1);
     }
 
     #[test]
@@ -878,22 +917,42 @@ mod tests {
     fn test_find_old_records_default() {
         let thread_pool = ThreadPoolBuilder::new().build().unwrap();
         let mut crds = Crds::default();
-        let val = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ContactInfo::default()));
+        let val = {
+            let node = ContactInfo::new_localhost(&Pubkey::default(), /*now:*/ 1);
+            CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(node))
+        };
         assert_eq!(
             crds.insert(val.clone(), 1, GossipRoute::LocalMessage),
             Ok(())
         );
-        let mut set = HashMap::new();
-        set.insert(Pubkey::default(), 0);
-        assert!(crds.find_old_labels(&thread_pool, 0, &set).is_empty());
-        set.insert(Pubkey::default(), 1);
+        let pubkey = Pubkey::new_unique();
+        let stakes = HashMap::from([(Pubkey::new_unique(), 1u64)]);
+        let epoch_duration = Duration::from_secs(48 * 3600);
+        let timeouts = CrdsTimeouts::new(
+            pubkey,
+            0u64, // default_timeout,
+            epoch_duration,
+            &stakes,
+        );
+        assert!(crds.find_old_labels(&thread_pool, 0, &timeouts).is_empty());
+        let timeouts = CrdsTimeouts::new(
+            pubkey,
+            1u64, // default_timeout,
+            epoch_duration,
+            &stakes,
+        );
         assert_eq!(
-            crds.find_old_labels(&thread_pool, 2, &set),
+            crds.find_old_labels(&thread_pool, 2, &timeouts),
             vec![val.label()]
         );
-        set.insert(Pubkey::default(), 2);
+        let timeouts = CrdsTimeouts::new(
+            pubkey,
+            2u64, // default_timeout,
+            epoch_duration,
+            &stakes,
+        );
         assert_eq!(
-            crds.find_old_labels(&thread_pool, 4, &set),
+            crds.find_old_labels(&thread_pool, 4, &timeouts),
             vec![val.label()]
         );
     }
@@ -902,24 +961,51 @@ mod tests {
         let thread_pool = ThreadPoolBuilder::new().build().unwrap();
         let mut rng = thread_rng();
         let mut crds = Crds::default();
-        let mut timeouts = HashMap::new();
         let val = CrdsValue::new_rand(&mut rng, None);
-        timeouts.insert(Pubkey::default(), 3);
+        let mut stakes = HashMap::from([(Pubkey::new_unique(), 1u64)]);
+        let timeouts = CrdsTimeouts::new(
+            Pubkey::new_unique(),
+            3,                              // default_timeout
+            Duration::from_secs(48 * 3600), // epoch_duration
+            &stakes,
+        );
         assert_eq!(
             crds.insert(val.clone(), 0, GossipRoute::LocalMessage),
             Ok(())
         );
         assert!(crds.find_old_labels(&thread_pool, 2, &timeouts).is_empty());
-        timeouts.insert(val.pubkey(), 1);
+        stakes.insert(val.pubkey(), 1u64);
+        let timeouts = CrdsTimeouts::new(
+            Pubkey::new_unique(),
+            1,                        // default_timeout
+            Duration::from_millis(1), // epoch_duration
+            &stakes,
+        );
         assert_eq!(
             crds.find_old_labels(&thread_pool, 2, &timeouts),
             vec![val.label()]
         );
-        timeouts.insert(val.pubkey(), u64::MAX);
+        let timeouts = CrdsTimeouts::new(
+            Pubkey::new_unique(),
+            3,                              // default_timeout
+            Duration::from_secs(48 * 3600), // epoch_duration
+            &stakes,
+        );
         assert!(crds.find_old_labels(&thread_pool, 2, &timeouts).is_empty());
-        timeouts.insert(Pubkey::default(), 1);
+        let timeouts = CrdsTimeouts::new(
+            Pubkey::new_unique(),
+            1,                              // default_timeout
+            Duration::from_secs(48 * 3600), // epoch_duration
+            &stakes,
+        );
         assert!(crds.find_old_labels(&thread_pool, 2, &timeouts).is_empty());
-        timeouts.remove(&val.pubkey());
+        stakes.remove(&val.pubkey());
+        let timeouts = CrdsTimeouts::new(
+            Pubkey::new_unique(),
+            1,                              // default_timeout
+            Duration::from_secs(48 * 3600), // epoch_duration
+            &stakes,
+        );
         assert_eq!(
             crds.find_old_labels(&thread_pool, 2, &timeouts),
             vec![val.label()]
@@ -935,46 +1021,61 @@ mod tests {
             crds.insert(val.clone(), 1, GossipRoute::LocalMessage),
             Ok(_)
         );
-        let mut set = HashMap::new();
-        set.insert(Pubkey::default(), 1);
+        let stakes = HashMap::from([(Pubkey::new_unique(), 1u64)]);
+        let timeouts = CrdsTimeouts::new(
+            Pubkey::new_unique(),
+            1,                              // default_timeout
+            Duration::from_secs(48 * 3600), // epoch_duration
+            &stakes,
+        );
         assert_eq!(
-            crds.find_old_labels(&thread_pool, 2, &set),
+            crds.find_old_labels(&thread_pool, 2, &timeouts),
             vec![val.label()]
         );
         crds.remove(&val.label(), /*now=*/ 0);
-        assert!(crds.find_old_labels(&thread_pool, 2, &set).is_empty());
+        assert!(crds.find_old_labels(&thread_pool, 2, &timeouts).is_empty());
     }
     #[test]
     fn test_find_old_records_staked() {
         let thread_pool = ThreadPoolBuilder::new().build().unwrap();
         let mut crds = Crds::default();
-        let val = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(ContactInfo::default()));
+        let val = {
+            let node = ContactInfo::new_localhost(&Pubkey::default(), /*now:*/ 1);
+            CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(node))
+        };
         assert_eq!(
             crds.insert(val.clone(), 1, GossipRoute::LocalMessage),
             Ok(())
         );
-        let mut set = HashMap::new();
+        let mut stakes = HashMap::from([(Pubkey::new_unique(), 1u64)]);
+        let timeouts = CrdsTimeouts::new(
+            Pubkey::new_unique(),
+            0,                              // default_timeout
+            Duration::from_secs(48 * 3600), // epoch_duration
+            &stakes,
+        );
         //now < timestamp
-        set.insert(Pubkey::default(), 0);
-        set.insert(val.pubkey(), 0);
-        assert!(crds.find_old_labels(&thread_pool, 0, &set).is_empty());
+        assert!(crds.find_old_labels(&thread_pool, 0, &timeouts).is_empty());
 
         //pubkey shouldn't expire since its timeout is MAX
-        set.insert(val.pubkey(), std::u64::MAX);
-        assert!(crds.find_old_labels(&thread_pool, 2, &set).is_empty());
-
-        //default has max timeout, but pubkey should still expire
-        set.insert(Pubkey::default(), std::u64::MAX);
-        set.insert(val.pubkey(), 1);
-        assert_eq!(
-            crds.find_old_labels(&thread_pool, 2, &set),
-            vec![val.label()]
+        stakes.insert(val.pubkey(), 1u64);
+        let timeouts = CrdsTimeouts::new(
+            Pubkey::new_unique(),
+            0,                              // default_timeout
+            Duration::from_secs(48 * 3600), // epoch_duration
+            &stakes,
         );
+        assert!(crds.find_old_labels(&thread_pool, 2, &timeouts).is_empty());
 
-        set.insert(val.pubkey(), 2);
-        assert!(crds.find_old_labels(&thread_pool, 2, &set).is_empty());
+        let timeouts = CrdsTimeouts::new(
+            Pubkey::new_unique(),
+            0,                        // default_timeout
+            Duration::from_millis(2), // epoch_duration
+            &stakes,
+        );
+        assert!(crds.find_old_labels(&thread_pool, 2, &timeouts).is_empty());
         assert_eq!(
-            crds.find_old_labels(&thread_pool, 3, &set),
+            crds.find_old_labels(&thread_pool, 3, &timeouts),
             vec![val.label()]
         );
     }
@@ -1163,13 +1264,9 @@ mod tests {
         assert!(num_inserts > crds.table.len());
         let (num_nodes, num_votes, num_epoch_slots) = check_crds_value_indices(&mut rng, &crds);
         assert!(num_nodes * 3 < crds.table.len());
-        assert!(num_nodes > 100, "num nodes: {}", num_nodes);
-        assert!(num_votes > 100, "num votes: {}", num_votes);
-        assert!(
-            num_epoch_slots > 100,
-            "num epoch slots: {}",
-            num_epoch_slots
-        );
+        assert!(num_nodes > 100, "num nodes: {num_nodes}");
+        assert!(num_votes > 100, "num votes: {num_votes}");
+        assert!(num_epoch_slots > 100, "num epoch slots: {num_epoch_slots}");
         // Remove values one by one and assert that nodes indices stay valid.
         while !crds.table.is_empty() {
             let index = rng.gen_range(0, crds.table.len());
@@ -1229,8 +1326,8 @@ mod tests {
         assert_eq!(crds.get_shred_version(&pubkey), None);
         // Initial insertion of a node with shred version:
         let mut node = ContactInfo::new_rand(&mut rng, Some(pubkey));
-        let wallclock = node.wallclock;
-        node.shred_version = 42;
+        let wallclock = node.wallclock();
+        node.set_shred_version(42);
         let node = CrdsData::LegacyContactInfo(node);
         let node = CrdsValue::new_unsigned(node);
         assert_eq!(
@@ -1240,8 +1337,8 @@ mod tests {
         assert_eq!(crds.get_shred_version(&pubkey), Some(42));
         // An outdated  value should not update shred-version:
         let mut node = ContactInfo::new_rand(&mut rng, Some(pubkey));
-        node.wallclock = wallclock - 1; // outdated.
-        node.shred_version = 8;
+        node.set_wallclock(wallclock - 1); // outdated.
+        node.set_shred_version(8);
         let node = CrdsData::LegacyContactInfo(node);
         let node = CrdsValue::new_unsigned(node);
         assert_eq!(
@@ -1251,8 +1348,8 @@ mod tests {
         assert_eq!(crds.get_shred_version(&pubkey), Some(42));
         // Update shred version:
         let mut node = ContactInfo::new_rand(&mut rng, Some(pubkey));
-        node.wallclock = wallclock + 1; // so that it overrides the prev one.
-        node.shred_version = 8;
+        node.set_wallclock(wallclock + 1); // so that it overrides the prev one.
+        node.set_shred_version(8);
         let node = CrdsData::LegacyContactInfo(node);
         let node = CrdsValue::new_unsigned(node);
         assert_eq!(
@@ -1261,8 +1358,8 @@ mod tests {
         );
         assert_eq!(crds.get_shred_version(&pubkey), Some(8));
         // Add other crds values with the same pubkey.
-        let val = SnapshotHashes::new_rand(&mut rng, Some(pubkey));
-        let val = CrdsData::SnapshotHashes(val);
+        let val = LegacySnapshotHashes::new_rand(&mut rng, Some(pubkey));
+        let val = CrdsData::LegacySnapshotHashes(val);
         let val = CrdsValue::new_unsigned(val);
         assert_eq!(
             crds.insert(val, timestamp(), GossipRoute::LocalMessage),
@@ -1275,7 +1372,7 @@ mod tests {
         assert_eq!(crds.get::<&ContactInfo>(pubkey), None);
         assert_eq!(crds.get_shred_version(&pubkey), Some(8));
         // Remove the remaining entry with the same pubkey.
-        crds.remove(&CrdsValueLabel::SnapshotHashes(pubkey), timestamp());
+        crds.remove(&CrdsValueLabel::LegacySnapshotHashes(pubkey), timestamp());
         assert_eq!(crds.get_records(&pubkey).count(), 0);
         assert_eq!(crds.get_shred_version(&pubkey), None);
     }
@@ -1349,17 +1446,19 @@ mod tests {
             crds.insert(val.clone(), 1, GossipRoute::LocalMessage),
             Ok(_)
         );
-        let mut set = HashMap::new();
-
-        //default has max timeout, but pubkey should still expire
-        set.insert(Pubkey::default(), std::u64::MAX);
-        set.insert(val.pubkey(), 1);
+        let stakes = HashMap::from([(Pubkey::new_unique(), 1u64)]);
+        let timeouts = CrdsTimeouts::new(
+            Pubkey::new_unique(),
+            1,                        // default_timeout
+            Duration::from_millis(1), // epoch_duration
+            &stakes,
+        );
         assert_eq!(
-            crds.find_old_labels(&thread_pool, 2, &set),
+            crds.find_old_labels(&thread_pool, 2, &timeouts),
             vec![val.label()]
         );
         crds.remove(&val.label(), /*now=*/ 0);
-        assert!(crds.find_old_labels(&thread_pool, 2, &set).is_empty());
+        assert!(crds.find_old_labels(&thread_pool, 2, &timeouts).is_empty());
     }
 
     #[test]
@@ -1387,7 +1486,7 @@ mod tests {
         let v2 = VersionedCrdsValue::new(
             {
                 let mut contact_info = ContactInfo::new_localhost(&Pubkey::default(), 0);
-                contact_info.rpc = socketaddr!("0.0.0.0:0");
+                contact_info.set_rpc((Ipv4Addr::LOCALHOST, 1244)).unwrap();
                 CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(contact_info))
             },
             Cursor::default(),
