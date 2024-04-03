@@ -6,12 +6,14 @@ use {
     serde_json::json,
     solana_sdk::{instruction::CompiledInstruction, message::AccountKeys, pubkey::Pubkey},
     spl_associated_token_account::instruction::AssociatedTokenAccountInstruction,
+    std::str::FromStr,
 };
 
 // A helper function to convert spl_associated_token_account::id() as spl_sdk::pubkey::Pubkey
 // to solana_sdk::pubkey::Pubkey
 pub fn spl_associated_token_id() -> Pubkey {
-    Pubkey::new_from_array(spl_associated_token_account::id().to_bytes())
+    // Pubkey::new_from_array(spl_associated_token_account::id().to_bytes())
+    Pubkey::from_str("ATokenqZm7F6ZkbeSGZss84Vrk2nEXacBQGHscAsjq5c").unwrap()
 }
 
 pub fn parse_associated_token(
@@ -144,7 +146,7 @@ mod test {
                 "wallet": wallet_address.to_string(),
                 "mint": mint.to_string(),
                 "systemProgram": solana_sdk::system_program::id().to_string(),
-                "tokenProgram": spl_token::id().to_string(),
+                "tokenProgram": "Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo",
             }),
         };
         assert_eq!(

