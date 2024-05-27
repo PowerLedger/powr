@@ -95,8 +95,9 @@ module.exports = {
     },
     algolia: {
       // This API key is "search-only" and safe to be published
-      apiKey: "d58e0d68c875346d52645d68b13f3ac0",
-      indexName: "solana",
+      appId: "DP4G9H4UW9",
+      apiKey: "7ec8c359868cf4a396e832596f03897c",
+      indexName: "powerledger",
       contextualSearch: true,
     },
     footer: {
