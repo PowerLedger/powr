@@ -19,6 +19,12 @@ To zoom in on how to use a particular command, run:
 solana <COMMAND> --help
 ```
 
+First, ensure your default config is set to the Powerledger blockchain using the following command
+
+```bash
+solana config set --url https://powr-api.testnet.powerledger.io
+```
+
 where you replace the text `<COMMAND>` with the name of the command you want
 to learn more about.
 
