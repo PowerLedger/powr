@@ -2,13 +2,12 @@
 title: Introduction
 ---
 
-## What is Powerledger Chain?
-<!-- TODO: CHECK FOUNDATION NAME  -->
-Powerledger chain is a blockchain based on the open source project Solana, implementing a new, high-performance, permissionless blockchain. The Powerledger foundation is based in Zug, Switzerland and maintains the open source project.
+## What is the Powerledger blockchain?
+The Powerledger blockchain is a blockchain based on the open source project Solana, implementing a new, high-performance, permissionless blockchain. Powerledger is based in Zug, Switzerland and maintains the open source project.
 
-## Why Powerledger Chain?
+## Why use the Powerledger blockchain?
 
-It is possible for a centralized database to process 710,000 transactions per second on a standard gigabit network if the transactions are, on average, no more than 176 bytes. A centralized database can also replicate itself and maintain high availability without significantly compromising that transaction rate using the distributed system technique known as Optimistic Concurrency Control [\[H.T.Kung, J.T.Robinson (1981)\]](http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.65.4735). The blockchain technology of the Powerledger chain is demonstrating that these same theoretical limits apply just as well to blockchain on an adversarial network. The key ingredient? Finding a way to share time when nodes cannot rely upon one another. Once nodes can rely upon time, suddenly ~40 years of distributed systems research becomes applicable to blockchain!
+It is possible for a centralized database to process 710,000 transactions per second on a standard gigabit network if the transactions are, on average, no more than 176 bytes. A centralized database can also replicate itself and maintain high availability without significantly compromising that transaction rate using the distributed system technique known as Optimistic Concurrency Control [\[H.T.Kung, J.T.Robinson (1981)\]](http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.65.4735). The blockchain technology of the Powerledger network is demonstrating that these same theoretical limits apply just as well to blockchain on an adversarial network. The key ingredient? Finding a way to share time when nodes cannot rely upon one another. Once nodes can rely upon time, suddenly ~40 years of distributed systems research becomes applicable to blockchain!
 
 > Perhaps the most striking difference between algorithms obtained by our method and ones based upon timeout is that using timeout produces a traditional distributed algorithm in which the processes operate asynchronously, while our method produces a globally synchronous one in which every process does the same thing at (approximately) the same time. Our method seems to contradict the whole purpose of distributed processing, which is to permit different processes to operate independently and perform different functions. However, if a distributed system is really a single system, then the processes must be synchronized in some way. Conceptually, the easiest way to synchronize processes is to get them all to do the same thing at the same time. Therefore, our method is used to implement a kernel that performs the necessary synchronization--for example, making sure that two different processes do not try to modify a file at the same time. Processes might spend only a small fraction of their time executing the synchronizing kernel; the rest of the time, they can operate independently--e.g., accessing different files. This is an approach we have advocated even when fault-tolerance is not required. The method's basic simplicity makes it easier to understand the precise properties of a system, which is crucial if one is to know just how fault-tolerant the system is. [\[L.Lamport (1984)\]](http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.71.1078)
 
@@ -16,7 +15,7 @@ Furthermore, and much to our surprise, it can be implemented using a mechanism t
 
 ## Documentation Overview
 
-The Powerledger chain docs are based on the Solana open source docs, and describe the Powerledger open source project, a blockchain built from the ground up for scale. They cover why Powerledger chain is useful, how to use it and how it works. The goal of the Solana technology architecture is to demonstrate there exists a set of software algorithms that when used in combination to implement a blockchain, removes software as a performance bottleneck, allowing transaction throughput to scale proportionally with network bandwidth. The architecture goes on to satisfy all three desirable properties of a proper blockchain: it is scalable, secure and decentralized.
+The Powerledger blockcchain documentation is based on the Solana open source docs, and describe the Powerledger open source project, a blockchain built from the ground up for scale. They cover why Powerledger chain is useful, how to use it and how it works. The goal of the Solana technology architecture is to demonstrate there exists a set of software algorithms that when used in combination to implement a blockchain, removes software as a performance bottleneck, allowing transaction throughput to scale proportionally with network bandwidth. The architecture goes on to satisfy all three desirable properties of a proper blockchain: it is scalable, secure and decentralized.
 
 The architecture describes a theoretical upper bound of 710 thousand transactions per second \(tps\) on a standard gigabit network and 28.4 million tps on 40 gigabit. Furthermore, the architecture supports safe, concurrent execution of programs authored in general-purpose programming languages such as C or Rust.
 
@@ -24,12 +23,11 @@ The architecture describes a theoretical upper bound of 710 thousand transaction
 
 A cluster is a set of computers that work together and can be viewed from the outside as a single system. A Solana cluster is a set of independently owned computers working together \(and sometimes against each other\) to verify the output of untrusted, user-submitted programs. A Solana cluster can be utilized any time a user wants to preserve an immutable record of events in time or programmatic interpretations of those events. One use is to track which of the computers did meaningful work to keep the cluster running. Another use might be to track the possession of real-world assets. In each case, the cluster produces a record of events called the ledger. It will be preserved for the lifetime of the cluster. As long as someone somewhere in the world maintains a copy of the ledger, the output of its programs \(which may contain a record of who possesses what\) will forever be reproducible, independent of the organization that launched it.
 
-Powerledger chain is runnints as its own Solana based cluster
+The Powerledger blockchain is an instance of a Solana based cluster
 
-## What are SOLs?
-<!-- TODO: Check PLBC native name -->
+## What is POWR?
 
-A PLBC is the name of Powerleder chain's native token, which can be passed to nodes in the Powerledger cluster in exchange for running an on-chain program or validating its output. The system may perform micropayments of fractional PLBCs, which are called _PLBClaports_. A PLBClamport has a value of 0.000000001 PLBC.
+POWR is the name of Powerleder chain's native token, which can be passed to nodes in the Powerledger cluster in exchange for running an on-chain program or validating its output. The system may perform micropayments of fractional PLBCs, which are called _lamports_. A lamport has a value of 0.000000001 POWR.
 
 ## Disclaimer
 

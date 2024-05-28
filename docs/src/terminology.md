@@ -233,7 +233,7 @@ The component of a [validator](#validator) responsible for [program](#program) e
 
 ## Sealevel
 
-Powerleder chain's parallel smart contracts run-time based on the Solana open source Sealevel runtime
+Powerledger Blockchain's parallel smart contracts run-time based on the Solana open source Sealevel runtime
 
 ## shred
 
@@ -261,7 +261,7 @@ Collectively, slots create a logical clock. Slots are ordered sequentially and n
 
 A program on a blockchain that can read and modify accounts over which it has control.
 
-## plbc
+## POWR
 
 The [native token](#native-token) of the Powerledger [cluster](#cluster).
 
@@ -269,10 +269,6 @@ The [native token](#native-token) of the Powerledger [cluster](#cluster).
 ## POWR Program Library (SPL)
 
 A [library of programs](https://spl.solana.com/) forked from the Solana program library, including programs such as spl-token that facilitates tasks such as creating and using tokens.
-
-## stake
-
-Tokens forfeit to the [cluster](#cluster) if malicious [validator](#validator) behavior can be proven.
 
 ## supermajority
 

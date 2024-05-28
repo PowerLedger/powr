@@ -16,17 +16,6 @@ $ solana-keygen pubkey
 <PUBKEY>
 ```
 
-### Airdrop POWR
-
-```bash
-// Command
-$ solana airdrop 1
-
-// Return
-"1 SOL"
-// CLI tools will refer to the native POWR blockchain tokens as SOL
-```
-
 ### Get Balance
 
 ```bash

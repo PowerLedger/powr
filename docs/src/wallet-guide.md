@@ -13,8 +13,7 @@ can be used to send, receive,
 and track ownership of cryptocurrencies. Wallets can take many forms.
 A wallet might be a directory or file in your computer's file system,
 a piece of paper, or a specialized device called a _hardware wallet_.
-There are also various smartphone apps and computer programs
-that provide a user-friendly way to create and manage wallets.
+Powerledger tokens will be available in mobile, desktop and browser wallets
 
 A _keypair_ is a securely generated _private key_ and its
 cryptographically-derived _public key_. A private key and its corresponding
@@ -44,14 +43,12 @@ Some store and back up private keys more securely.
 Solana supports multiple types of wallets so you can choose the right balance
 of security and convenience.
 
-**If you want to be able to receive PLBC tokens on the Powerledger blockchain,
+**If you want to be able to receive POWR tokens on the Powerledger blockchain,
 you first will need to create a wallet.**
 
 ## Supported Wallets
-<!-- TODO NEED WALLET RECOMMENDATION AND GUIDE - SOLFLARE -->
-Several browser and mobile app based wallets support Solana. Find the right one
-for you on the [Solana Ecosystem](https://solana.com/ecosystem/explore?categories=wallet)
-page.
+<!-- TODO: UPDATE WHEN GUARDA AVAILABLE -->
+A browser extension wallet, a desktop wallet and a mobile wallet for Powerledger blockchain are coming soon.
 
 For advanced users or developers, the [command-line wallets](wallet-guide/cli.md)
 may be more appropriate, as new features on the Solana blockchain will always be

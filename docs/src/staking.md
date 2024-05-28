@@ -3,10 +3,10 @@ title: Staking on Powerledger chain
 ---
 
 _Note before reading: All references to increases in values are in absolute
-terms with regards to balance of SOL.
-This document makes no suggestion as to the monetary value of SOL at any time._
+terms with regards to balance of POWR.
+This document makes no suggestion as to the monetary value of POWR at any time._
 
-By staking your SOL tokens, you help secure the network and
+By staking your POWR tokens, you help secure the network and
 [earn rewards](implemented-proposals/staking-rewards.md) while doing so.
 
 You can stake by delegating your tokens to validators who process transactions and run the network.
@@ -42,60 +42,14 @@ due to their reduced total delegation. More details on the slashing roadmap can
 be found
 [here](proposals/optimistic-confirmation-and-slashing.md#slashing-roadmap).
 
+Note: Powerledger blockchain does not implement slashing at this stage
+
 Rewards and slashing align validator and token holder interests which helps keep the network
 secure, robust and performant.
 
 
-## How do I stake my SOL tokens?
+## How do I stake my POWR tokens?
 
-You can stake SOL by moving your tokens
-into a wallet that supports staking.   The wallet provides steps to create a stake account
-and do the delegation.
+You can stake POWR through the staking portal at https://stake.powerledger.io with instructions found [here](https://powerledger.io/staking). This portal allows you to lock up your ERC-20 POWR on the Ethereum network into a smart contract, and delegate it to a chosen validator on the Powerledger Blockchain. 
 
-#### Supported Wallets
-
-Many web and mobile wallets support Solana staking operations. Please check with
-your favorite wallet's maintainers regarding status
-
-#### Solana command line tools
-- Solana command line tools can perform all stake operations in conjunction
-  with a CLI-generated keypair file wallet, a paper wallet, or with a connected
-  Ledger Nano.
-  [Staking commands using the Solana Command Line Tools](cli/delegate-stake.md).
-
-#### Create a Stake Account
-
-Follow the wallet's instructions for creating a staking account.  This account
-will be of a different type than one used to simply send and receive tokens.
-
-#### Select a Validator
-
-Follow the wallet's instructions for selecting a validator.  You can get
-information about potentially performant validators from the links below.
-The Powerledger Foundation does not recommend any particular validator.
-<!-- TODO: Confirm Powerledger foundation name -->
-
-The Current validators are listed on this website:
-
-- https://powerledger.io/validator
-
-The site https://dashboard.powerledger.io provides a some high-level information about
-the network as a whole, as well as a list of each validator and some recent
-performance statistics about each one.
-
-To view block production statistics, use the Solana command-line tools:
-
-- `solana validators`
-- `solana block-production`
-
-The Powerledger team does not make recommendations on how to interpret this
-information. Do your own due diligence.
-
-#### Delegate your Stake
-
-Follow the wallet's instructions for delegating your to your chosen validator.
-
-## Stake Account Details
-
-For more information about the operations and permissions associated with a
-stake account, please see [Stake Accounts](staking/stake-accounts.md)
+Once a blockchain bridge is deployed, native staking will be available, which will have its own process.

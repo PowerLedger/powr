@@ -2,12 +2,12 @@
 title: Connecting to a Cluster
 ---
 
-See [Solana Clusters](../clusters.md) for general information about the
+See [Powerledger Blockchain Clusters](../clusters.md) for general information about the
 available clusters.
 
 ## Configure the command-line tool
 
-You can check what cluster the Solana command-line tool (CLI) is currently targeting by
+You can check what cluster the command-line tools (CLI) are currently targeting by
 running the following command:
 
 ```bash
@@ -18,10 +18,10 @@ Use `solana config set` command to target a particular cluster. After setting
 a cluster target, any future subcommands will send/receive information from that
 cluster.
 
-For example to target the Devnet cluster, run:
+For example to target the Powerledger Testnet Blockchain cluster, run:
 
 ```bash
-solana config set --url https://api.devnet.solana.com
+solana config set --url https://powr-api.testnet.powerledger.io
 ```
 
 ## Ensure Versions Match
