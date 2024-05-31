@@ -4,15 +4,15 @@ title: Starting a Validator
 
 ## Configure Solana CLI
 
-The solana cli includes `get` and `set` configuration commands to automatically
-set the `--url` argument for cli commands. For example:
+Powerledger blockchain, as it is a fork of the Solana project, utilises the same cli tools, which includes `get` and `set` configuration commands to automatically
+set the `--url` argument for cli commands. For example, to set your default config to point to the Powerledger blockchain testnet, use the following command.
 
 ```bash
-solana config set --url http://api.devnet.solana.com
+solana config set --url https://powr-api.testnet.powerledger.io
 ```
 
 While this section demonstrates how to connect to the Devnet cluster, the steps
-are similar for the other [Solana Clusters](../clusters.md).
+are similar for the other [Clusters](../clusters.md).
 
 ## Confirm The Cluster Is Reachable
 
@@ -22,9 +22,6 @@ to your machine by fetching the transaction count:
 ```bash
 solana transaction-count
 ```
-
-View the [metrics dashboard](https://metrics.solana.com:3000/d/monitor/cluster-telemetry) for more
-detail on cluster activity.
 
 ## Enabling CUDA
 
@@ -174,14 +171,14 @@ network. **It is crucial to back-up this information.**
 
 If you don’t back up this information, you WILL NOT BE ABLE TO RECOVER YOUR
 VALIDATOR if you lose access to it. If this happens, YOU WILL LOSE YOUR
-ALLOCATION OF SOL TOO.
+ALLOCATION OF POWR TOO.
 
 To back-up your validator identify keypair, **back-up your
 "validator-keypair.json” file or your seed phrase to a secure location.**
 
-## More Solana CLI Configuration
+## More CLI Configuration
 
-Now that you have a keypair, set the solana configuration to use your validator
+Now that you have a keypair, set the configuration to use your validator
 keypair for all following commands:
 
 ```bash
@@ -191,23 +188,23 @@ solana config set --keypair ~/validator-keypair.json
 You should see the following output:
 
 ```text
-Config File: /home/solana/.config/solana/cli/config.yml
-RPC URL: http://api.devnet.solana.com
-WebSocket URL: ws://api.devnet.solana.com/ (computed)
-Keypair Path: /home/solana/validator-keypair.json
+Config File: /home/user/.config/solana/cli/config.yml
+RPC URL: https://powr-api.testnet.powerledger.io/
+WebSocket URL: wss://powr-api.testnet.powerledger.io/ (computed)
+Keypair Path: /home/user/validator-keypair.json
 Commitment: confirmed
 ```
 
 ## Airdrop & Check Validator Balance
 
-Airdrop yourself some SOL to get started:
+Airdrop yourself some POWR to get started:
 
 ```bash
 solana airdrop 1
 ```
 
-Note that airdrops are only available on Devnet and Testnet. Both are limited
-to 1 SOL per request.
+Note that airdrops are only available on Testnet. Both are limited
+to 1 POWR per request.
 
 To view your current balance:
 
@@ -221,7 +218,7 @@ Or to see in finer detail:
 solana balance --lamports
 ```
 
-Read more about the [difference between SOL and lamports here](../introduction.md#what-are-sols).
+Read more about the [difference between POWR and lamports here](../introduction.md#what-are-sols).
 
 ## Create Authorized Withdrawer Account
 
@@ -244,7 +241,7 @@ solana-keygen new -o ~/authorized-withdrawer-keypair.json
 
 If you haven’t already done so, create a vote-account keypair and create the
 vote account on the network. If you have completed this step, you should see the
-“vote-account-keypair.json” in your Solana runtime directory:
+“vote-account-keypair.json” in your runtime directory:
 
 ```bash
 solana-keygen new -o ~/vote-account-keypair.json
@@ -277,16 +274,16 @@ account state divergence.
 
 ## Connect Your Validator
 
-Connect to the cluster by running:
+Connect to the mainnet cluster by running:
 
 ```bash
 solana-validator \
   --identity ~/validator-keypair.json \
   --vote-account ~/vote-account-keypair.json \
   --rpc-port 8899 \
-  --entrypoint entrypoint.devnet.solana.com:8001 \
+  --entrypoint powr-entrypoint-1.mainnet.powerledger.io:8001 \
   --limit-ledger-size \
-  --log ~/solana-validator.log
+  --log ~/validator.log
 ```
 
 To force validator logging to the console add a `--log -` argument, otherwise
@@ -328,21 +325,19 @@ out of disk space.
 The default value attempts to keep the ledger disk usage under 500GB. More or
 less disk usage may be requested by adding an argument to `--limit-ledger-size`
 if desired. Check `solana-validator --help` for the default limit value used by
-`--limit-ledger-size`. More information about
-selecting a custom limit value is [available
-here](https://github.com/solana-labs/solana/blob/36167b032c03fc7d1d8c288bb621920aaf903311/core/src/ledger_cleanup_service.rs#L23-L34).
+`--limit-ledger-size`. 
 
 ### Systemd Unit
 
 Running the validator as a systemd unit is one easy way to manage running in the
 background.
 
-Assuming you have a user called `sol` on your machine, create the file `/etc/systemd/system/sol.service` with
+Assuming you have a user called `powr` on your machine, create the file `/etc/systemd/system/powr.service` with
 the following:
 
 ```
 [Unit]
-Description=Solana Validator
+Description=Powerledger Blockchain Validator
 After=network.target
 Wants=solana-sys-tuner.service
 StartLimitIntervalSec=0
@@ -351,29 +346,29 @@ StartLimitIntervalSec=0
 Type=simple
 Restart=always
 RestartSec=1
-User=sol
+User=powr
 LimitNOFILE=1000000
 LogRateLimitIntervalSec=0
-Environment="PATH=/bin:/usr/bin:/home/sol/.local/share/solana/install/active_release/bin"
-ExecStart=/home/sol/bin/validator.sh
+Environment="PATH=/bin:/usr/bin:/home/powr/.local/share/solana/install/active_release/bin"
+ExecStart=/home/powr/bin/validator.sh
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Now create `/home/sol/bin/validator.sh` to include the desired
+Now create `/home/powr/bin/validator.sh` to include the desired
 `solana-validator` command-line. Ensure that the 'exec' command is used to
 start the validator process (i.e. "exec solana-validator ...").  This is
 important because without it, logrotate will end up killing the validator
 every time the logs are rotated.
 
-Ensure that running `/home/sol/bin/validator.sh` manually starts
-the validator as expected. Don't forget to mark it executable with `chmod +x /home/sol/bin/validator.sh`
+Ensure that running `/home/powr/bin/validator.sh` manually starts
+the validator as expected. Don't forget to mark it executable with `chmod +x /home/powr/bin/validator.sh`
 
 Start the service with:
 
 ```bash
-$ sudo systemctl enable --now sol
+$ sudo systemctl enable --now powr
 ```
 
 ### Logging
@@ -390,7 +385,7 @@ to be reverted and the issue reproduced before help can be provided.
 
 #### Log rotation
 
-The validator log file, as specified by `--log ~/solana-validator.log`, can get
+The validator log file, as specified by `--log ~/validator.log`, can get
 very large over time and it's recommended that log rotation be configured.
 
 The validator will re-open its when it receives the `USR1` signal, which is the
@@ -404,28 +399,28 @@ instead of the validator's, which will kill them both.
 #### Using logrotate
 
 An example setup for the `logrotate`, which assumes that the validator is
-running as a systemd service called `sol.service` and writes a log file at
-/home/sol/solana-validator.log:
+running as a systemd service called `powr.service` and writes a log file at
+/home/powr/validator.log:
 
 ```bash
 # Setup log rotation
 
-cat > logrotate.sol <<EOF
-/home/sol/solana-validator.log {
+cat > logrotate.powr <<EOF
+/home/powr/validator.log {
   rotate 7
   daily
   missingok
   postrotate
-    systemctl kill -s USR1 sol.service
+    systemctl kill -s USR1 powr.service
   endscript
 }
 EOF
-sudo cp logrotate.sol /etc/logrotate.d/sol
+sudo cp logrotate.powr /etc/logrotate.d/powr
 systemctl restart logrotate.service
 ```
 
 As mentioned earlier, be sure that if you use logrotate, any script you create
-which starts the solana validator process uses "exec" to do so (example: "exec
+which starts the blockchain validator process uses "exec" to do so (example: "exec
 solana-validator ..."); otherwise, when logrotate sends its signal to the
 validator, the enclosing script will die and take the validator process with
 it.
@@ -450,9 +445,9 @@ partition.
 
 Example configuration:
 
-1. `sudo mkdir /mnt/solana-accounts`
-2. Add a 300GB tmpfs parition by adding a new line containing `tmpfs /mnt/solana-accounts tmpfs rw,size=300G,user=sol 0 0` to `/etc/fstab`
-   (assuming your validator is running under the user "sol"). **CAREFUL: If you
+1. `sudo mkdir /mnt/accounts`
+2. Add a 300GB tmpfs parition by adding a new line containing `tmpfs /mnt/accounts tmpfs rw,size=300G,user=powr 0 0` to `/etc/fstab`
+   (assuming your validator is running under the user "powr"). **CAREFUL: If you
    incorrectly edit /etc/fstab your machine may no longer boot**
 3. Create at least 250GB of swap space
 
@@ -464,10 +459,10 @@ Example configuration:
 - Format the device for usage as swap with `sudo mkswap SWAPDEV`
 
 4. Add the swap file to `/etc/fstab` with a new line containing `SWAPDEV swap swap defaults 0 0`
-5. Enable swap with `sudo swapon -a` and mount the tmpfs with `sudo mount /mnt/solana-accounts/`
+5. Enable swap with `sudo swapon -a` and mount the tmpfs with `sudo mount /mnt/accounts/`
 6. Confirm swap is active with `free -g` and the tmpfs is mounted with `mount`
 
-Now add the `--accounts /mnt/solana-accounts` argument to your `solana-validator`
+Now add the `--accounts /mnt/accounts` argument to your `solana-validator`
 command-line arguments and restart the validator.
 
 ### Account indexing

@@ -62,7 +62,7 @@ solana-keygen pubkey usb://ledger?key=2
   &nbsp;[see troubleshooting for more info](#troubleshooting)
 
 You can use other values for the number after `key=` as well.
-Any of the addresses displayed by these commands are valid Solana wallet
+Any of the addresses displayed by these commands are valid wallet
 addresses. The private portion associated with each address is stored securely
 on the Nano, and is used to sign transactions from this address.
 Just make a note of which keypair URL you used to derive any address you will be
@@ -97,15 +97,15 @@ solana balance 7cvkjYAkUYs4W8XcXsca7cBrEGFeSUjeZmKoNBvEwyri
 ```
 
 You can also view the balance of any account address on the Accounts tab in the
-[Explorer](https://explorer.solana.com/accounts)
+[Explorer](https://explorer.powerledger.io/accounts)
 and paste the address in the box to view the balance in you web browser.
 
 Note: Any address with a balance of 0 PLBC tokens, such as a newly created one on your
 Ledger, will show as "Not Found" in the explorer. Empty accounts and non-existent
-accounts are treated the same in Solana. This will change when your account
-address has some PLBC tokens in it.
+accounts are treated the same on Powerledger blockchain. This will change when your account
+address has some POWR tokens in it.
 
-### Send PLBC tokens from a Nano
+### Send POWR tokens from a Nano
 
 To send some tokens from an address controlled by your Nano, you will
 need to use the device to sign a transaction, using the same keypair URL you

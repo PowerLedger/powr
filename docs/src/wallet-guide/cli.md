@@ -43,17 +43,3 @@ wallets are used in conjunction with [offline signing](../offline-signing.md).
 
 [Paper Wallets](paper-wallet.md)
 
-## Hardware Wallet
-
-A hardware wallet is a small handheld device that stores keypairs and provides
-some interface for signing transactions.
-
-### Hardware Wallet Security
-
-A hardware wallet, such as the
-[Ledger hardware wallet](https://www.ledger.com/), offers a great blend of
-security and convenience for cryptocurrencies. It effectively automates the
-process of offline signing while retaining nearly all the convenience of a file
-system wallet.
-
-[Hardware Wallets](hardware-wallets.md)

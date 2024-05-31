@@ -24,7 +24,7 @@ come to the right place.
 
 ## Before You Begin
 
-- [Install the Solana command-line tools](../cli/install-solana-cli-tools.md)
+- [Install the command-line tools](../cli/install-solana-cli-tools.md)
 
 ### Check your installation
 

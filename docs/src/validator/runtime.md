@@ -63,7 +63,3 @@ To pass messages between programs, the receiving program must accept the message
 - Runtime guarantees that the program can only spend lamports that are in accounts that are assigned to it.
 - Runtime guarantees the balances belonging to accounts are balanced before and after the transaction.
 - Runtime guarantees that instructions all executed successfully when a transaction is committed.
-
-## Future Work
-
-- [Continuations and Signals for long running Transactions](https://github.com/solana-labs/solana/issues/1485)

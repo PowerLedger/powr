@@ -4,14 +4,14 @@
 
 The highest optimistically confirmed slot is the best slot to start from, which
 can be found by looking for
-[this](https://github.com/solana-labs/solana/blob/0264147d42d506fb888f5c4c021a998e231a3e74/core/src/optimistic_confirmation_verifier.rs#L71)
+[this](https://github.com/PowerLedger/powr/blob/629c560537594a501a34d3b5235116ac8cca546e/core/src/optimistic_confirmation_verifier.rs#L73)
 metrics datapoint. Otherwise use the last root.
 
 Call this slot `SLOT_X`
 
 ### Step 2. Stop the validator(s)
 
-### Step 3. Optionally install the new solana version
+### Step 3. Optionally install the new validator version
 
 ### Step 4. Create a new snapshot for slot `SLOT_X` with a hard fork at slot `SLOT_X`
 
@@ -46,7 +46,7 @@ Post something like the following to #announcements (adjusting the text as appro
 >
 > Steps:
 >
-> 1. Install the v1.1.12 release: https://github.com/solana-labs/solana/releases/tag/v1.1.12
+> 1. Install the v1.1.12 release: https://github.com/PowerLedger/powr/releases
 > 2. a. Preferred method, start from your local ledger with:
 >
 > ```bash
@@ -55,9 +55,6 @@ Post something like the following to #announcements (adjusting the text as appro
 >   --expected-bank-hash NEW_BANK_HASH  # <-- NEW! IMPORTANT! REMOVE AFTER THIS RESTART
 >   --hard-fork SLOT_X                  # <-- NEW! IMPORTANT! REMOVE AFTER THIS RESTART
 >   --no-snapshot-fetch                 # <-- NEW! IMPORTANT! REMOVE AFTER THIS RESTART
->   --entrypoint entrypoint.testnet.solana.com:8001
->   --known-validator 5D1fNXzvv5NjV1ysLjirC4WY92RNsVH18vjmcszZd8on
->   --expected-genesis-hash 4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY
 >   --only-known-rpc
 >   --limit-ledger-size
 >   ...                                # <-- your other --identity/--vote-account/etc arguments
@@ -69,9 +66,6 @@ Post something like the following to #announcements (adjusting the text as appro
 > solana-validator
 >   --wait-for-supermajority SLOT_X     # <-- NEW! IMPORTANT! REMOVE AFTER THIS RESTART
 >   --expected-bank-hash NEW_BANK_HASH  # <-- NEW! IMPORTANT! REMOVE AFTER THIS RESTART
->   --entrypoint entrypoint.testnet.solana.com:8001
->   --known-validator 5D1fNXzvv5NjV1ysLjirC4WY92RNsVH18vjmcszZd8on
->   --expected-genesis-hash 4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY
 >   --only-known-rpc
 >   --limit-ledger-size
 >   ...                                # <-- your other --identity/--vote-account/etc arguments
@@ -79,11 +73,11 @@ Post something like the following to #announcements (adjusting the text as appro
 >
 >      You can check for which slots your ledger has with: `solana-ledger-tool -l path/to/ledger bounds`
 >
-> 3. Wait until 80% of the stake comes online
+> 3. Wait until 67% of the stake comes online
 >
-> To confirm your restarted validator is correctly waiting for the 80%:
+> To confirm your restarted validator is correctly waiting for the 67%:
 > a. Look for `N% of active stake visible in gossip` log messages
-> b. Ask it over RPC what slot it's on: `solana --url http://127.0.0.1:8899 slot`. It should return `SLOT_X` until we get to 80% stake
+> b. Ask it over RPC what slot it's on: `solana --url http://127.0.0.1:8899 slot`. It should return `SLOT_X` until we get to 67% stake
 >
 > Thanks!
 
@@ -93,8 +87,8 @@ Monitor the validators as they restart. Answer questions, help folks,
 
 ## Troubleshooting
 
-### 80% of the stake didn't participate in the restart, now what?
-If less than 80% of the stake join the restart after a reasonable amount of
+### 67% of the stake didn't participate in the restart, now what?
+If less than 67% of the stake join the restart after a reasonable amount of
 time, it will be necessary to retry the restart attempt with the stake from the
 non-responsive validators removed.
 

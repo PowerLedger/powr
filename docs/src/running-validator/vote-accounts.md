@@ -52,7 +52,7 @@ stored as a "hot wallet" in a keypair file on the same system the validator
 process is running.
 
 Because a hot wallet is generally less secure than an offline or "cold" wallet,
-the validator operator may choose to store only enough SOL on the identity
+the validator operator may choose to store only enough POWR on the identity
 account to cover voting fees for a limited amount of time, such as a few weeks
 or months. The validator identity account could be periodically topped off
 from a more secure wallet.
@@ -76,7 +76,7 @@ validator process.
 The vote authority can be set to the same address as the validator identity.
 If the validator identity is also the vote authority, only one
 signature per vote transaction is needed in order to both sign the vote and pay
-the transaction fee. Because transaction fees on Solana are assessed
+the transaction fee. Because transaction fees on the Powerledger Blockchain are assessed
 per-signature, having one signer instead of two will result in half the transaction
 fee paid compared to setting the vote authority and validator identity to two
 different accounts.
@@ -238,5 +238,5 @@ On success the authority is now changed without Entity A or B having to reveal k
 
 A vote account can be closed with the
 [close-vote-account](../cli/usage.md#solana-close-vote-account) command.
-Closing a vote account withdraws all remaining SOL funds to a supplied recipient address and renders it invalid as a vote account.
+Closing a vote account withdraws all remaining POWR funds to a supplied recipient address and renders it invalid as a vote account.
 It is not possible to close a vote account with active stake.

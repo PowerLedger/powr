@@ -6,25 +6,11 @@ Solana maintains dedicated api nodes to fulfill [JSON-RPC](developing/clients/js
 requests for each public cluster, and third parties may as well. Here are the
 public RPC endpoints currently available and recommended for each public cluster:
 
-## Devnet
-
-#### Endpoint
-
-- `https://api.devnet.solana.com` - single Solana-hosted api node; rate-limited
-
-#### Rate Limits
-
-- Maximum number of requests per 10 seconds per IP: 100
-- Maximum number of requests per 10 seconds per IP for a single RPC: 40
-- Maximum concurrent connections per IP: 40
-- Maximum connection rate per 10 seconds per IP: 40
-- Maximum amount of data per 30 second: 100 MB
-
 ## Testnet
 
 #### Endpoint
 
-- `https://api.testnet.solana.com` - single Solana-hosted api node; rate-limited
+- `https://powr-api.testnet.powerledger.io` - Powerledger-hosted api node; rate-limited
 
 #### Rate Limits
 
@@ -34,11 +20,11 @@ public RPC endpoints currently available and recommended for each public cluster
 - Maximum connection rate per 10 seconds per IP: 40
 - Maximum amount of data per 30 second: 100 MB
 
-## Mainnet Beta
+## Mainnet
 
 #### Endpoints*
 
-- `https://api.mainnet-beta.solana.com` - Solana-hosted api node cluster, backed by a load balancer; rate-limited
+- `https://powr-api.mainnet.powerledger.io` - Powerledger-hosted api node cluster; rate-limited
 
 #### Rate Limits
 

@@ -7,3 +7,4 @@ title: TVU
 ## Retransmit Stage
 
 ![Retransmit Block Diagram](/img/retransmit_stage.svg)
+

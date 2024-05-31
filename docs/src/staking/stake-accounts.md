@@ -2,16 +2,16 @@
 title: Stake Account Structure
 ---
 
-A stake account on Solana can be used to delegate tokens to validators on
+A stake account on the Powerledger blockchain can be used to delegate tokens to validators on
 the network to potentially earn rewards for the owner of the stake account.
 Stake accounts are created and managed differently than a traditional wallet
 address, known as a _system account_. A system account is only able to send and
-receive SOL from other accounts on the network, whereas a stake account supports
+receive POWR from other accounts on the network, whereas a stake account supports
 more complex operations needed to manage a delegation of tokens.
 
-Stake accounts on Solana also work differently than those of other Proof-of-Stake
+Stake accounts on Powerledger also work differently than those of other Proof-of-Stake
 blockchain networks that you may be familiar with. This document describes the
-high-level structure and functions of a Solana stake account.
+high-level structure and functions of the stake account.
 
 #### Account Address
 
@@ -103,17 +103,10 @@ states, where a stake is activating or deactivating with a non-zero effective st
 When a stake account is delegated, or a delegation is deactivated, the operation
 does not take effect immediately.
 
-A delegation or deactivation takes several [epochs](../terminology.md#epoch)
-to complete, with a fraction of the delegation becoming active or inactive at
+A delegation or deactivation takes a single [epoch](../terminology.md#epoch)
+to complete, with a delegation becoming active or inactive at
 each epoch boundary after the transaction containing the instructions has been
 submitted to the cluster.
-
-There is also a limit on how much total stake can become delegated or
-deactivated in a single epoch, to prevent large sudden changes in stake across
-the network as a whole. Since warmup and cooldown are dependent on the behavior
-of other network participants, their exact duration is difficult to predict.
-Details on the warmup and cooldown timing can be found
-[here](../cluster/stake-delegation-and-rewards.md#stake-warmup-cooldown-withdrawal).
 
 #### Lockups
 
@@ -129,13 +122,13 @@ is also set when the account is created.
 
 #### Destroying a Stake Account
 
-Like other types of accounts on the Solana network, a stake account that has a
-balance of 0 SOL is no longer tracked. If a stake account is not delegated
+Like other types of accounts on the Powerledger blockchain, a stake account that has a
+balance of 0 POWR is no longer tracked. If a stake account is not delegated
 and all of the tokens it contains are withdrawn to a wallet address, the account
 at that address is effectively destroyed, and will need to be manually
 re-created for the address to be used again.
 
 #### Viewing Stake Accounts
 
-Stake account details can be viewed on the [Solana Explorer](http://explorer.solana.com/accounts)
+Stake account details can be viewed on the [Powerledger Explorer](http://explorer.powerledger.io/accounts)
 by copying and pasting an account address into the search bar.

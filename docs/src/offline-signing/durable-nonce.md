@@ -4,7 +4,7 @@ title: Durable Transaction Nonces
 
 Durable transaction nonces are a mechanism for getting around the typical
 short lifetime of a transaction's [`recent_blockhash`](developing/programming-model/transactions.md#recent-blockhash).
-They are implemented as a Solana Program, the mechanics of which can be read
+They are implemented as a Program on the Powerledger blockchain, the mechanics of which can be read
 about in the [proposal](../implemented-proposals/durable-tx-nonces.md).
 
 ## Usage Examples
@@ -165,7 +165,7 @@ The following subcommands have received this treatment so far
 
 ### Example Pay Using Durable Nonce
 
-Here we demonstrate Alice paying Bob 1 SOL using a durable nonce. The procedure
+Here we demonstrate Alice paying Bob 1 POWR using a durable nonce. The procedure
 is the same for all subcommands supporting durable nonces
 
 #### - Create accounts
@@ -181,7 +181,7 @@ $ solana-keygen new -o bob.json
 #### - Fund Alice's account
 
 Alice will need some funds to create a nonce account and send to Bob. Airdrop
-her some SOL
+her some POWR
 
 ```bash
 $ solana airdrop -k alice.json 1
@@ -231,7 +231,7 @@ HR1368UKHVZyenmH7yVz5sBAijV6XAPeWbEiXEGVYQorRMcoijeNAbzZqEZiH8cDB8tk65ckqeegFjK8
 
 #### - Success!
 
-The transaction succeeds! Bob receives 0.01 SOL from Alice and Alice's stored
+The transaction succeeds! Bob receives 0.01 POWR from Alice and Alice's stored
 nonce advances to a new value
 
 ```bash

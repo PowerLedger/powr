@@ -1,14 +1,23 @@
 ---
-title: Install the Solana Tool Suite
+title: Install the CLI Tool Suite
 ---
 
-There are multiple ways to install the Solana tools on your computer
+Powerledger blockchain, as it is a blockchain based on the Solana Virtual Machine (SVM), utilises the Solana CLI tools to interact with the cluster via the command line.
+This means you can use the same CLI tools to interact with both Solana and the Powerledger blockchain, athough you may need to usilise different versions depending on which version the cluster is running.
+
+There are multiple ways to install the Solana CLI tools on your computer
 depending on your preferred workflow:
 
-- [Use Solana's Install Tool (Simplest option)](#use-solanas-install-tool)
+- [Use Solana's Install Tool](#use-solanas-install-tool)
+  - [MacOS \& Linux](#macos--linux)
+  - [Windows](#windows)
 - [Download Prebuilt Binaries](#download-prebuilt-binaries)
-- [Build from Source](#build-from-source)
+  - [Linux](#linux)
+  - [MacOS](#macos)
+  - [Windows](#windows-1)
+- [Build From Source](#build-from-source)
 - [Use Homebrew](#use-homebrew)
+  - [MacOS \& Linux](#macos--linux-1)
 
 ## Use Solana's Install Tool
 
@@ -23,6 +32,14 @@ depending on your preferred workflow:
 ```bash
 sh -c "$(curl -sSfL https://release.solana.com/LATEST_SOLANA_RELEASE_VERSION/install)"
 ```
+
+Powerledger blockchain is currently on version 1.13.7, it is recommended to run a CLI tools verison that matches or is greater than the cluster version. 
+This means you should install v1.13.7 or higher of the CLI tools.
+
+```bash
+sh -c "$(curl -sSfL https://release.solana.com/v1.13.7/install)"
+```
+
 
 - You can replace `LATEST_SOLANA_RELEASE_VERSION` with the release tag matching
   the software version of your desired release, or use one of the three symbolic
@@ -55,7 +72,7 @@ solana --version
 ```
 
 - After a successful install, `solana-install update` may be used to easily
-  update the Solana software to a newer version at any time.
+  update the CLI software tools to a newer version at any time.
 
 ---
 

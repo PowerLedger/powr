@@ -4,6 +4,9 @@ title: Stake Delegation and Rewards
 
 Stakers are rewarded for helping to validate the ledger. They do this by delegating their stake to validator nodes. Those validators do the legwork of replaying the ledger and sending votes to a per-node vote account to which stakers can delegate their stakes. The rest of the cluster uses those stake-weighted votes to select a block when forks arise. Both the validator and staker need some economic incentive to play their part. The validator needs to be compensated for its hardware and the staker needs to be compensated for the risk of getting its stake slashed. The economics are covered in [staking rewards](../implemented-proposals/staking-rewards.md). This section, on the other hand, describes the underlying mechanics of its implementation.
 
+## Current status of staking
+Staking on the Powerledger blockchain works in a similar fashion to staking on the Solana blockchain. The following instructions describe how to stake native POWR tokens on the chain, and this is currently able to be tested on testnet. On mainnet, the native token, POWR, needs to be bridged from Ethereum, where it is an ERC-20 token, to the Powerledger blockchain, before you can stake natively. Until this bridge is deployed, you can delegate your ERC-20 POWR and recieve staking rewards by staking using https://stake.powerledger.io.
+
 ## Basic Design
 
 The general idea is that the validator owns a Vote account. The Vote account tracks validator votes, counts validator generated credits, and provides any additional validator specific state. The Vote account is not aware of any stakes delegated to it and has no staking weight.
@@ -30,7 +33,7 @@ VoteState is the current state of all the votes the validator has submitted to t
 - `commission` - The commission taken by this VoteState for any rewards claimed by staker's Stake accounts. This is the percentage ceiling of the reward.
 - Account::lamports - The accumulated lamports from the commission. These do not count as stakes.
 - `authorized_voter` - Only this identity is authorized to submit votes. This field can only modified by this identity.
-- `node_pubkey` - The Solana node that votes in this account.
+- `node_pubkey` - The Powerledger node that votes in this account.
 - `authorized_withdrawer` - the identity of the entity in charge of the lamports of this account, separate from the account's address and the authorized vote signer.
 
 ### VoteInstruction::Initialize\(VoteInit\)
@@ -161,39 +164,20 @@ Stakers who have delegated to that validator earn points in proportion to their 
 
 Stakes, once delegated, do not become effective immediately. They must first pass through a warmup period. During this period some portion of the stake is considered "effective", the rest is considered "activating". Changes occur on epoch boundaries.
 
-The stake program limits the rate of change to total network stake, reflected in the stake program's `config::warmup_rate` \(set to 25% per epoch in the current implementation\).
-
-The amount of stake that can be warmed up each epoch is a function of the previous epoch's total effective stake, total activating stake, and the stake program's configured warmup rate.
-
-Cooldown works the same way. Once a stake is deactivated, some part of it is considered "effective", and also "deactivating". As the stake cools down, it continues to earn rewards and be exposed to slashing, but it also becomes available for withdrawal.
-
-Bootstrap stakes are not subject to warmup.
-
-Rewards are paid against the "effective" portion of the stake for that epoch.
+On the Powerledger blockchain, all stakes should activate and deactivate in a single epoch, with a maximum time of 2-2.5 days.
 
 #### Warmup example
 
-Consider the situation of a single stake of 1,000 activated at epoch N, with network warmup rate of 20%, and a quiescent total network stake at epoch N of 2,000.
+Consider the situation of a single stake of 1,000 activated at epoch N
 
-At epoch N+1, the amount available to be activated for the network is 400 \(20% of 2000\), and at epoch N, this example stake is the only stake activating, and so is entitled to all of the warmup room available.
+At epoch N+1, the full amount is available to be activated for the network.
 
 | epoch | effective | activating | total effective | total activating |
 | :---- | --------: | ---------: | --------------: | ---------------: |
 | N-1   |           |            |           2,000 |                0 |
 | N     |         0 |      1,000 |           2,000 |            1,000 |
-| N+1   |       400 |        600 |           2,400 |              600 |
-| N+2   |       880 |        120 |           2,880 |              120 |
-| N+3   |      1000 |          0 |           3,000 |                0 |
+| N+1   |      1000 |          0 |           3,000 |                0 |
 
-Were 2 stakes \(X and Y\) to activate at epoch N, they would be awarded a portion of the 20% in proportion to their stakes. At each epoch effective and activating for each stake is a function of the previous epoch's state.
-
-| epoch | X eff | X act | Y eff | Y act | total effective | total activating |
-| :---- | ----: | ----: | ----: | ----: | --------------: | ---------------: |
-| N-1   |       |       |       |       |           2,000 |                0 |
-| N     |     0 | 1,000 |     0 |   200 |           2,000 |            1,200 |
-| N+1   |   333 |   667 |    67 |   133 |           2,400 |              800 |
-| N+2   |   733 |   267 |   146 |    54 |           2,880 |              321 |
-| N+3   |  1000 |     0 |   200 |     0 |           3,200 |                0 |
 
 ### Withdrawal
 
