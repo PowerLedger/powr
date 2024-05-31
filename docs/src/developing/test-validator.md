@@ -1,11 +1,11 @@
 ---
-title: Solana Test Validator
+title: Local Test Validator
 ---
 
 During early stage development, it is often convenient to target a cluster with
 fewer restrictions and more configuration options than the public offerings
 provide. This is easily achieved with the `solana-test-validator` binary, which
-starts a full-featured, single-node cluster on the developer's workstation.
+starts a full-featured, single-node blockchain cluster on the developer's workstation.
 
 ## Advantages
 
@@ -21,7 +21,7 @@ starts a full-featured, single-node cluster on the developer's workstation.
 
 ## Installation
 
-The `solana-test-validator` binary ships with the Solana CLI Tool Suite.
+The `solana-test-validator` binary ships with the CLI Tool Suite.
 [Install](/cli/install-solana-cli-tools) before continuing.
 
 ## Running
@@ -86,7 +86,7 @@ solana balance
 
 - **NOTE:** `Error: No such file or directory (os error 2)` means that the default
   wallet does not yet exist. Create it with `solana-keygen new`.
-- **NOTE:** If the wallet has a zero SOL balance, airdrop some localnet SOL with
+- **NOTE:** If the wallet has a zero POWR balance, airdrop some localnet POWR with
   `solana airdrop 10`
 
 #### Perform a basic transfer transaction
@@ -156,7 +156,7 @@ JSON RPC URL: http://127.0.0.1:8899
 
 By default, the test validator runs with all [runtime features](programming-model/runtime#features) activated.
 
-You can verify this using the [Solana command-line tools](cli/install-solana-cli-tools.md):
+You can verify this using the [Command-line tools](cli/install-solana-cli-tools.md):
 
 ```bash
 solana feature status -ul

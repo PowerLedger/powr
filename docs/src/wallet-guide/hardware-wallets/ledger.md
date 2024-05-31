@@ -100,7 +100,7 @@ You can also view the balance of any account address on the Accounts tab in the
 [Explorer](https://explorer.powerledger.io/accounts)
 and paste the address in the box to view the balance in you web browser.
 
-Note: Any address with a balance of 0 PLBC tokens, such as a newly created one on your
+Note: Any address with a balance of 0 POWR tokens, such as a newly created one on your
 Ledger, will show as "Not Found" in the explorer. Empty accounts and non-existent
 accounts are treated the same on Powerledger blockchain. This will change when your account
 address has some POWR tokens in it.
@@ -124,7 +124,7 @@ solana transfer RECIPIENT_ADDRESS AMOUNT --keypair KEYPAIR_URL_OF_SENDER
 
 Below is a full example. First, an address is viewed at a certain keypair URL.
 Second, the balance of that address is checked. Lastly, a transfer transaction
-is entered to send `1` PLBC token to the recipient address `7cvkjYAkUYs4W8XcXsca7cBrEGFeSUjeZmKoNBvEwyri`.
+is entered to send `1` POWR token to the recipient address `7cvkjYAkUYs4W8XcXsca7cBrEGFeSUjeZmKoNBvEwyri`.
 When you hit Enter for a transfer command, you will be prompted to approve the
 transaction details on your Ledger device. On the device, use the right and
 left buttons to review the transaction details. If they look correct, click

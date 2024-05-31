@@ -4,7 +4,7 @@ title: Powerledger Wallet Guide
 
 This document describes the different wallet options that are available to users
 of Powerledger who want to be able to send, receive and interact with
-PLBC tokens on the Powerledger blockchain.
+POWR tokens on the Powerledger blockchain.
 
 ## What is a Wallet?
 

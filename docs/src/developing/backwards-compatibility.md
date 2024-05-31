@@ -2,16 +2,17 @@
 title: Backward Compatibility Policy
 ---
 
-As the Solana developer ecosystem grows, so does the need for clear expectations around
-breaking API and behavior changes affecting applications and tooling built for Solana.
-In a perfect world, Solana development could continue at a very fast pace without ever
+As the Powerledger blockchain developer ecosystem grows, so does the need for clear expectations around
+breaking API and behavior changes affecting applications and tooling built for the Powerledger blockchain, and other Solana based blockchain clusters.
+
+In a perfect world, blockchain development could continue at a very fast pace without ever
 causing issues for existing developers. However, some compromises will need to be made
 and so this document attempts to clarify and codify the process for new releases.
 
 ### Expectations
 
-- Solana software releases include APIs, SDKs, and CLI tooling (with a few [exceptions](#exceptions)).
-- Solana software releases follow semantic versioning, more details below.
+- Powerledger blockchain software releases include APIs, SDKs, and CLI tooling (with a few [exceptions](#exceptions)).
+- Powerledger blockchain software releases follow semantic versioning, more details below.
 - Software for a `MINOR` version release will be compatible across all software on the
   same `MAJOR` version.
 
@@ -24,15 +25,9 @@ and so this document attempts to clarify and codify the process for new releases
 
 ### Release Cadence
 
-The Solana RPC API, Rust SDK, CLI tooling, and BPF Program SDK are all updated and shipped
-along with each Solana software release and should always be compatible between `PATCH`
+The Powerledger RPC API, Rust SDK, CLI tooling, and BPF Program SDK are all updated and shipped
+along with each Powerledger blockchain software release and should always be compatible between `PATCH`
 updates of a particular `MINOR` version release.
-
-#### Release Channels
-
-- `edge` software that contains cutting-edge features with no backward compatibility policy
-- `beta` software that runs on the Solana Testnet cluster
-- `stable` software that run on the Solana Mainnet Beta and Devnet clusters
 
 #### Major Releases (x.0.0)
 
@@ -43,10 +38,10 @@ that were enabled in the previous `MAJOR` version.
 #### Minor Releases (1.x.0)
 
 New features and proposal implementations are added to _new_ `MINOR` version
-releases (e.g. 1.4.0) and are first run on Solana's Testnet cluster. While running
+releases (e.g. 1.4.0) and are first run on the Testnet cluster. While running
 on the testnet, `MINOR` versions are considered to be in the `beta` release channel. After
 those changes have been patched as needed and proven to be reliable, the `MINOR` version will
-be upgraded to the `stable` release channel and deployed to the Mainnet Beta cluster.
+be upgraded to the `stable` release channel and deployed to the Mainnet cluster.
 
 #### Patch Releases (1.0.x)
 
@@ -112,10 +107,10 @@ Major releases:
 
 ### Runtime Features
 
-New Solana runtime features are feature-switched and manually activated. Runtime features
+New runtime features are feature-switched and manually activated. Runtime features
 include: the introduction of new native programs, sysvars, and syscalls; and changes to
 their behavior. Feature activation is cluster agnostic, allowing confidence to be built on
-Testnet before activation on Mainnet-beta.
+Testnet before activation on Mainnet.
 
 The release process is as follows:
 
@@ -128,10 +123,10 @@ The release process is as follows:
 
 #### Public API Nodes
 
-Solana provides publicly available RPC API nodes for all developers to use. The Solana team
+Powerledger provides publicly available RPC API nodes for all developers to use. The Powerledger team
 will make their best effort to communicate any changes to the host, port, rate-limiting behavior,
 availability, etc. However, we recommend that developers rely on their own validator nodes to
-discourage dependence upon Solana operated nodes.
+discourage dependence upon Powerledger operated nodes.
 
 #### Local cluster scripts and Docker images
 
@@ -142,7 +137,7 @@ be backwards compatible.
 
 #### Web3 JavaScript SDK
 
-The Web3.JS SDK also follows semantic versioning specifications but is shipped separately from Solana
+The Web3.JS SDK also follows semantic versioning specifications but is shipped separately from Powerledger blockchain
 software releases.
 
 #### Attack Vectors
