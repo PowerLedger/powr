@@ -16,15 +16,7 @@ Based on these considerations the Powerledger blockchain was launched with the f
 - Dis-inflation Rate: $-15\%$
 - Long-term Inflation Rate: $0.75\%$
 
-These parameters define the proposed _Inflation Schedule_. Below we show implications of these parameters. These plots only show the impact of inflation issuances given the Inflation Schedule as parameterized above. They _do not account_ for other factors that may impact the Total Supply such as fee/rent burning, slashing or other unforeseen future token destruction events. Therefore, what is presented here is an **upper limit** on the amount of POWR issued via inflation.
-
-![](/img/p_inflation_schedule.png)
-
-In the above graph we see the annual inflation rate [$\%$] over time, given the inflation parameters proposed above.
-
-![](/img/p_total_supply.png)
-
-Similarly, here we see the _Total Current Supply_ of POWR [MM] over time.
+These parameters define the proposed _Inflation Schedule_. 
 
 Setting aside validator uptime and commissions, the expected Staking Yield and Adjusted Staking Yield metrics are then primarily a function of the % of total POWR staked on the network. Therefore we can we can model _Staking Yield_, if we introduce an additional parameter _% of Staked POWR_:
 
@@ -32,8 +24,4 @@ $$
 \%~\text{POWR Staked} = \frac{\text{Total POWR Staked}}{\text{Total Current Supply}}
 $$
 
-This parameter must be estimated because it is a dynamic property of the token holders and staking incentives. The values of _% of Staked POWR_ presented here range from $60\% - 90\%$, which we feel covers the likely range we expect to observe, based on feedback from the investor and validator communities as well as what is observed on comparable Proof-of-Stake protocols.
-
-![](/img/p_ex_staked_yields.png)
-
-Again, the above shows an example _Staked Yield_ that a staker might expect over time on the Powerledger blockchain network with the _Inflation Schedule_ as specified. This is an idealized _Staked Yield_ as it neglects validator uptime impact on rewards, validator commissions, potential yield throttling and potential slashing incidents. It additionally ignores that _% of Staked POWR_ is dynamic by design - the economic incentives set up by this _Inflation Schedule_ are more clearly seen when _Token Dilution_ is taken into account (see the **Adjusted Staking Yield** section below).
+This parameter must be estimated because it is a dynamic property of the token holders and staking incentives.

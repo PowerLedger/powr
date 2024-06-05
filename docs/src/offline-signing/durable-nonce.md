@@ -4,8 +4,7 @@ title: Durable Transaction Nonces
 
 Durable transaction nonces are a mechanism for getting around the typical
 short lifetime of a transaction's [`recent_blockhash`](developing/programming-model/transactions.md#recent-blockhash).
-They are implemented as a Program on the Powerledger blockchain, the mechanics of which can be read
-about in the [proposal](../implemented-proposals/durable-tx-nonces.md).
+They are implemented as a Program on the Powerledger blockchain.
 
 ## Usage Examples
 
@@ -30,8 +29,7 @@ commands
 ### Nonce Account Creation
 
 The durable transaction nonce feature uses an account to store the next nonce
-value. Durable nonce accounts must be [rent-exempt](../implemented-proposals/rent.md#two-tiered-rent-regime),
-so need to carry the minimum balance to achieve this.
+value. Durable nonce accounts must be rent-exempt, so need to carry the minimum balance to achieve this.
 
 A nonce account is created by first generating a new keypair, then create the account on chain
 

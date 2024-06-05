@@ -8,10 +8,6 @@ Similarly we can look at the expected _Staked Dilution_ (i.e. _Adjusted Staking 
 
 We are interested in the relative change in ownership of staked vs un-staked tokens as the overall token pool increases with inflation issuance. As discussed, this issuance is distributed only to staked token holders, increasing the staked token fractional representation of the _Total Current Supply_.
 
-Continuing with the same _Inflation Schedule_ parameters as above, we see the fraction of staked supply grow as shown below.
-
-![](/img/p_ex_staked_supply_w_range_initial_stake.png)
-
 Due to this relative change in representation, the proportion of stake of any token holder will also change as a function of the _Inflation Schedule_ and the proportion of all tokens that are staked.
 
 Of initial interest, however, is the _dilution of **un-staked** tokens_, or $D_{us}$. In the case of un-staked tokens, token dilution is only a function of the _Inflation Schedule_ because the amount of un-staked tokens doesn't change over time.
@@ -50,9 +46,7 @@ $$
 D_{us} = -\frac{I}{I + 1} \\
 $$
 
-So as guessed, this dilution is independent of the total proportion of staked tokens and only depends on inflation rate. This can be seen with our example _Inflation Schedule_ here:
-
-![p_ex_unstaked_dilution](/img/p_ex_unstaked_dilution.png)
+So as guessed, this dilution is independent of the total proportion of staked tokens and only depends on inflation rate. 
 
 ### Estimated Adjusted Staked Yield
 
@@ -85,9 +79,7 @@ $$
 Y_{adj} =  \frac{ 1 + I(t)/P_s(t) }{ 1 + I(t) } - 1\\
 $$
 
-So we see that the _Adjusted Staked Yield_ a function of the inflation rate and the percent of staked tokens on the network. We can see this plotted for various staking fractions here:
-
-![p_ex_adjusted_staked_yields](/img/p_ex_adjusted_staked_yields.png)
+So we see that the _Adjusted Staked Yield_ a function of the inflation rate and the percent of staked tokens on the network. 
 
 It is also clear that in all cases, dilution of un-staked tokens $>$ adjusted staked yield (i.e. dilution of staked tokens). Explicitly we can look at the _relative dilution of un-staked tokens to staked tokens:_ $D_{us}/Y_{adj}$. Here the relationship to inflation drops out and the relative dilution, i.e. the impact of staking tokens vs not staking tokens, is purely a function of the % of the total token supply staked. From above
 
@@ -109,9 +101,7 @@ $$
 	\end{aligned}
 $$
 
-Where we can see a primary dependence of the relative dilution of un-staked tokens to staked tokens is on the function of the proportion of total tokens staked. As shown above, the proportion of total tokens staked changes over time (i.e. $P_s = P_s(t)$ due to the re-staking of inflation issuance thus we see relative dilution grow over time as:
-
-![p_ex_relative_dilution](/img/p_ex_relative_dilution.png)
+Where we can see a primary dependence of the relative dilution of un-staked tokens to staked tokens is on the function of the proportion of total tokens staked. As shown above, the proportion of total tokens staked changes over time (i.e. $P_s = P_s(t)$ due to the re-staking of inflation issuance thus we see relative dilution grow over time.
 
 As might be intuitive, as the total fraction of staked tokens increases the relative dilution of un-staked tokens grows dramatically. E.g. with $80\%$ of the network tokens staked, an un-staked token holder will experience ~$400\%$ more dilution than a staked holder.
 
