@@ -257,7 +257,6 @@ exec <PATH TO powr/target/release>/solana-validator \
 --ledger <PATH TO>/ledger \
 --accounts <PATH TO>/accounts \
 --full-rpc-api \
---private-rpc \
 --rpc-port 8899 \
 --account-index program-id \
 --account-index spl-token-mint \
