@@ -103,7 +103,9 @@ solana-keygen new --word-count 24 --no-bip39-passphrase -o ~/keypairs/withdraw-a
 chmod 400 ~/keypairs/*
 ```
 
-### Create config file
+## Create config file
+
+### Creating Config file for mainnet
 
 Execute the following commands to create the config file:
 
@@ -113,6 +115,30 @@ cat > ~/.config/solana/cli/config.yml << 'EOF'
 ---
 json_rpc_url: "https://powr-api.mainnet.powerledger.io"
 websocket_url: ""
+keypair_path: $HOME/keypairs/id.json
+address_labels:
+  "11111111111111111111111111111111": SystemProgram
+commitment: confirmed
+EOF
+```
+
+If your IDENTITY keypair is located in a different folder, it can be changed using the
+following command (you will need to change the default location in subsequent commands if so)
+
+```bash
+solana config set -k /PATH_TO_KEYPAIR/id.json
+```
+
+### Creating Config file for testnet
+
+Execute the following commands to create the config file:
+
+```bash
+[ ! -d "~/.config/solana/cli" ] && mkdir -p ~/.config/solana/cli
+cat > ~/.config/solana/cli/config.yml << 'EOF'
+---
+json_rpc_url: "https://powr-api.testnet.powerledger.io"
+websocket_url: "wss://powr-api.testnet.powerledger.io"
 keypair_path: $HOME/keypairs/id.json
 address_labels:
   "11111111111111111111111111111111": SystemProgram
@@ -154,12 +180,12 @@ Save the following commands to a file, such as `~/start-powr.sh` and apply execu
 sudo chmod +x ~/start-powr.sh
 ```
 
-You should change PATH_TO/solana-validator with the location of your solana binary e.g. `/home/validator-admin/.local/share/powr/bin/solana-validator`
-You will also need to set your ledger folder to a directory with appropriate storage (recommended 4tb SSD or greater), and the accounts directory, ideally on a separate disk also (recommended 1tb SSD)
+You should change <PATH_TO>/solana-validator with the location of your solana binary e.g. `/home/validator-admin/.local/share/powr/bin/solana-validator`
+You will also need to set your ledger folder to a directory with appropriate storage (recommended 4tb SSD or greater for a full history node), and the accounts directory, ideally on a separate disk also (recommended 1tb SSD)
 
 You must also change the path of the log file in the `--log` parameter on the last line. A suggested location could be inside the home directory, e.g. `/home/validator-admin/validator-log`
 
-### Full history node
+### Full history node (MAINNET)
 
 ```bash
 #!/usr/bin/env bash
@@ -191,7 +217,7 @@ exec <PATH TO>/solana-validator \
 --log <PATH TO>/validator.log
 ```
 
-### Pruned Node
+### Pruned Node (MAINNET)
 
 ```bash
 #!/usr/bin/env bash
@@ -217,6 +243,33 @@ exec <PATH TO powr/target/release>/solana-validator \
 --enable-rpc-transaction-history \
 --entrypoint powr-entrypoint-1.mainnet.powerledger.io:8001 \
 --entrypoint powr-entrypoint-2.mainnet.powerledger.io:8001 \
+--dynamic-port-range 8000-9000 \
+--limit-ledger-size \
+--log <PATH TO>/validator.log
+```
+
+### Pruned Node (TESTNET)
+
+```bash
+#!/usr/bin/env bash
+
+exec <PATH TO powr/target/release>/solana-validator \
+--ledger <PATH TO>/ledger \
+--accounts <PATH TO>/accounts \
+--full-rpc-api \
+--private-rpc \
+--rpc-port 8899 \
+--account-index program-id \
+--account-index spl-token-mint \
+--account-index spl-token-owner \
+--identity /home/validator-admin/keypairs/id.json \
+--authorized-voter /home/validator-admin/keypairs/id.json \
+--vote-account /home/validator-admin/keypairs/vote-account.json \
+--expected-genesis-hash DPuZ3dvuf45xYgX2HmfdUuJPXVbBMjPR6QJ35Xhb7c9S \
+--known-validator EeMpsFwCcU6MAjqVKFHrYgiju3Z55nJTnzPqwQebXZKW \
+--wal-recovery-mode skip_any_corrupted_record \
+--enable-rpc-transaction-history \
+--entrypoint 161.97.170.10:8001 \
 --dynamic-port-range 8000-9000 \
 --limit-ledger-size \
 --log <PATH TO>/validator.log
