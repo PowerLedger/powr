@@ -4,7 +4,7 @@ title: Web3 API Reference
 
 ## Web3 API Reference Guide
 
-The `@solana/web3.js` library is a package that has coverage over the [Solana JSON RPC API](https://docs.solana.com/developing/clients/jsonrpc-api).
+The `@solana/web3.js` library is a package that has coverage over the JSON RPC API of the Powerledger blockchain
 
 You can find the full documentation for the `@solana/web3.js` library [here](https://solana-labs.github.io/solana-web3.js/).
 
@@ -14,7 +14,7 @@ You can find the full documentation for the `@solana/web3.js` library [here](htt
 
 [Source Documentation](https://solana-labs.github.io/solana-web3.js/classes/Connection.html)
 
-Connection is used to interact with the [Solana JSON RPC](https://docs.solana.com/developing/clients/jsonrpc-api). You can use Connection to confirm transactions, get account info, and more.
+Connection is used to interact with the JSON RPC. You can use Connection to confirm transactions, get account info, and more.
 
 You create a connection by defining the JSON RPC cluster endpoint and the desired commitment. Once this is complete, you can use this connection object to interact with any of the Solana JSON RPC API.
 
@@ -23,7 +23,7 @@ You create a connection by defining the JSON RPC cluster endpoint and the desire
 ```javascript
 const web3 = require("@solana/web3.js");
 
-let connection = new web3.Connection(web3.clusterApiUrl('devnet'), 'confirmed');
+let connection = new web3.Connection(web3.clusterApiUrl('https://powr-api.testnet.powerledger.io'), 'confirmed');
 
 let slot = await connection.getSlot();
 console.log(slot);
@@ -69,7 +69,7 @@ const nacl = require('tweetnacl');
 
 // Airdrop SOL for paying transactions
 let payer = web3.Keypair.generate();
-let connection = new web3.Connection(web3.clusterApiUrl('devnet'), 'confirmed');
+let connection = new web3.Connection(web3.clusterApiUrl('https://powr-api.testnet.powerledger.io'), 'confirmed');
 
 let airdropSignature = await connection.requestAirdrop(
     payer.publicKey,
@@ -125,7 +125,7 @@ await web3.sendAndConfirmRawTransaction(connection, rawTransaction);
 
 [Source Documentation](https://solana-labs.github.io/solana-web3.js/classes/Keypair.html)
 
-The keypair is used to create an account with a public key and secret key within Solana. You can either generate, generate from a seed, or create from a secret key.
+The keypair is used to create an account with a public key and secret key within Solana blockchain clusters, such as the Powerledger blockchain. You can either generate, generate from a seed, or create from a secret key.
 
 #### Example Usage
 
@@ -181,7 +181,7 @@ console.log(accountFromSecret.secretKey);
 // ]
 ```
 
-Using `generate` generates a random Keypair for use as an account on Solana. Using `fromSeed`, you can generate a Keypair using a deterministic constructor. `fromSecret` creates a Keypair from a secret Uint8array. You can see that the publicKey for the `generate` Keypair and `fromSecret` Keypair are the same because the secret from the `generate` Keypair is used in `fromSecret`.
+Using `generate` generates a random Keypair for use as an account on the Powerledger blockchain. Using `fromSeed`, you can generate a Keypair using a deterministic constructor. `fromSecret` creates a Keypair from a secret Uint8array. You can see that the publicKey for the `generate` Keypair and `fromSecret` Keypair are the same because the secret from the `generate` Keypair is used in `fromSecret`.
 
 **Warning**: Do not use `fromSeed` unless you are creating a seed with high entropy. Do not share your seed. Treat the seed like you would a private key.
 
@@ -189,7 +189,7 @@ Using `generate` generates a random Keypair for use as an account on Solana. Usi
 
 [Source Documentation](https://solana-labs.github.io/solana-web3.js/classes/PublicKey.html)
 
-PublicKey is used throughout `@solana/web3.js` in transactions, keypairs, and programs. You require publickey when listing each account in a transaction and as a general identifier on Solana.
+PublicKey is used throughout `@solana/web3.js` in transactions, keypairs, and programs. You require publickey when listing each account in a transaction and as a general identifier on the Powerledger blockchain.
 
 A PublicKey can be created with a base58 encoded string, buffer, Uint8Array, number, and an array of numbers.
 
@@ -222,7 +222,7 @@ console.log(`Valid Program Address: ${validProgramAddress}`);
 
 ### SystemProgram
 
-[SourceDocumentation](https://solana-labs.github.io/solana-web3.js/classes/SystemProgram.html)
+[Source Documentation](https://solana-labs.github.io/solana-web3.js/classes/SystemProgram.html)
 
 The SystemProgram grants the ability to create accounts, allocate account data, assign an account to programs, work with nonce accounts, and transfer lamports. You can use the SystemInstruction class to help with decoding and reading individual instructions
 
@@ -233,7 +233,7 @@ const web3 = require("@solana/web3.js");
 
 // Airdrop SOL for paying transactions
 let payer = web3.Keypair.generate();
-let connection = new web3.Connection(web3.clusterApiUrl('devnet'), 'confirmed');
+let connection = new web3.Connection(web3.clusterApiUrl('https://powr-api.testnet.powerledger.io'), 'confirmed');
 
 let airdropSignature = await connection.requestAirdrop(
     payer.publicKey,
@@ -332,7 +332,7 @@ console.log(`Ethereum Address: 0x${ethAddress.toString('hex')}`);
 
 // Fund a keypair to create instructions
 let fromPublicKey = web3.Keypair.generate();
-let connection = new web3.Connection(web3.clusterApiUrl('devnet'), 'confirmed');
+let connection = new web3.Connection(web3.clusterApiUrl('https://powr-api.testnet.powerledger.io'), 'confirmed');
 
 let airdropSignature = await connection.requestAirdrop(
     fromPublicKey.publicKey,
@@ -379,7 +379,7 @@ let toPublicKey = web3.Keypair.generate().publicKey;
 let fromPublicKey = web3.Keypair.generate();
 
 let connection = new web3.Connection(
-    web3.clusterApiUrl('devnet'),
+    web3.clusterApiUrl('https://powr-api.testnet.powerledger.io'),
     'confirmed'
 );
 
@@ -430,7 +430,7 @@ await web3.sendAndConfirmTransaction(connection, transaction, [fromPublicKey])
 
 ### Struct
 
-[SourceDocumentation](https://solana-labs.github.io/solana-web3.js/classes/Struct.html)
+[Source Documentation](https://solana-labs.github.io/solana-web3.js/classes/Struct.html)
 
 The struct class is used to create Rust compatible structs in javascript. This class is only compatible with Borsh encoded Rust structs.
 
@@ -494,7 +494,7 @@ const web3 = require('@solana/web3.js');
 
 // Create connection
 let connection = new web3.Connection(
-    web3.clusterApiUrl('devnet'),
+    web3.clusterApiUrl('https://powr-api.testnet.powerledger.io'),
     'confirmed',
 );
 
@@ -650,7 +650,7 @@ const web3 = require("@solana/web3.js");
 
 // Fund a key to create transactions
 let fromPublicKey = web3.Keypair.generate();
-let connection = new web3.Connection(web3.clusterApiUrl('devnet'), 'confirmed');
+let connection = new web3.Connection(web3.clusterApiUrl('https://powr-api.testnet.powerledger.io'), 'confirmed');
 
 let airdropSignature = await connection.requestAirdrop(
     fromPublicKey.publicKey,

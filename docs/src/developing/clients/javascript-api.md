@@ -4,9 +4,11 @@ title: Web3 JavaScript API
 
 ## What is Solana-Web3.js?
 
-The Solana-Web3.js library aims to provide complete coverage of Solana. The library was built on top of the [Solana JSON RPC API](https://docs.solana.com/developing/clients/jsonrpc-api).
+The Solana-Web3.js library aims to provide complete coverage of Solana based blockchain clusters, including the Powerledger blockchain. The library was built on top of the [Solana JSON RPC API](https://docs.solana.com/developing/clients/jsonrpc-api).
 
 You can find the full documentation for the `@solana/web3.js` library [here](https://solana-labs.github.io/solana-web3.js/).
+
+Due to the compatibility of these libaries with the Powerledger blockchain, Powerledger recommends usage of these libraries.
 
 ## Common Terminology
 
@@ -149,13 +151,17 @@ sendAndConfirmTransaction(
 );
 ```
 
-The above code takes in a `TransactionInstruction` using `SystemProgram`, creates a `Transaction`, and sends it over the network. You use `Connection` in order to define which Solana network you are connecting to, namely `mainnet-beta`, `testnet`, or `devnet`.
+The above code takes in a `TransactionInstruction` using `SystemProgram`, creates a `Transaction`, and sends it over the network. You use `ClusterApiUrl` in order to define which network you are connecting to. 
+
+Powerledger blockchain testnet: https://powr-api.testnet.powerledger.io
+
+Powerledger blockchain mainnet: https://powr-api.mainnet.powerledger.io
 
 ### Interacting with Custom Programs
 
-The previous section visits sending basic transactions. In Solana everything you do interacts with different programs, including the previous section's transfer transaction. At the time of writing programs on Solana are either written in Rust or C.
+The previous section visits sending basic transactions. In Solana everything you do interacts with different programs, including the previous section's transfer transaction. At the time of writing programs on the Powerledger blockchain, and other Solana based blockchain clusters are either written in Rust or C.
 
-Let's look at the `SystemProgram`. The method signature for allocating space in your account on Solana in Rust looks like this:
+Let's look at the `SystemProgram`. The method signature for allocating space in your account in Rust looks like this:
 
 ```rust
 pub fn allocate(
@@ -164,7 +170,7 @@ pub fn allocate(
 ) -> Instruction
 ```
 
-In Solana when you want to interact with a program you must first know all the accounts you will be interacting with.
+When you want to interact with a program you must first know all the accounts you will be interacting with.
 
 You must always provide every account that the program will be interacting within the instruction. Not only that, but you must provide whether or not the account is `isSigner` or `isWritable`.
 
@@ -175,7 +181,7 @@ Let's look at how to call this instruction using solana-web3.js:
 ```javascript
 let keypair = web3.Keypair.generate();
 let payer = web3.Keypair.generate();
-let connection = new web3.Connection(web3.clusterApiUrl('testnet'));
+let connection = new web3.Connection(web3.clusterApiUrl('https://powr-api.testnet.powerledger.io'));
 
 let airdropSignature = await connection.requestAirdrop(
   payer.publicKey,
@@ -224,21 +230,10 @@ Let's break down this struct.
 `index` is set to 8 because the function `allocate` is in the 8th position in the instruction enum for `SystemProgram`.
 
 ```rust
-/* https://github.com/solana-labs/solana/blob/21bc43ed58c63c827ba4db30426965ef3e807180/sdk/program/src/system_instruction.rs#L142-L305 */
+/* https://github.com/PowerLedger/powr/blob/629c560537594a501a34d3b5235116ac8cca546e/sdk/program/src/system_instruction.rs#L258 */
 pub enum SystemInstruction {
-    /** 0 **/CreateAccount {/**/},
-    /** 1 **/Assign {/**/},
-    /** 2 **/Transfer {/**/},
-    /** 3 **/CreateAccountWithSeed {/**/},
-    /** 4 **/AdvanceNonceAccount,
-    /** 5 **/WithdrawNonceAccount(u64),
-    /** 6 **/InitializeNonceAccount(Pubkey),
-    /** 7 **/AuthorizeNonceAccount(Pubkey),
     /** 8 **/Allocate {/**/},
-    /** 9 **/AllocateWithSeed {/**/},
-    /** 10 **/AssignWithSeed {/**/},
-    /** 11 **/TransferWithSeed {/**/},
-    /** 12 **/UpgradeNonceAccount,
+
 }
 ```
 
@@ -298,7 +293,7 @@ const web3 = require("@solana/web3.js");
 let keypair = web3.Keypair.generate();
 let payer = web3.Keypair.generate();
 
-let connection = new web3.Connection(web3.clusterApiUrl('testnet'));
+let connection = new web3.Connection(web3.clusterApiUrl('https://powr-api.testnet.powerledger.io'));
 
 let airdropSignature = await connection.requestAirdrop(
   payer.publicKey,

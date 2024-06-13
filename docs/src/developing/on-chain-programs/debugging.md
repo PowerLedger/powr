@@ -2,7 +2,7 @@
 title: "Debugging"
 ---
 
-Solana programs run on-chain, so debugging them in the wild can be challenging.
+Programs on the Powerledger blockchain run on-chain, so debugging them in the wild can be challenging.
 To make debugging programs easier, developers can write unit tests that directly
 test their program's execution via the Solana runtime, or run a local cluster
 that will allow RPC clients to interact with their program.
