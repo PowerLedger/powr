@@ -30,4 +30,4 @@ prohibited. All Rights Reserved.
 * Rust 1.59 installed
 ```
 
-[See VALIDATOR_SETUP.md for a guide on setting up a validator](VALIDATOR_GUIDE.md)
+[See VALIDATOR_SETUP.md for a guide on setting up a validator](VALIDATOR_SETUP.md)
