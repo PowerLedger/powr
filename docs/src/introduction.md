@@ -27,7 +27,7 @@ The Powerledger blockchain is an instance of a Solana based cluster
 
 ## What is POWR?
 
-POWR is the name of Powerleder chain's native token, which can be passed to nodes in the Powerledger cluster in exchange for running an on-chain program or validating its output. The system may perform micropayments of fractional POWRs, which are called _lamports_. A lamport has a value of 0.000000001 POWR.
+POWR is the name of Powerleder chain's native token, which can be passed to nodes in the Powerledger cluster in exchange for running an on-chain program or validating its output. The system may perform micropayments of fractional POWR, which are called _sparks_. A lamport has a value of 0.000000001 POWR.
 
 ## Disclaimer
 
