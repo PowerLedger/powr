@@ -2,9 +2,68 @@
 title: CLI Usage Reference
 ---
 
-Powerledger uses the [solana-cli crate](https://crates.io/crates/solana-cli) to provide a command-line interface tool for the Powerledger blockchain, as it is based on the Solana codebase, and it compatible with the CLI tooling.
+Powerledger uses the [solana-cli crate](https://crates.io/crates/solana-cli) to provide a command-line interface tool for the Powerledger blockchain, as it is based on the Solana codebase, and it compatible with the CLI tooling. Soon, the Anza binaries will be used instead of the Solana binaries.
 
-This means that to interact with the Powerledger blockchain via the CLI, you must use the `solana` command, and it will show SOL instead of POWR for the time being.
+This means that to interact with the Powerledger blockchain via the CLI, you must use the `solana` command, and it will show SOL instead of POWR on the command line when checking balances etc. for the time being.
+
+To use the Solana CLI with the Powerledger blockchain, you must first set your configuration to use the Powerledger blockchain cluster. This is done by setting and RPC URL like below:
+
+### Configure CLI to use Powerledger blockchain
+```bash
+// Configure to use mainnet
+$ solana config set --url https://powr-api.mainnet.powerledger.io
+
+// Configure to use testnet
+$ solana config set --url https://powr-api.testnet.powerledger.io
+```
+
+After this, any commands used in the CLI will be pointed towards the appropriate Powerledger blockchain cluster.
+
+### Getting extra command help
+You can type `--help` after any command from the CLI tools to get more information about how it is used. For example:
+```text
+// Get help about solana balance command
+$ solana balance --help
+
+// Output
+solana-balance
+Get your balance
+
+USAGE:
+    solana balance [FLAGS] [OPTIONS] [ACCOUNT_ADDRESS]
+
+FLAGS:
+    -h, --help                           Prints help information
+        --lamports                       Display balance in lamports instead of SOL
+        --no-address-labels              Do not use address labels in the output
+        --skip-seed-phrase-validation    Skip validation of seed phrases. Use this if your phrase does not use the BIP39
+                                         official English word list
+        --use-quic                       Use QUIC when sending transactions.
+        --use-udp                        Use UDP when sending transactions.
+    -V, --version                        Prints version information
+    -v, --verbose                        Show additional information
+
+OPTIONS:
+        --commitment <COMMITMENT_LEVEL>    Return information at the selected commitment level [possible values:
+                                           processed, confirmed, finalized]
+    -C, --config <FILEPATH>                Configuration file to use [default:
+                                           /Users/michael/.config/solana/cli/config.yml]
+    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
+                                           testnet, devnet, localhost]
+    -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
+        --output <FORMAT>                  Return information in specified output format [possible values: json, json-
+                                           compact]
+        --ws <URL>                         WebSocket URL for the solana cluster
+
+ARGS:
+    <ACCOUNT_ADDRESS>    Account balance to check. Address is one of:
+                           * a base58-encoded public key
+                           * a path to a keypair file
+                           * a hyphen; signals a JSON-encoded keypair on stdin
+                           * the 'ASK' keyword; to recover a keypair via its seed phrase
+                           * a hardware wallet keypair URL (i.e. usb://ledger)
+
+```
 
 ## Examples
 
@@ -18,7 +77,7 @@ $ solana-keygen pubkey
 <PUBKEY>
 ```
 
-### Airdrop SOL/Lamports
+### Airdrop POWR/Sparks
 
 ```bash
 // Command
@@ -80,17 +139,16 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 SUBCOMMANDS:
     account                              Show the contents of an account
     address                              Get your public key
-    airdrop                              Request SOL from a faucet
+    airdrop                              Request POWR from a faucet
     authorize-nonce-account              Assign account authority to a new entity
     balance                              Get your balance
     block                                Get a confirmed block
@@ -146,7 +204,7 @@ SUBCOMMANDS:
     stake-set-lockup                     Set Lockup for the stake account
     stake-set-lockup-checked             Set Lockup for the stake account, checking the new authority as a signer
     stakes                               Show stake account information
-    supply                               Get information about the cluster supply of SOL
+    supply                               Get information about the cluster supply of POWR
     transaction-count                    Get current transaction count
     transaction-history                  Show historical transactions affecting the given address from newest to
                                          oldest
@@ -165,9 +223,9 @@ SUBCOMMANDS:
     vote-update-commission               Update the vote account's commission
     vote-update-validator                Update the vote account's validator identity
     wait-for-max-stake                   Wait for the max stake of any one node to drop below a percentage of total.
-    withdraw-from-nonce-account          Withdraw SOL from the nonce account
-    withdraw-from-vote-account           Withdraw lamports from a vote account into a specified account
-    withdraw-stake                       Withdraw the unstaked SOL from the stake account
+    withdraw-from-nonce-account          Withdraw POWR from the nonce account
+    withdraw-from-vote-account           Withdraw from a vote account into a specified account
+    withdraw-stake                       Withdraw the unstaked POWR from the stake account
 ```
 
 #### solana-account
@@ -180,7 +238,7 @@ USAGE:
 
 FLAGS:
     -h, --help                           Prints help information
-        --lamports                       Display balance in lamports instead of SOL
+        --lamports                       Display balance in sparks instead of POWR
         --no-address-labels              Do not use address labels in the output
         --skip-seed-phrase-validation    Skip validation of seed phrases. Use this if your phrase does not use the BIP39
                                          official English word list
@@ -192,13 +250,12 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
     -o, --output-file <FILEPATH>           Write the account data to this file
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <ACCOUNT_ADDRESS>    Account key URI. , one of:
@@ -231,18 +288,17 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-airdrop
 ```text
 solana-airdrop 
-Request SOL from a faucet
+Request POWR from a faucet
 
 USAGE:
     solana airdrop [FLAGS] [OPTIONS] <AMOUNT> [RECIPIENT_ADDRESS]
@@ -260,15 +316,14 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
-    <AMOUNT>               The airdrop amount to request, in SOL
+    <AMOUNT>               The airdrop amount to request, in POWR
     <RECIPIENT_ADDRESS>    The account address of airdrop recipient. , one of:
                              * a base58-encoded public key
                              * a path to a keypair file
@@ -298,14 +353,13 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <NONCE_ACCOUNT_ADDRESS>    Address of the nonce account. , one of:
@@ -332,7 +386,7 @@ USAGE:
 
 FLAGS:
     -h, --help                           Prints help information
-        --lamports                       Display balance in lamports instead of SOL
+        --lamports                       Display balance in sparks instead of POWR
         --no-address-labels              Do not use address labels in the output
         --skip-seed-phrase-validation    Skip validation of seed phrases. Use this if your phrase does not use the BIP39
                                          official English word list
@@ -344,12 +398,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <ACCOUNT_ADDRESS>    The account address of the balance to check. , one of:
@@ -381,12 +434,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <SLOT>    
@@ -413,12 +465,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-block-production
@@ -443,14 +494,13 @@ OPTIONS:
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
         --epoch <epoch>                    Epoch to show block production for [default: current epoch]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
         --slot-limit <slot_limit>          Limit results to this many slots from the end of the epoch [default: full
                                            epoch]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-block-time
@@ -474,12 +524,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <SLOT>    Slot number of the block to query
@@ -508,14 +557,13 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --our-localhost <PORT>             Guess Identity pubkey and validator rpc node assuming local (possibly
                                            private) validator [default: 8899]
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <OUR_VALIDATOR_PUBKEY>    Identity pubkey of the validator, one of:
@@ -556,14 +604,14 @@ OPTIONS:
             or the pubkey of an offline signer, provided an appropriate --signer argument 
             is also passed. Defaults to the client keypair.
     -u, --url <URL_OR_MONIKER>
-            URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta, testnet, devnet, localhost]
+             URL for cluster's JSON RPC.
 
     -k, --keypair <KEYPAIR>                             Filepath or URL to a keypair
         --with-memo <MEMO>                              Specify a memo string to include in the transaction.
         --output <FORMAT>
             Return information in specified output format [possible values: json, json-compact]
 
-        --ws <URL>                                      WebSocket URL for the solana cluster
+        --ws <URL>                                      WebSocket URL for the cluster
 
 ARGS:
     <VOTE_ACCOUNT_ADDRESS>    Vote account to be closed. , one of:
@@ -572,7 +620,7 @@ ARGS:
                                 * a hyphen; signals a JSON-encoded keypair on stdin
                                 * the 'ASK' keyword; to recover a keypair via its seed phrase
                                 * a hardware wallet keypair URL (i.e. usb://ledger)
-    <RECIPIENT_ADDRESS>       The recipient of all withdrawn SOL. , one of:
+    <RECIPIENT_ADDRESS>       The recipient of all withdrawn POWR. , one of:
                                 * a base58-encoded public key
                                 * a path to a keypair file
                                 * a hyphen; signals a JSON-encoded keypair on stdin
@@ -601,12 +649,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-cluster-version
@@ -630,12 +677,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-completion
@@ -659,13 +705,12 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
     -s, --shell <shell>                     [default: bash]  [possible values: bash, fish, zsh, powershell, elvish]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-config
@@ -689,12 +734,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 SUBCOMMANDS:
     export-address-labels    Export the current address labels
@@ -725,12 +769,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <TRANSACTION_SIGNATURE>    The transaction signature to confirm
@@ -772,12 +815,11 @@ OPTIONS:
                                              * a hyphen; signals a JSON-encoded keypair on stdin
                                              * the 'ASK' keyword; to recover a keypair via its seed phrase
                                              * a hardware wallet keypair URL (i.e. usb://ledger)
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <SEED_STRING>    The seed.  Must not take more than 32 bytes to encode as utf-8
@@ -806,8 +848,7 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce-authority <PUBKEY>         Assign noncing authority to another entity. , one of:
@@ -820,11 +861,11 @@ OPTIONS:
                                            compact]
         --seed <STRING>                    Seed for address generation; if specified, the resulting account will be at a
                                            derived address of the NONCE_ACCOUNT pubkey
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <ACCOUNT_KEYPAIR>    Keypair of the nonce account to fund
-    <AMOUNT>             The amount to load the nonce account with, in SOL; accepts keyword ALL
+    <AMOUNT>             The amount to load the nonce account with, in POWR; accepts keyword ALL
 ```
 
 #### solana-create-stake-account
@@ -862,16 +903,14 @@ OPTIONS:
                                             argument 
                                             is also passed. Defaults to the client keypair.
         --from <KEYPAIR>                    Source account of funds [default: cli config keypair]
-    -u, --url <URL_OR_MONIKER>              URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                            testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>              URL for cluster's JSON RPC
     -k, --keypair <KEYPAIR>                 Filepath or URL to a keypair
         --lockup-date <RFC3339 DATETIME>    The date and time at which this account will be available for withdrawal
         --lockup-epoch <NUMBER>             The epoch height at which this account will be available for withdrawal
         --with-memo <MEMO>                  Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                    Provide the nonce account to use when creating a nonced 
                                             transaction. Nonced transactions are useful when a transaction 
-                                            requires a lengthy signing process. Learn more about nonced 
-                                            transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                            requires a lengthy signing process.
         --nonce-authority <KEYPAIR>         Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                   Return information in specified output format [possible values: json, json-
                                             compact]
@@ -879,12 +918,12 @@ OPTIONS:
                                             a derived address of the STAKE_ACCOUNT_KEYPAIR pubkey
         --signer <PUBKEY=SIGNATURE>...      Provide a public-key/signature pair for the transaction
         --stake-authority <PUBKEY>          Authorized staker [default: cli config keypair]
-        --ws <URL>                          WebSocket URL for the solana cluster
+        --ws <URL>                          WebSocket URL for the cluster
         --withdraw-authority <PUBKEY>       Authorized withdrawer [default: cli config keypair]
 
 ARGS:
     <STAKE_ACCOUNT_KEYPAIR>    Stake account to create (or base of derived address if --seed is used)
-    <AMOUNT>                   The amount to send to the stake account, in SOL; accepts keyword ALL
+    <AMOUNT>                   The amount to send to the stake account, in POWR; accepts keyword ALL
 ```
 
 #### solana-create-stake-account-checked
@@ -915,14 +954,12 @@ OPTIONS:
                                            or the pubkey of an offline signer, provided an appropriate --signer argument 
                                            is also passed. Defaults to the client keypair.
         --from <KEYPAIR>                   Source account of funds [default: cli config keypair]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process.
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
@@ -930,12 +967,12 @@ OPTIONS:
                                            derived address of the STAKE_ACCOUNT_KEYPAIR pubkey
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
         --stake-authority <PUBKEY>         Authorized staker [default: cli config keypair]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
         --withdraw-authority <KEYPAIR>     Authorized withdrawer [default: cli config keypair]
 
 ARGS:
     <STAKE_ACCOUNT_KEYPAIR>    Stake account to create (or base of derived address if --seed is used)
-    <AMOUNT>                   The amount to send to the stake account, in SOL; accepts keyword ALL
+    <AMOUNT>                   The amount to send to the stake account, in POWR; accepts keyword ALL
 ```
 
 #### solana-create-vote-account
@@ -977,14 +1014,12 @@ OPTIONS:
                                              or the pubkey of an offline signer, provided an appropriate --signer
                                              argument 
                                              is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>               URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-
-                                             beta, testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>               URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                  Filepath or URL to a keypair
         --with-memo <MEMO>                   Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                     Provide the nonce account to use when creating a nonced 
                                              transaction. Nonced transactions are useful when a transaction 
-                                             requires a lengthy signing process. Learn more about nonced 
-                                             transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                             requires a lengthy signing process.
         --nonce-authority <KEYPAIR>          Provide the nonce authority keypair to use when signing a nonced
                                              transaction
         --output <FORMAT>                    Return information in specified output format [possible values: json, json-
@@ -992,7 +1027,7 @@ OPTIONS:
         --seed <STRING>                      Seed for address generation; if specified, the resulting account will be at
                                              a derived address of the VOTE ACCOUNT pubkey
         --signer <PUBKEY=SIGNATURE>...       Provide a public-key/signature pair for the transaction
-        --ws <URL>                           WebSocket URL for the solana cluster
+        --ws <URL>                           WebSocket URL for the cluster
 
 ARGS:
     <ACCOUNT_KEYPAIR>      Vote account keypair to create
@@ -1032,14 +1067,12 @@ OPTIONS:
         --fee-payer <KEYPAIR>              Specify the fee-payer account. This may be a keypair file, the ASK keyword 
                                            or the pubkey of an offline signer, provided an appropriate --signer argument 
                                            is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process. 
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
@@ -1047,7 +1080,7 @@ OPTIONS:
                                            derived address of STAKE_ACCOUNT_ADDRESS
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
         --stake-authority <KEYPAIR>        Authorized staker [default: cli config keypair]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <STAKE_ACCOUNT_ADDRESS>    Stake account to be deactivated (or base of derived address if --seed is used). , one
@@ -1080,12 +1113,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <TRANSACTION>    transaction to decode
@@ -1119,20 +1151,18 @@ OPTIONS:
         --fee-payer <KEYPAIR>              Specify the fee-payer account. This may be a keypair file, the ASK keyword 
                                            or the pubkey of an offline signer, provided an appropriate --signer argument 
                                            is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process. 
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
         --stake-authority <KEYPAIR>        Authorized staker [default: cli config keypair]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <STAKE_ACCOUNT_ADDRESS>    Stake account to delegate, one of:
@@ -1170,12 +1200,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-epoch-info
@@ -1199,12 +1228,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-feature
@@ -1228,12 +1256,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 SUBCOMMANDS:
     activate    Activate a runtime feature
@@ -1263,12 +1290,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-first-available-block
@@ -1292,12 +1318,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-genesis-hash
@@ -1321,12 +1346,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-gossip
@@ -1350,12 +1374,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-help
@@ -1391,12 +1414,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 SUBCOMMANDS:
     help       Prints this message or the help of the given subcommand(s)
@@ -1426,12 +1448,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-leader-schedule
@@ -1456,12 +1477,11 @@ OPTIONS:
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
         --epoch <EPOCH>                    Epoch to show leader schedule for. [default: current]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-live-slots
@@ -1485,12 +1505,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-logs
@@ -1515,12 +1534,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <ADDRESS>    Account address to monitor [default: monitor all transactions except for votes] , one of:
@@ -1558,20 +1576,18 @@ OPTIONS:
         --fee-payer <KEYPAIR>              Specify the fee-payer account. This may be a keypair file, the ASK keyword 
                                            or the pubkey of an offline signer, provided an appropriate --signer argument 
                                            is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process. 
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
         --stake-authority <KEYPAIR>        Authorized staker [default: cli config keypair]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <STAKE_ACCOUNT_ADDRESS>           Stake account to merge into, one of:
@@ -1610,14 +1626,13 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <NONCE_ACCOUNT_ADDRESS>    Address of the nonce account. , one of:
@@ -1649,12 +1664,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <NONCE_ACCOUNT_ADDRESS>    Address of the nonce account to display. , one of:
@@ -1675,7 +1689,7 @@ USAGE:
 
 FLAGS:
     -h, --help                           Prints help information
-        --lamports                       Display balance in lamports instead of SOL
+        --lamports                       Display balance in sparks instead of POWR
         --no-address-labels              Do not use address labels in the output
         --skip-seed-phrase-validation    Skip validation of seed phrases. Use this if your phrase does not use the BIP39
                                          official English word list
@@ -1687,12 +1701,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <NONCE_ACCOUNT_ADDRESS>    Address of the nonce account to display. , one of:
@@ -1725,7 +1738,7 @@ OPTIONS:
         --commitment <COMMITMENT_LEVEL>
             Return information at the selected commitment level [possible values: processed, confirmed, finalized]
 
-        --compute-unit-price <MICRO-LAMPORTS>    Set the price in micro-lamports of each transaction compute unit
+        --compute-unit-price <MICRO-LAMPORTS>    Set the price in micro-sparks of each transaction compute unit
     -C, --config <FILEPATH>
             Configuration file to use [default: ~/.config/solana/cli/config.yml]
 
@@ -1734,14 +1747,14 @@ OPTIONS:
             Wait interval seconds between submitting the next transaction [default: 2]
 
     -u, --url <URL_OR_MONIKER>
-            URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta, testnet, devnet, localhost]
+             URL for cluster's JSON RPC.
 
     -k, --keypair <KEYPAIR>                      Filepath or URL to a keypair
         --output <FORMAT>
             Return information in specified output format [possible values: json, json-compact]
 
     -t, --timeout <SECONDS>                      Wait up to timeout seconds for transaction confirmation [default: 15]
-        --ws <URL>                               WebSocket URL for the solana cluster
+        --ws <URL>                               WebSocket URL for the cluster
 ```
 
 #### solana-program
@@ -1765,12 +1778,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 SUBCOMMANDS:
     close                    Close a program or buffer account and withdraw all lamports
@@ -1793,7 +1805,7 @@ USAGE:
 
 FLAGS:
     -h, --help                           Prints help information
-        --lamports                       Display rent in lamports instead of SOL
+        --lamports                       Display rent in sparks instead of POWR
         --no-address-labels              Do not use address labels in the output
         --skip-seed-phrase-validation    Skip validation of seed phrases. Use this if your phrase does not use the BIP39
                                          official English word list
@@ -1805,12 +1817,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <DATA_LENGTH_OR_MONIKER>    Length of data field in the account to calculate rent for, or moniker: [nonce,
@@ -1839,12 +1850,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <SIGNER_KEYPAIR>    The signer path to resolve
@@ -1871,12 +1881,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-split-stake
@@ -1906,14 +1915,12 @@ OPTIONS:
         --fee-payer <KEYPAIR>              Specify the fee-payer account. This may be a keypair file, the ASK keyword 
                                            or the pubkey of an offline signer, provided an appropriate --signer argument 
                                            is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process. 
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
@@ -1921,7 +1928,7 @@ OPTIONS:
                                            derived address of SPLIT_STAKE_ACCOUNT
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
         --stake-authority <KEYPAIR>        Authorized staker [default: cli config keypair]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <STAKE_ACCOUNT_ADDRESS>    Stake account to split (or base of derived address if --seed is used). , one of:
@@ -1931,7 +1938,7 @@ ARGS:
                                  * the 'ASK' keyword; to recover a keypair via its seed phrase
                                  * a hardware wallet keypair URL (i.e. usb://ledger)
     <SPLIT_STAKE_ACCOUNT>      Keypair of the new stake account
-    <AMOUNT>                   The amount to move into the new stake account, in SOL
+    <AMOUNT>                   The amount to move into the new stake account, in POWR
 ```
 
 #### solana-stake-account
@@ -1944,7 +1951,7 @@ USAGE:
 
 FLAGS:
     -h, --help                           Prints help information
-        --lamports                       Display balance in lamports instead of SOL
+        --lamports                       Display balance in sparks instead of POWR
         --no-address-labels              Do not use address labels in the output
         --skip-seed-phrase-validation    Skip validation of seed phrases. Use this if your phrase does not use the BIP39
                                          official English word list
@@ -1957,13 +1964,12 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --num-rewards-epochs <NUM>         Display rewards for NUM recent epochs, max 10 [default: latest epoch only]
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <STAKE_ACCOUNT_ADDRESS>    The stake account to display. , one of:
@@ -2005,8 +2011,7 @@ OPTIONS:
                                              or the pubkey of an offline signer, provided an appropriate --signer
                                              argument 
                                              is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>               URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-
-                                             beta, testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>               URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                  Filepath or URL to a keypair
         --with-memo <MEMO>                   Specify a memo string to include in the transaction.
         --new-stake-authority <PUBKEY>       New authorized staker, one of:
@@ -2023,15 +2028,14 @@ OPTIONS:
                                                * a hardware wallet keypair URL (i.e. usb://ledger)
         --nonce <PUBKEY>                     Provide the nonce account to use when creating a nonced 
                                              transaction. Nonced transactions are useful when a transaction 
-                                             requires a lengthy signing process. Learn more about nonced 
-                                             transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                             requires a lengthy signing process.
         --nonce-authority <KEYPAIR>          Provide the nonce authority keypair to use when signing a nonced
                                              transaction
         --output <FORMAT>                    Return information in specified output format [possible values: json, json-
                                              compact]
         --signer <PUBKEY=SIGNATURE>...       Provide a public-key/signature pair for the transaction
         --stake-authority <KEYPAIR>          Authorized staker [default: cli config keypair]
-        --ws <URL>                           WebSocket URL for the solana cluster
+        --ws <URL>                           WebSocket URL for the cluster
         --withdraw-authority <KEYPAIR>       Authorized withdrawer [default: cli config keypair]
 
 ARGS:
@@ -2074,23 +2078,21 @@ OPTIONS:
                                               or the pubkey of an offline signer, provided an appropriate --signer
                                               argument 
                                               is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>                URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-
-                                              beta, testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>                URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                   Filepath or URL to a keypair
         --with-memo <MEMO>                    Specify a memo string to include in the transaction.
         --new-stake-authority <KEYPAIR>       New authorized staker
         --new-withdraw-authority <KEYPAIR>    New authorized withdrawer
         --nonce <PUBKEY>                      Provide the nonce account to use when creating a nonced 
                                               transaction. Nonced transactions are useful when a transaction 
-                                              requires a lengthy signing process. Learn more about nonced 
-                                              transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                              requires a lengthy signing process.
         --nonce-authority <KEYPAIR>           Provide the nonce authority keypair to use when signing a nonced
                                               transaction
         --output <FORMAT>                     Return information in specified output format [possible values: json,
                                               json-compact]
         --signer <PUBKEY=SIGNATURE>...        Provide a public-key/signature pair for the transaction
         --stake-authority <KEYPAIR>           Authorized staker [default: cli config keypair]
-        --ws <URL>                            WebSocket URL for the solana cluster
+        --ws <URL>                            WebSocket URL for the cluster
         --withdraw-authority <KEYPAIR>        Authorized withdrawer [default: cli config keypair]
 
 ARGS:
@@ -2112,7 +2114,7 @@ USAGE:
 
 FLAGS:
     -h, --help                           Prints help information
-        --lamports                       Display balance in lamports instead of SOL
+        --lamports                       Display balance in sparks instead of POWR
         --no-address-labels              Do not use address labels in the output
         --skip-seed-phrase-validation    Skip validation of seed phrases. Use this if your phrase does not use the BIP39
                                          official English word list
@@ -2124,14 +2126,13 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --limit <NUM>                      Display NUM recent epochs worth of stake history in text mode. 0 for all
                                            [default: 10]
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-stake-set-lockup
@@ -2163,8 +2164,7 @@ OPTIONS:
                                             or the pubkey of an offline signer, provided an appropriate --signer
                                             argument 
                                             is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>              URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                            testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>              URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                 Filepath or URL to a keypair
         --lockup-date <RFC3339 DATETIME>    The date and time at which this account will be available for withdrawal
         --lockup-epoch <NUMBER>             The epoch height at which this account will be available for withdrawal
@@ -2177,13 +2177,12 @@ OPTIONS:
                                               * a hardware wallet keypair URL (i.e. usb://ledger)
         --nonce <PUBKEY>                    Provide the nonce account to use when creating a nonced 
                                             transaction. Nonced transactions are useful when a transaction 
-                                            requires a lengthy signing process. Learn more about nonced 
-                                            transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                            requires a lengthy signing process.
         --nonce-authority <KEYPAIR>         Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                   Return information in specified output format [possible values: json, json-
                                             compact]
         --signer <PUBKEY=SIGNATURE>...      Provide a public-key/signature pair for the transaction
-        --ws <URL>                          WebSocket URL for the solana cluster
+        --ws <URL>                          WebSocket URL for the cluster
 
 ARGS:
     <STAKE_ACCOUNT_ADDRESS>    Stake account for which to set lockup parameters. , one of:
@@ -2223,8 +2222,7 @@ OPTIONS:
                                             or the pubkey of an offline signer, provided an appropriate --signer
                                             argument 
                                             is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>              URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                            testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>              URL for cluster's JSON RPC
     -k, --keypair <KEYPAIR>                 Filepath or URL to a keypair
         --lockup-date <RFC3339 DATETIME>    The date and time at which this account will be available for withdrawal
         --lockup-epoch <NUMBER>             The epoch height at which this account will be available for withdrawal
@@ -2232,13 +2230,12 @@ OPTIONS:
         --new-custodian <KEYPAIR>           Keypair of a new lockup custodian
         --nonce <PUBKEY>                    Provide the nonce account to use when creating a nonced 
                                             transaction. Nonced transactions are useful when a transaction 
-                                            requires a lengthy signing process. Learn more about nonced 
-                                            transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                            requires a lengthy signing process.
         --nonce-authority <KEYPAIR>         Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                   Return information in specified output format [possible values: json, json-
                                             compact]
         --signer <PUBKEY=SIGNATURE>...      Provide a public-key/signature pair for the transaction
-        --ws <URL>                          WebSocket URL for the solana cluster
+        --ws <URL>                          WebSocket URL for the cluster
 
 ARGS:
     <STAKE_ACCOUNT_ADDRESS>    Stake account for which to set lockup parameters. , one of:
@@ -2259,7 +2256,7 @@ USAGE:
 
 FLAGS:
     -h, --help                           Prints help information
-        --lamports                       Display balance in lamports instead of SOL
+        --lamports                       Display balance in sparks instead of POWR
         --no-address-labels              Do not use address labels in the output
         --skip-seed-phrase-validation    Skip validation of seed phrases. Use this if your phrase does not use the BIP39
                                          official English word list
@@ -2271,12 +2268,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
         --withdraw-authority <PUBKEY>      Only show stake accounts with the provided withdraw authority. , one of:
                                              * a base58-encoded public key
                                              * a path to a keypair file
@@ -2296,7 +2292,7 @@ ARGS:
 #### solana-supply
 ```text
 solana-supply 
-Get information about the cluster supply of SOL
+Get information about the cluster supply of POWR
 
 USAGE:
     solana supply [FLAGS] [OPTIONS]
@@ -2315,12 +2311,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-transaction-count
@@ -2344,12 +2339,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 ```
 
 #### solana-transaction-history
@@ -2375,13 +2369,12 @@ OPTIONS:
                                             processed, confirmed, finalized]
     -C, --config <FILEPATH>                 Configuration file to use [default:
                                             ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>              URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                            testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>              URL for cluster's JSON RPC
     -k, --keypair <KEYPAIR>                 Filepath or URL to a keypair
         --limit <LIMIT>                     Maximum number of transaction signatures to return [default: 1000]
         --output <FORMAT>                   Return information in specified output format [possible values: json, json-
                                             compact]
-        --ws <URL>                          WebSocket URL for the solana cluster
+        --ws <URL>                          WebSocket URL for the cluster
 
 ARGS:
     <ADDRESS>    Account address, one of:
@@ -2428,19 +2421,17 @@ OPTIONS:
                                              * a hyphen; signals a JSON-encoded keypair on stdin
                                              * the 'ASK' keyword; to recover a keypair via its seed phrase
                                              * a hardware wallet keypair URL (i.e. usb://ledger)
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process. 
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <RECIPIENT_ADDRESS>    The account address of recipient. , one of:
@@ -2449,7 +2440,7 @@ ARGS:
                              * a hyphen; signals a JSON-encoded keypair on stdin
                              * the 'ASK' keyword; to recover a keypair via its seed phrase
                              * a hardware wallet keypair URL (i.e. usb://ledger)
-    <AMOUNT>               The amount to send, in SOL; accepts keyword ALL
+    <AMOUNT>               The amount to send, in POWR; accepts keyword ALL
 ```
 
 #### solana-upgrade-nonce-account
@@ -2473,13 +2464,12 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <NONCE_ACCOUNT_ADDRESS>    Nonce account to upgrade. , one of:
@@ -2493,7 +2483,7 @@ ARGS:
 #### solana-validator-info
 ```text
 solana-validator-info 
-Publish/get Validator info on Solana
+Publish/get Validator info on Powerledger blockchain
 
 USAGE:
     solana validator-info [FLAGS] [OPTIONS] <SUBCOMMAND>
@@ -2511,17 +2501,16 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 SUBCOMMANDS:
-    get        Get and parse Solana Validator info
+    get        Get and parse Powerledger blockchain Validator info
     help       Prints this message or the help of the given subcommand(s)
-    publish    Publish Validator info on Solana
+    publish    Publish Validator info on Powerledger blockchain
 ```
 
 #### solana-validators
@@ -2535,7 +2524,7 @@ USAGE:
 FLAGS:
     -h, --help                           Prints help information
         --keep-unstaked-delinquents      Don't discard unstaked, delinquent validators
-        --lamports                       Display balance in lamports instead of SOL
+        --lamports                       Display balance in sparks instead of POWR
         --no-address-labels              Do not use address labels in the output
     -n, --number                         Number the validators
     -r, --reverse                        Reverse order while sorting
@@ -2555,7 +2544,7 @@ OPTIONS:
             Minimum slot distance from the tip to consider a validator delinquent. [default: 128]
 
     -u, --url <URL_OR_MONIKER>
-            URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta, testnet, devnet, localhost]
+             URL for cluster's JSON RPC.
 
     -k, --keypair <KEYPAIR>                           Filepath or URL to a keypair
         --output <FORMAT>
@@ -2564,7 +2553,7 @@ OPTIONS:
         --sort <sort>
             Sort order (does not affect JSON output) [default: stake]  [possible values: delinquent, commission,
             credits, identity, last-vote, root, skip-rate, stake, version, vote-account]
-        --ws <URL>                                    WebSocket URL for the solana cluster
+        --ws <URL>                                    WebSocket URL for the cluster
 ```
 
 #### solana-vote-account
@@ -2577,7 +2566,7 @@ USAGE:
 
 FLAGS:
     -h, --help                           Prints help information
-        --lamports                       Display balance in lamports instead of SOL
+        --lamports                       Display balance in sparks instead of POWR
         --no-address-labels              Do not use address labels in the output
         --skip-seed-phrase-validation    Skip validation of seed phrases. Use this if your phrase does not use the BIP39
                                          official English word list
@@ -2590,13 +2579,12 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --num-rewards-epochs <NUM>         Display rewards for NUM recent epochs, max 10 [default: latest epoch only]
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <VOTE_ACCOUNT_ADDRESS>    Vote account pubkey. , one of:
@@ -2634,19 +2622,17 @@ OPTIONS:
         --fee-payer <KEYPAIR>              Specify the fee-payer account. This may be a keypair file, the ASK keyword 
                                            or the pubkey of an offline signer, provided an appropriate --signer argument 
                                            is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process. 
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <VOTE_ACCOUNT_ADDRESS>     Vote account in which to set the authorized voter. , one of:
@@ -2691,19 +2677,17 @@ OPTIONS:
         --fee-payer <KEYPAIR>              Specify the fee-payer account. This may be a keypair file, the ASK keyword 
                                            or the pubkey of an offline signer, provided an appropriate --signer argument 
                                            is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process. 
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <VOTE_ACCOUNT_ADDRESS>      Vote account in which to set the authorized voter. , one of:
@@ -2743,19 +2727,17 @@ OPTIONS:
         --fee-payer <KEYPAIR>              Specify the fee-payer account. This may be a keypair file, the ASK keyword 
                                            or the pubkey of an offline signer, provided an appropriate --signer argument 
                                            is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process. 
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <VOTE_ACCOUNT_ADDRESS>    Vote account in which to set the authorized withdrawer. , one of:
@@ -2800,19 +2782,17 @@ OPTIONS:
         --fee-payer <KEYPAIR>              Specify the fee-payer account. This may be a keypair file, the ASK keyword 
                                            or the pubkey of an offline signer, provided an appropriate --signer argument 
                                            is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process. 
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <VOTE_ACCOUNT_ADDRESS>      Vote account in which to set the authorized withdrawer. , one of:
@@ -2852,19 +2832,17 @@ OPTIONS:
         --fee-payer <KEYPAIR>              Specify the fee-payer account. This may be a keypair file, the ASK keyword 
                                            or the pubkey of an offline signer, provided an appropriate --signer argument 
                                            is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process. 
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <VOTE_ACCOUNT_ADDRESS>    Vote account to update. , one of:
@@ -2904,19 +2882,17 @@ OPTIONS:
         --fee-payer <KEYPAIR>              Specify the fee-payer account. This may be a keypair file, the ASK keyword 
                                            or the pubkey of an offline signer, provided an appropriate --signer argument 
                                            is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process. 
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <VOTE_ACCOUNT_ADDRESS>    Vote account to update. , one of:
@@ -2950,12 +2926,11 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <PERCENT>    
@@ -2964,7 +2939,7 @@ ARGS:
 #### solana-withdraw-from-nonce-account
 ```text
 solana-withdraw-from-nonce-account 
-Withdraw SOL from the nonce account
+Withdraw POWR from the nonce account
 
 USAGE:
     solana withdraw-from-nonce-account [FLAGS] [OPTIONS] <NONCE_ACCOUNT_ADDRESS> <RECIPIENT_ADDRESS> <AMOUNT>
@@ -2982,14 +2957,13 @@ OPTIONS:
                                            processed, confirmed, finalized]
     -C, --config <FILEPATH>                Configuration file to use [default:
                                            ~/.config/solana/cli/config.yml]
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
 
 ARGS:
     <NONCE_ACCOUNT_ADDRESS>    Nonce account to withdraw from. , one of:
@@ -3004,13 +2978,13 @@ ARGS:
                                  * a hyphen; signals a JSON-encoded keypair on stdin
                                  * the 'ASK' keyword; to recover a keypair via its seed phrase
                                  * a hardware wallet keypair URL (i.e. usb://ledger)
-    <AMOUNT>                   The amount to withdraw from the nonce account, in SOL
+    <AMOUNT>                   The amount to withdraw from the nonce account, in POWR
 ```
 
 #### solana-withdraw-from-vote-account
 ```text
 solana-withdraw-from-vote-account 
-Withdraw lamports from a vote account into a specified account
+Withdraw POWR from a vote account into a specified account
 
 USAGE:
     solana withdraw-from-vote-account [FLAGS] [OPTIONS] <VOTE_ACCOUNT_ADDRESS> <RECIPIENT_ADDRESS> <AMOUNT>
@@ -3039,15 +3013,14 @@ OPTIONS:
             or the pubkey of an offline signer, provided an appropriate --signer argument 
             is also passed. Defaults to the client keypair.
     -u, --url <URL_OR_MONIKER>
-            URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta, testnet, devnet, localhost]
+             URL for cluster's JSON RPC.
 
     -k, --keypair <KEYPAIR>                             Filepath or URL to a keypair
         --with-memo <MEMO>                              Specify a memo string to include in the transaction.
         --nonce <PUBKEY>
             Provide the nonce account to use when creating a nonced 
             transaction. Nonced transactions are useful when a transaction 
-            requires a lengthy signing process. Learn more about nonced 
-            transactions at https://docs.solana.com/offline-signing/durable-nonce
+            requires a lengthy signing process.
         --nonce-authority <KEYPAIR>
             Provide the nonce authority keypair to use when signing a nonced transaction
 
@@ -3055,7 +3028,7 @@ OPTIONS:
             Return information in specified output format [possible values: json, json-compact]
 
         --signer <PUBKEY=SIGNATURE>...                  Provide a public-key/signature pair for the transaction
-        --ws <URL>                                      WebSocket URL for the solana cluster
+        --ws <URL>                                      WebSocket URL for the cluster
 
 ARGS:
     <VOTE_ACCOUNT_ADDRESS>    Vote account from which to withdraw. , one of:
@@ -3070,14 +3043,14 @@ ARGS:
                                 * a hyphen; signals a JSON-encoded keypair on stdin
                                 * the 'ASK' keyword; to recover a keypair via its seed phrase
                                 * a hardware wallet keypair URL (i.e. usb://ledger)
-    <AMOUNT>                  The amount to withdraw, in SOL; accepts keyword ALL, which for this command means
+    <AMOUNT>                  The amount to withdraw, in POWR; accepts keyword ALL, which for this command means
                               account balance minus rent-exempt minimum
 ```
 
 #### solana-withdraw-stake
 ```text
 solana-withdraw-stake 
-Withdraw the unstaked SOL from the stake account
+Withdraw the unstaked POWR from the stake account
 
 USAGE:
     solana withdraw-stake [FLAGS] [OPTIONS] <STAKE_ACCOUNT_ADDRESS> <RECIPIENT_ADDRESS> <AMOUNT>
@@ -3102,21 +3075,19 @@ OPTIONS:
         --fee-payer <KEYPAIR>              Specify the fee-payer account. This may be a keypair file, the ASK keyword 
                                            or the pubkey of an offline signer, provided an appropriate --signer argument 
                                            is also passed. Defaults to the client keypair.
-    -u, --url <URL_OR_MONIKER>             URL for Solana's JSON RPC or moniker (or their first letter): [mainnet-beta,
-                                           testnet, devnet, localhost]
+    -u, --url <URL_OR_MONIKER>             URL for cluster's JSON RPC.
     -k, --keypair <KEYPAIR>                Filepath or URL to a keypair
         --with-memo <MEMO>                 Specify a memo string to include in the transaction.
         --nonce <PUBKEY>                   Provide the nonce account to use when creating a nonced 
                                            transaction. Nonced transactions are useful when a transaction 
-                                           requires a lengthy signing process. Learn more about nonced 
-                                           transactions at https://docs.solana.com/offline-signing/durable-nonce
+                                           requires a lengthy signing process. 
         --nonce-authority <KEYPAIR>        Provide the nonce authority keypair to use when signing a nonced transaction
         --output <FORMAT>                  Return information in specified output format [possible values: json, json-
                                            compact]
         --seed <STRING>                    Seed for address generation; if specified, the resulting account will be at a
                                            derived address of STAKE_ACCOUNT_ADDRESS
         --signer <PUBKEY=SIGNATURE>...     Provide a public-key/signature pair for the transaction
-        --ws <URL>                         WebSocket URL for the solana cluster
+        --ws <URL>                         WebSocket URL for the cluster
         --withdraw-authority <KEYPAIR>     Authorized withdrawer [default: cli config keypair]
 
 ARGS:
@@ -3127,12 +3098,12 @@ ARGS:
                                  * a hyphen; signals a JSON-encoded keypair on stdin
                                  * the 'ASK' keyword; to recover a keypair via its seed phrase
                                  * a hardware wallet keypair URL (i.e. usb://ledger)
-    <RECIPIENT_ADDRESS>        Recipient of withdrawn SOL, one of:
+    <RECIPIENT_ADDRESS>        Recipient of withdrawn POWR, one of:
                                  * a base58-encoded public key
                                  * a path to a keypair file
                                  * a hyphen; signals a JSON-encoded keypair on stdin
                                  * the 'ASK' keyword; to recover a keypair via its seed phrase
                                  * a hardware wallet keypair URL (i.e. usb://ledger)
-    <AMOUNT>                   The amount to withdraw from the stake account, in SOL; accepts keyword ALL
+    <AMOUNT>                   The amount to withdraw from the stake account, in POWR; accepts keyword ALL
 ```
 
