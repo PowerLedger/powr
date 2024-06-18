@@ -2,19 +2,31 @@
 title: JSON RPC API
 ---
 
-Solana nodes accept HTTP requests using the [JSON-RPC 2.0](https://www.jsonrpc.org/specification) specification.
+Powerledger blockchain nodes accept HTTP requests using the same [JSON-RPC 2.0](https://www.jsonrpc.org/specification) specification
+that is used by Solana nodes, assuming the same version 1.13.7. 
 
-To interact with a Solana node inside a JavaScript application, use the
+The JSON RPC Guide below is the documentation provided by Solana on how to interact with the blockchain via the JSON RPC interface.
+The Powerledger blockchain does not make any changes to this RPC API for compatibility reasons, so the original documentation below can be used.
+
+To interact with a node inside a JavaScript application, use the
 [solana-web3.js](https://github.com/solana-labs/solana-web3.js) library, which
-gives a convenient interface for the RPC methods.
+gives a convenient interface for the RPC methods that can be used to interact with the Powerledger blockchain.
 
 ## RPC HTTP Endpoint
 
 **Default port:** 8899 e.g. [http://localhost:8899](http://localhost:8899), [http://192.168.1.88:8899](http://192.168.1.88:8899)
 
+**Mainnet** https://powr-api.mainnet.powerledger.io/
+
+**Testnet** https://powr-api.testnet.powerledger.io/
+
 ## RPC PubSub WebSocket Endpoint
 
 **Default port:** 8900 e.g. ws://localhost:8900, [http://192.168.1.88:8900](http://192.168.1.88:8900)
+
+**Mainnet** [wss://powr-api.mainnet.powerledger.io/](wss://powr-api.testnet.powerledger.io/)
+
+**Testnet** [wss://powr-api.testnet.powerledger.io/](wss://powr-api.testnet.powerledger.io/)
 
 ## Methods
 
@@ -142,12 +154,12 @@ Requests can be sent in batches by sending an array of JSON-RPC request objects 
 
 - Hash: A SHA-256 hash of a chunk of data.
 - Pubkey: The public key of a Ed25519 key-pair.
-- Transaction: A list of Solana instructions signed by a client keypair to authorize those actions.
+- Transaction: A list of instructions signed by a client keypair to authorize those actions.
 - Signature: An Ed25519 signature of transaction's payload data including instructions. This can be used to identify transactions.
 
 ## Configuring State Commitment
 
-For preflight checks and transaction processing, Solana nodes choose which bank
+For preflight checks and transaction processing, Blockchain nodes choose which bank
 state to query based on a commitment requirement set by the client. The
 commitment describes how finalized a block is at that point in time. When
 querying the ledger state, it's recommended to use lower levels of commitment

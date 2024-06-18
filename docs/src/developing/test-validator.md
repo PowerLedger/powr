@@ -4,7 +4,8 @@ title: Local Test Validator
 
 During early stage development, it is often convenient to target a cluster with
 fewer restrictions and more configuration options than the public offerings
-provide. This is easily achieved with the `solana-test-validator` binary, which
+provide. As the Powerledger blockchain is an SVM blockchain based on the Solana project, 
+the solana-test-validator binary will work as a test-validator that
 starts a full-featured, single-node blockchain cluster on the developer's workstation.
 
 ## Advantages

@@ -6,6 +6,8 @@ The Powerledger blockchain, as it is an SVM based blockchain, is compatible with
 crates that are [published to crates.io][crates.io] and can be found
 [on docs.rs with the "solana-" prefix][docs.rs].
 
+Powerledger utilises these Solana crates to interact with the Powerledger blockchain. Powerledger plans to switch to official Anza software releases once they are available.
+
 [crates.io]: https://crates.io/search?q=solana-
 [docs.rs]: https://docs.rs/releases/search?query=solana-
 
