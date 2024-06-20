@@ -2972,7 +2972,7 @@ ARGS:
                                  * a hyphen; signals a JSON-encoded keypair on stdin
                                  * the 'ASK' keyword; to recover a keypair via its seed phrase
                                  * a hardware wallet keypair URL (i.e. usb://ledger)
-    <RECIPIENT_ADDRESS>        The account to which the SOL should be transferred. , one of:
+    <RECIPIENT_ADDRESS>        The account to which the POWR should be transferred. , one of:
                                  * a base58-encoded public key
                                  * a path to a keypair file
                                  * a hyphen; signals a JSON-encoded keypair on stdin
@@ -3037,7 +3037,7 @@ ARGS:
                                 * a hyphen; signals a JSON-encoded keypair on stdin
                                 * the 'ASK' keyword; to recover a keypair via its seed phrase
                                 * a hardware wallet keypair URL (i.e. usb://ledger)
-    <RECIPIENT_ADDRESS>       The recipient of withdrawn SOL. , one of:
+    <RECIPIENT_ADDRESS>       The recipient of withdrawn POWR. , one of:
                                 * a base58-encoded public key
                                 * a path to a keypair file
                                 * a hyphen; signals a JSON-encoded keypair on stdin

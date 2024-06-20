@@ -44,7 +44,7 @@ solana confirm -v <TRANSACTION_SIGNATURE>
 #### Check your balance
 
 Confirm the airdrop was successful by checking the account's balance.
-It should output `1 SOL`:
+It should output `1 SOL` which is equivalent to 1 POWR. 
 
 ```bash
 solana balance <ACCOUNT_ADDRESS> --url https://powr-api.testnet.powerledger.io
@@ -109,7 +109,7 @@ Save this seed phrase to recover your new keypair:
 width enhance concert vacant ketchup eternal spy craft spy guard tag punch    # If this was a real wallet, never share these words on the internet like this!
 ==========================================================================
 
-$ solana airdrop 1 DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK --url https://powr-api.testnet.powerledger.io  # Airdropping 1 SOL to my wallet's address/pubkey
+$ solana airdrop 1 DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK --url https://powr-api.testnet.powerledger.io  # Airdropping 1 POWR to my wallet's address/pubkey
 Requesting airdrop of 1 SOL
 1 SOL
 
@@ -130,10 +130,10 @@ $ solana transfer --from my_wallet.json 7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXAr
 3gmXvykAd1nCQQ7MjosaHLf69Xyaqyq1qw2eu1mgPyYXd5G4v1rihhg1CiRw35b9fHzcftGKKEu4mbUeXY2pEX2z  # This is the transaction signature
 
 $ solana balance DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK --url https://powr-api.testnet.powerledger.io
-0.499995 SOL  # The sending account has slightly less than 0.5 SOL remaining due to the 0.000005 SOL transaction fee payment
+0.499995 SOL  # The sending account has slightly less than 0.5 POWR remaining due to the 0.000005 POWR transaction fee payment
 
 $ solana balance 7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv --url https://powr-api.testnet.powerledger.io
-0.5 SOL  # The second wallet has now received the 0.5 SOL transfer from the first wallet
+0.5 SOL  # The second wallet has now received the 0.5 POWR transfer from the first wallet
 
 ```
 
