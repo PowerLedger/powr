@@ -128,7 +128,7 @@ Determinism is achieved in two ways:
   `lamports_per_signature` value.  The blockhash queue is one of the snapshot's
   serialized members and thus bank hash depends on it.
 - Nonce accounts used for offline signing contain a `lamports_per_signature`
-  value in its account data
+  value in its account data, where lamports are equivlane to sparks.
 
 In both cases, when a transaction is assessed a fee, the
 `lamports_per_signature` to use is looked up (either in the queue or in the

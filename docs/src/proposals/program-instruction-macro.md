@@ -29,7 +29,7 @@ Here is an example of an Instruction enum using the new accounts format:
 ```rust,ignore
 #[instructions(test_program::id())]
 pub enum TestInstruction {
-    /// Transfer lamports
+    /// Transfer sparks (equivalent to lamports)
     #[accounts(
         from_account(SIGNER, WRITABLE, desc = "Funding account"),
         to_account(WRITABLE, desc = "Recipient account"),
@@ -59,7 +59,7 @@ An example of the generated TestInstruction with docs:
 
 ```rust,ignore
 pub enum TestInstruction {
-    /// Transfer lamports
+    /// Transfer sparks (equivalent to lamports)
     ///
     /// * Accounts expected by this instruction:
     ///   0. `[WRITABLE, SIGNER]` Funding account
@@ -88,7 +88,7 @@ pub enum TestInstruction {
 Generated constructors:
 
 ```rust,ignore
-/// Transfer lamports
+/// Transfer sparks (equivalent to lamports)
 ///
 /// * `from_account` - `[WRITABLE, SIGNER]` Funding account
 /// * `to_account` - `[WRITABLE]` Recipient account
@@ -154,7 +154,7 @@ Generated TestInstructionVerbose enum:
 ```rust,ignore
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum TestInstruction {
-    /// Transfer lamports
+    /// Transfer sparks (equivalent to lamports)
     Transfer {
         /// Funding account
         funding_account: u8

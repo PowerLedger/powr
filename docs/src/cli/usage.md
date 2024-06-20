@@ -34,7 +34,7 @@ USAGE:
 
 FLAGS:
     -h, --help                           Prints help information
-        --lamports                       Display balance in lamports instead of SOL
+        --lamports                       Display balance in sparks instead of POWR
         --no-address-labels              Do not use address labels in the output
         --skip-seed-phrase-validation    Skip validation of seed phrases. Use this if your phrase does not use the BIP39
                                          official English word list
@@ -1738,7 +1738,7 @@ OPTIONS:
         --commitment <COMMITMENT_LEVEL>
             Return information at the selected commitment level [possible values: processed, confirmed, finalized]
 
-        --compute-unit-price <MICRO-LAMPORTS>    Set the price in micro-sparks of each transaction compute unit
+        --compute-unit-price <MICRO-SPARKS>    Set the price in micro-sparks of each transaction compute unit
     -C, --config <FILEPATH>
             Configuration file to use [default: ~/.config/solana/cli/config.yml]
 
@@ -1785,7 +1785,7 @@ OPTIONS:
         --ws <URL>                         WebSocket URL for the cluster
 
 SUBCOMMANDS:
-    close                    Close a program or buffer account and withdraw all lamports
+    close                    Close a program or buffer account and withdraw all sparks
     deploy                   Deploy a program
     dump                     Write the program data to a file
     help                     Prints this message or the help of the given subcommand(s)

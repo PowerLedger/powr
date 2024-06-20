@@ -7,7 +7,7 @@ title: "Runtime"
 The runtime only permits the owner program to debit the account or modify its
 data. The program then defines additional rules for whether the client can
 modify accounts it owns. In the case of the System program, it allows users to
-transfer lamports by recognizing transaction signatures. If it sees the client
+transfer sparks (equivalent to lamports) by recognizing transaction signatures. If it sees the client
 signed the transaction using the keypair's _private key_, it knows the client
 authorized the token transfer.
 
@@ -106,7 +106,7 @@ consume by including a "request units"
 [`ComputeBudgetInstruction`](https://github.com/solana-labs/solana/blob/db32549c00a1b5370fcaf128981ad3323bbd9570/sdk/src/compute_budget.rs#L39).
 Note that a transaction's prioritization fee is calculated from multiplying the
 number of compute units requested by the compute unit price (measured in
-micro-lamports) set by the transaction.  So transactions should request the
+micro-sparks) set by the transaction.  So transactions should request the
 minimum amount of compute units required for execution to minimize fees. Also
 note that fees are not adjusted when the number of requested compute units
 exceeds the number of compute units consumed by an executed transaction.

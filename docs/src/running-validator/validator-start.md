@@ -218,7 +218,7 @@ Or to see in finer detail:
 solana balance --lamports
 ```
 
-Read more about the [difference between POWR and lamports here](../introduction.md#what-are-sols).
+Read more about the [difference between POWR and sparks here](../introduction.md#what-is-powr).
 
 ## Create Authorized Withdrawer Account
 

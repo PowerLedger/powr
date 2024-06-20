@@ -99,7 +99,7 @@ Some programs may want to perform deserialization themselves, and they can by
 providing their own implementation of the [raw entrypoint](#program-entrypoint).
 Take note that the provided deserialization functions retain references back to
 the serialized byte array for variables that the program is allowed to modify
-(lamports, account data). The reason for this is that upon return the loader
+(sparks, account data). The reason for this is that upon return the loader
 will read those modifications so they may be committed. If a program implements
 their own deserialization function they need to ensure that any modifications
 the program wishes to commit must be written back into the input byte array.
@@ -131,7 +131,7 @@ typedef struct {
 represented as a
 [SolAccountInfo](https://github.com/PowerLedger/powr/blob/629c560537594a501a34d3b5235116ac8cca546e/sdk/bpf/c/inc/sol/entrypoint.h#L16)
 structures. An account's place in the array signifies its meaning, for example,
-when transferring lamports an instruction may define the first account as the
+when transferring sparks (equivalent to lamports) an instruction may define the first account as the
 source and the second as the destination.
 
 The members of the `SolAccountInfo` structure are read-only except for

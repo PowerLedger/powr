@@ -8,6 +8,8 @@ that is used by Solana nodes, assuming the same version 1.13.7.
 The JSON RPC Guide below is the documentation provided by Solana on how to interact with the blockchain via the JSON RPC interface.
 The Powerledger blockchain does not make any changes to this RPC API for compatibility reasons, so the original documentation below can be used.
 
+Any references to lamports are equivlant to sparks, and SOL equivalent to POWR on the Powerledger blockchain, compared to the Solana blockchain.
+
 To interact with a node inside a JavaScript application, use the
 [solana-web3.js](https://github.com/solana-labs/solana-web3.js) library, which
 gives a convenient interface for the RPC methods that can be used to interact with the Powerledger blockchain.
@@ -254,7 +256,7 @@ The result will be an RpcResponse JSON object with `value` equal to:
 
 - `<null>` - if the requested account doesn't exist
 - `<object>` - otherwise, a JSON object containing:
-  - `lamports: <u64>`, number of lamports assigned to this account, as a u64
+  - `lamports: <u64>`, number of sparks (equivalent to lamports) assigned to this account, as a u64
   - `owner: <string>`, base-58 encoded Pubkey of the program this account has been assigned to
   - `data: <[string, encoding]|object>`, data associated with the account, either as encoded binary data or JSON format `{<program>: <state>}`, depending on encoding parameter
   - `executable: <bool>`, boolean indicating if the account contains a program \(and is strictly read-only\)
@@ -427,8 +429,8 @@ The result field will be an object with the following fields:
       - `logMessages: <array|null>` - array of string log messages or `null` if log message recording was not enabled during this transaction
       - `rewards: <array|null>` - transaction-level rewards, populated if rewards are requested; an array of JSON objects containing:
         - `pubkey: <string>` - The public key, as base-58 encoded string, of the account that received the reward
-        - `lamports: <i64>`- number of reward lamports credited or debited by the account, as a i64
-        - `postBalance: <u64>` - account balance in lamports after the reward was applied
+        - `lamports: <i64>`- number of reward sparks (equivalent to lamports) credited or debited by the account, as a i64
+        - `postBalance: <u64>` - account balance in sparks (equivalent to lamports) after the reward was applied
         - `rewardType: <string|undefined>` - type of reward: "fee", "rent", "voting", "staking"
         - `commission: <u8|undefined>` - vote account commission when the reward was credited, only present for voting and staking rewards
       - DEPRECATED: `status: <object>` - Transaction status
@@ -441,8 +443,8 @@ The result field will be an object with the following fields:
   - `signatures: <array>` - present if "signatures" are requested for transaction details; an array of signatures strings, corresponding to the transaction order in the block
   - `rewards: <array|undefined>` - block-level rewards, present if rewards are requested; an array of JSON objects containing:
     - `pubkey: <string>` - The public key, as base-58 encoded string, of the account that received the reward
-    - `lamports: <i64>`- number of reward lamports credited or debited by the account, as a i64
-    - `postBalance: <u64>` - account balance in lamports after the reward was applied
+    - `lamports: <i64>`- number of reward sparks (equivalent to lamports) credited or debited by the account, as a i64
+    - `postBalance: <u64>` - account balance in sparks (equivalent to lamports) after the reward was applied
     - `rewardType: <string|undefined>` - type of reward: "fee", "rent", "voting", "staking"
     - `commission: <u8|undefined>` - vote account commission when the reward was credited, only present for voting and staking rewards
   - `blockTime: <i64 | null>` - estimated production time, as Unix timestamp (seconds since the Unix epoch). null if not available
@@ -579,7 +581,7 @@ The JSON structure of a transaction is defined as follows:
   - `accountKeys: <array[string]>` - List of base-58 encoded public keys used by the transaction, including by the instructions and for signatures. The first `message.header.numRequiredSignatures` public keys must sign the transaction.
   - `header: <object>` - Details the account types and signatures required by the transaction.
     - `numRequiredSignatures: <number>` - The total number of signatures required to make the transaction valid. The signatures must match the first `numRequiredSignatures` of `message.account_keys`.
-    - `numReadonlySignedAccounts: <number>` - The last `numReadonlySignedAccounts` of the signed keys are read-only accounts. Programs may process multiple transactions that load read-only accounts within a single PoH entry, but are not permitted to credit or debit lamports or modify account data. Transactions targeting the same read-write account are evaluated sequentially.
+    - `numReadonlySignedAccounts: <number>` - The last `numReadonlySignedAccounts` of the signed keys are read-only accounts. Programs may process multiple transactions that load read-only accounts within a single PoH entry, but are not permitted to credit or debit sparks (equivalent to lamports) or modify account data. Transactions targeting the same read-write account are evaluated sequentially.
     - `numReadonlyUnsignedAccounts: <number>` - The last `numReadonlyUnsignedAccounts` of the unsigned keys are read-only accounts.
   - `recentBlockhash: <string>` - A base-58 encoded hash of a recent block in the ledger used to prevent transaction duplication and to give transactions lifetimes.
   - `instructions: <array[object]>` - List of program instructions that will be executed in sequence and committed in one atomic transaction if all succeed.
@@ -765,8 +767,8 @@ The result field will be a JSON object containing:
 
 - `commitment` - commitment, comprising either:
   - `<null>` - Unknown block
-  - `<array>` - commitment, array of u64 integers logging the amount of cluster stake in lamports that has voted on the block at each depth from 0 to `MAX_LOCKOUT_HISTORY` + 1
-- `totalStake` - total active stake, in lamports, of the current epoch
+  - `<array>` - commitment, array of u64 integers logging the amount of cluster stake in sparks (equivalent to lamports) that has voted on the block at each depth from 0 to `MAX_LOCKOUT_HISTORY` + 1
+- `totalStake` - total active stake, in sparks (equivalent to lamports), of the current epoch
 
 #### Example:
 
@@ -1388,8 +1390,8 @@ The result field will be a JSON array with the following fields:
 
 - `epoch: <u64>`, epoch for which reward occured
 - `effectiveSlot: <u64>`, the slot in which the rewards are effective
-- `amount: <u64>`, reward amount in lamports
-- `postBalance: <u64>`, post balance of the account in lamports
+- `amount: <u64>`, reward amount in sparks (equivalent to lamports)
+- `postBalance: <u64>`, post balance of the account in sparks (equivalent to lamports)
 - `commission: <u8|undefined>` - vote account commission when the reward was credited
 
 #### Example
@@ -1741,7 +1743,7 @@ Returns minimum balance required to make account rent exempt.
 
 #### Results:
 
-- `<u64>` - minimum lamports required in account
+- `<u64>` - minimum sparks (equivalent to lamports) required in account
 
 #### Example:
 
@@ -1784,7 +1786,7 @@ An array of:
 
 - `<null>` - if the account at that Pubkey doesn't exist
 - `<object>` - otherwise, a JSON object containing:
-  - `lamports: <u64>`, number of lamports assigned to this account, as a u64
+  - `lamports: <u64>`, number of sparks (equivalent to lamports) assigned to this account, as a u64
   - `owner: <string>`, base-58 encoded Pubkey of the program this account has been assigned to
   - `data: <[string, encoding]|object>`, data associated with the account, either as encoded binary data or JSON format `{<program>: <state>}`, depending on encoding parameter
   - `executable: <bool>`, boolean indicating if the account contains a program \(and is strictly read-only\)
@@ -1938,7 +1940,7 @@ The array will contain:
 
 - `pubkey: <string>` - the account Pubkey as base-58 encoded string
 - `account: <object>` - a JSON object, with the following sub fields:
-  - `lamports: <u64>`, number of lamports assigned to this account, as a u64
+  - `lamports: <u64>`, number of sparks (equivalent to lamports) assigned to this account, as a u64
   - `owner: <string>`, base-58 encoded Pubkey of the program this account has been assigned to
   - `data: <[string,encoding]|object>`, data associated with the account, either as encoded binary data or JSON format `{<program>: <state>}`, depending on encoding parameter
   - `executable: <bool>`, boolean indicating if the account contains a program \(and is strictly read-only\)
@@ -2116,7 +2118,7 @@ from newest to oldest transaction:
 - `<object>`
   - `signature: <string>` - transaction signature as base-58 encoded string
   - `slot: <u64>` - The slot that contains the block with the transaction
-  - `err: <object | null>` - Error if transaction failed, null if transaction succeeded. [TransactionError definitions](https://github.com/solana-labs/solana/blob/c0c60386544ec9a9ec7119229f37386d9f070523/sdk/src/transaction/error.rs#L13)
+  - `err: <object | null>` - Error if transaction failed, null if transaction succeeded. 
   - `memo: <string |null>` - Memo associated with the transaction, null if no memo is present
   - `blockTime: <i64 | null>` - estimated production time, as Unix timestamp (seconds since the Unix epoch) of when transaction was processed. null if not available.
 
@@ -2483,9 +2485,9 @@ Returns information about the current supply.
 
 The result will be an RpcResponse JSON object with `value` equal to a JSON object containing:
 
-- `total: <u64>` - Total supply in lamports
-- `circulating: <u64>` - Circulating supply in lamports
-- `nonCirculating: <u64>` - Non-circulating supply in lamports
+- `total: <u64>` - Total supply in sparks (equivalent to lamports)
+- `circulating: <u64>` - Circulating supply in sparks (equivalent to lamports)
+- `nonCirculating: <u64>` - Non-circulating supply in sparks (equivalent to lamports)
 - `nonCirculatingAccounts: <array>` - an array of account addresses of non-circulating accounts, as strings. If `excludeNonCirculatingAccountsList` is enabled, the returned array will be empty.
 
 #### Example:
@@ -2600,7 +2602,7 @@ The result will be an RpcResponse JSON object with `value` equal to an array of 
 
 - `pubkey: <string>` - the account Pubkey as base-58 encoded string
 - `account: <object>` - a JSON object, with the following sub fields:
-  - `lamports: <u64>`, number of lamports assigned to this account, as a u64
+  - `lamports: <u64>`, number of sparks (equivalent to lamports) assigned to this account, as a u64
   - `owner: <string>`, base-58 encoded Pubkey of the program this account has been assigned to
   - `data: <object>`, Token state data associated with the account, either as encoded binary data or in JSON format `{<program>: <state>}`
   - `executable: <bool>`, boolean indicating if the account contains a program \(and is strictly read-only\)
@@ -2706,7 +2708,7 @@ The result will be an RpcResponse JSON object with `value` equal to an array of 
 
 - `pubkey: <string>` - the account Pubkey as base-58 encoded string
 - `account: <object>` - a JSON object, with the following sub fields:
-  - `lamports: <u64>`, number of lamports assigned to this account, as a u64
+  - `lamports: <u64>`, number of sparks (equivalent to lamports) assigned to this account, as a u64
   - `owner: <string>`, base-58 encoded Pubkey of the program this account has been assigned to
   - `data: <object>`, Token state data associated with the account, either as encoded binary data or in JSON format `{<program>: <state>}`
   - `executable: <bool>`, boolean indicating if the account contains a program \(and is strictly read-only\)
@@ -2924,8 +2926,8 @@ Returns transaction details for a confirmed transaction
       - `"Err": <ERR>` - Transaction failed with TransactionError
     - `rewards: <array|null>` - transaction-level rewards, populated if rewards are requested; an array of JSON objects containing:
       - `pubkey: <string>` - The public key, as base-58 encoded string, of the account that received the reward
-      - `lamports: <i64>`- number of reward lamports credited or debited by the account, as a i64
-      - `postBalance: <u64>` - account balance in lamports after the reward was applied
+      - `lamports: <i64>`- number of reward sparks (equivalent to lamports) credited or debited by the account, as a i64
+      - `postBalance: <u64>` - account balance in sparks (equivalent to lamports) after the reward was applied
       - `rewardType: <string>` - type of reward: currently only "rent", other types may be added in the future
       - `commission: <u8|undefined>` - vote account commission when the reward was credited, only present for voting and staking rewards
     - `loadedAddresses: <object|undefined>` - Transaction addresses loaded from address lookup tables. Undefined if `maxSupportedTransactionVersion` is not set in request params.
@@ -3130,7 +3132,7 @@ each containing an array of JSON objects with the following sub fields:
 
 - `votePubkey: <string>` - Vote account address, as base-58 encoded string
 - `nodePubkey: <string>` - Validator identity, as base-58 encoded string
-- `activatedStake: <u64>` - the stake, in lamports, delegated to this vote account and active in this epoch
+- `activatedStake: <u64>` - the stake, in sparks (equivalent to lamports), delegated to this vote account and active in this epoch
 - `epochVoteAccount: <bool>` - bool, whether the vote account is staked for this epoch
 - `commission: <number>`, percentage (0-100) of rewards payout owed to the vote account
 - `lastVote: <u64>` - Most recent slot voted on by this vote account
@@ -3308,12 +3310,12 @@ Result:
 
 ### requestAirdrop
 
-Requests an airdrop of lamports to a Pubkey
+Requests an airdrop of sparks (equivalent to lamports) to a Pubkey
 
 #### Parameters:
 
-- `<string>` - Pubkey of account to receive lamports, as base-58 encoded string
-- `<integer>` - lamports, as a u64
+- `<string>` - Pubkey of account to receive sparks (equivalent to lamports), as base-58 encoded string
+- `<integer>` - sparks (equivalent to lamports), as a u64
 - `<object>` - (optional) [Commitment](jsonrpc-api.md#configuring-state-commitment) (used for retrieving blockhash and verifying airdrop success)
 
 #### Results:
@@ -3440,7 +3442,7 @@ The result will be an RpcResponse JSON object with `value` set to a JSON object 
 - `accounts: <array> | null>` - array of accounts with the same length as the `accounts.addresses` array in the request
   - `<null>` - if the account doesn't exist or if `err` is not null
   - `<object>` - otherwise, a JSON object containing:
-    - `lamports: <u64>`, number of lamports assigned to this account, as a u64
+    - `lamports: <u64>`, number of sparks (equivalent to lamports) assigned to this account, as a u64
     - `owner: <string>`, base-58 encoded Pubkey of the program this account has been assigned to
     - `data: <[string, encoding]|object>`, data associated with the account, either as encoded binary data or JSON format `{<program>: <state>}`, depending on encoding parameter
     - `executable: <bool>`, boolean indicating if the account contains a program \(and is strictly read-only\)
@@ -3493,7 +3495,7 @@ After connecting to the RPC PubSub websocket at `ws://<ADDRESS>/`:
 
 ### accountSubscribe
 
-Subscribe to an account to receive notifications when the lamports or data for a given account public key changes
+Subscribe to an account to receive notifications when the sparks (equivalent to lamports) or data for a given account public key changes
 
 #### Parameters:
 
@@ -4038,7 +4040,7 @@ Result:
 
 ### programSubscribe
 
-Subscribe to a program to receive notifications when the lamports or data for a given account owned by the program changes
+Subscribe to a program to receive notifications when the sparks (equivalent to lamports) or data for a given account owned by the program changes
 
 #### Parameters:
 
@@ -4666,8 +4668,8 @@ The result field will be an object with the following fields:
   - `signatures: <array>` - present if "signatures" are requested for transaction details; an array of signatures strings, corresponding to the transaction order in the block
   - `rewards: <array>` - present if rewards are requested; an array of JSON objects containing:
     - `pubkey: <string>` - The public key, as base-58 encoded string, of the account that received the reward
-    - `lamports: <i64>`- number of reward lamports credited or debited by the account, as a i64
-    - `postBalance: <u64>` - account balance in lamports after the reward was applied
+    - `lamports: <i64>`- number of reward sparks (equivalent to lamports) credited or debited by the account, as a i64
+    - `postBalance: <u64>` - account balance in sparks (equivalent to lamports) after the reward was applied
     - `rewardType: <string|undefined>` - type of reward: "fee", "rent", "voting", "staking"
     - `commission: <u8|undefined>` - vote account commission when the reward was credited, only present for voting and staking rewards
   - `blockTime: <i64 | null>` - estimated production time, as Unix timestamp (seconds since the Unix epoch). null if not available

@@ -16,7 +16,7 @@ The [fee account](../terminology.md#fee_account) pays for the transaction to be 
 
 ## Balance Cache
 
-For the duration of the leaders consecutive blocks, the leader maintains a temporary balance cache for all the processed fee accounts. The cache is a map of pubkeys to lamports.
+For the duration of the leaders consecutive blocks, the leader maintains a temporary balance cache for all the processed fee accounts. The cache is a map of pubkeys to sparks.
 
 At the start of the first block the balance cache is empty. At the end of the last block the cache is destroyed.
 

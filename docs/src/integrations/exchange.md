@@ -251,7 +251,7 @@ list the starting and ending balances of each account in
 [lamports](../terminology.md#lamport), indexed to the `accountKeys` list. For
 example, if the deposit address if interest is
 `47Sbuv6jL7CViK9F2NMW51aQGhfdpUu7WNvKyH645Rfi`, this transaction represents a
-transfer of 218099990000 - 207099990000 = 11000000000 lamports = 11 POWR
+transfer of 218099990000 - 207099990000 = 11000000000 sparks = 11 POWR
 
 If you need more information about the transaction type or other specifics, you
 can request the block from RPC in binary format, and parse it using either our
@@ -621,7 +621,7 @@ accounts do not:
 1. SPL Token accounts must remain [rent-exempt](developing/programming-model/accounts.md#rent-exemption)
    for the duration of their existence and therefore require a small amount of
    native POWR tokens be deposited at account creation. For SPL Token v2 accounts,
-   this amount is 0.00203928 POWR (2,039,280 lamports).
+   this amount is 0.00203928 POWR (2,039,280 sparks).
 
 #### Command Line
 

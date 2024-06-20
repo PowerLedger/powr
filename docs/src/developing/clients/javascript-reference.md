@@ -224,7 +224,7 @@ console.log(`Valid Program Address: ${validProgramAddress}`);
 
 [Source Documentation](https://solana-labs.github.io/solana-web3.js/classes/SystemProgram.html)
 
-The SystemProgram grants the ability to create accounts, allocate account data, assign an account to programs, work with nonce accounts, and transfer lamports. You can use the SystemInstruction class to help with decoding and reading individual instructions
+The SystemProgram grants the ability to create accounts, allocate account data, assign an account to programs, work with nonce accounts, and transfer sparks. You can use the SystemInstruction class to help with decoding and reading individual instructions
 
 #### Example Usage
 
@@ -278,7 +278,7 @@ let advanceNonceTransaction = new web3.Transaction().add(
 
 await web3.sendAndConfirmTransaction(connection, advanceNonceTransaction, [payer])
 
-// Transfer lamports between accounts
+// Transfer sparks (equivalent to lamports) between accounts
 let toAccount = web3.Keypair.generate();
 
 let transferTransaction = new web3.Transaction().add(
@@ -568,7 +568,6 @@ The above example shows both how to create a `NonceAccount` using `SystemProgram
 
 ### VoteAccount
 
-[SourceDocumentation](https://solana-labs.github.io/solana-web3.js/classes/VoteAccount.html)
 
 Vote account is an object that grants the capability of decoding vote accounts from the native vote account program on the network.
 
@@ -661,8 +660,8 @@ await connection.confirmTransaction(airdropSignature);
 // Create Account
 let stakeAccount = web3.Keypair.generate();
 let authorizedAccount = web3.Keypair.generate();
-/* Note: This is the minimum amount for a stake account -- Add additional Lamports for staking
-    For example, we add 50 lamports as part of the stake */
+/* Note: This is the minimum amount for a stake account -- Add additional Sparks for staking
+    For example, we add 50 sparks as part of the stake */
 let lamportsForStakeAccount = (await connection.getMinimumBalanceForRentExemption(web3.StakeProgram.space)) + 50;
 
 let createAccountTransaction = web3.StakeProgram.createAccount({
