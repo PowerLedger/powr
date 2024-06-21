@@ -2,7 +2,7 @@
 title: Stake Delegation and Rewards
 ---
 
-Stakers are rewarded for helping to validate the ledger. They do this by delegating their stake to validator nodes. Those validators do the legwork of replaying the ledger and sending votes to a per-node vote account to which stakers can delegate their stakes. The rest of the cluster uses those stake-weighted votes to select a block when forks arise. Both the validator and staker need some economic incentive to play their part. The validator needs to be compensated for its hardware and the staker needs to be compensated for the risk of getting its stake slashed. The economics are covered in [staking rewards](../implemented-proposals/staking-rewards.md). This section, on the other hand, describes the underlying mechanics of its implementation.
+Stakers are rewarded for helping to validate the ledger. They do this by delegating their stake to validator nodes. Those validators do the legwork of replaying the ledger and sending votes to a per-node vote account to which stakers can delegate their stakes. The rest of the cluster uses those stake-weighted votes to select a block when forks arise. Both the validator and staker need some economic incentive to play their part. The validator needs to be compensated for its hardware and the staker needs to be compensated for the risk of getting its stake slashed, when slashing is enabled in future. This section, on the other hand, describes the underlying mechanics of its implementation.
 
 ## Current status of staking
 Staking on the Powerledger blockchain works in a similar fashion to staking on the Solana blockchain. The following instructions describe how to stake native POWR tokens on the chain, and this is currently able to be tested on testnet. On mainnet, the native token, POWR, needs to be bridged from Ethereum, where it is an ERC-20 token, to the Powerledger blockchain, before you can stake natively. Until this bridge is deployed, you can delegate your ERC-20 POWR and recieve staking rewards by staking using https://stake.powerledger.io.
@@ -61,7 +61,7 @@ Updates the account with a new authorized voter or withdrawer, according to the 
 ### VoteInstruction::Vote\(Vote\)
 
 - `account[0]` - RW - The VoteState.
-  `VoteState::lockouts` and `VoteState::credits` are updated according to voting lockout rules see [Tower BFT](../implemented-proposals/tower-bft.md).
+  `VoteState::lockouts` and `VoteState::credits` are updated according to voting lockout rules.
 - `account[1]` - RO - `sysvar::slot_hashes` A list of some N most recent slots and their hashes for the vote to be verified against.
 - `account[2]` - RO - `sysvar::clock` The current network time, expressed in slots, epochs.
 
@@ -138,7 +138,7 @@ Sparks build up over time in a Stake account and any excess over activated stake
 
 ## Staking Rewards
 
-The specific mechanics and rules of the validator rewards regime is outlined here. Rewards are earned by delegating stake to a validator that is voting correctly. Voting incorrectly exposes that validator's stakes to [slashing](../proposals/slashing.md).
+The specific mechanics and rules of the validator rewards regime is outlined here. Rewards are earned by delegating stake to a validator that is voting correctly.
 
 ### Basics
 

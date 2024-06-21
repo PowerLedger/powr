@@ -38,9 +38,7 @@ or network participants.
 When a validator is slashed, all token holders who have delegated stake to that
 validator lose a portion of their delegation. While this means an immediate
 loss for the token holder, it also is a loss of future rewards for the validator
-due to their reduced total delegation. More details on the slashing roadmap can
-be found
-[here](proposals/optimistic-confirmation-and-slashing.md#slashing-roadmap).
+due to their reduced total delegation.
 
 Note: Powerledger blockchain does not implement slashing at this stage
 
