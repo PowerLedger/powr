@@ -79,7 +79,7 @@ solana-watchtower --validator-identity <YOUR VALIDATOR IDENTITY>
 
 #### New Software Release Announcements
 
-Our official release announcements will be announced <HERE>
+Our official release announcements will be announced on our [telegram](t.me/powerledger)
 
 ### Ledger Continuity
 
@@ -752,4 +752,4 @@ the SPL Token's mint account.
 
 Be sure to test your complete workflow on Powerledger testnet
 [cluster](../clusters.md) before moving to production on mainnet. Testnet
-is the most open and flexible, and ideal for initial development. Testnet supports a faucet <INFO>
+is the most open and flexible, and ideal for initial development.
