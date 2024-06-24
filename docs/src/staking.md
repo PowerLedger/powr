@@ -7,7 +7,7 @@ terms with regards to balance of POWR.
 This document makes no suggestion as to the monetary value of POWR at any time._
 
 By staking your POWR tokens, you help secure the network and
-[earn rewards](implemented-proposals/staking-rewards.md) while doing so.
+earn rewards while doing so.
 
 You can stake by delegating your tokens to validators who process transactions and run the network.
 

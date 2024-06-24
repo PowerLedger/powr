@@ -6,7 +6,7 @@ Note: As of the time of writing, native staking is not accessible to the general
 allows you to stake your ERC-20 POWR tokens to a validator.
 ------
 
-After you have [received native POWR tokens](transfer-tokens.md), you might consider putting
+After you have received native POWR tokens, you might consider putting
 it to use by delegating _stake_ to a validator. Stake is what we call tokens
 in a _stake account_. The Powerledger blockchain weights validator votes by the amount of stake
 delegated to them, which gives those validators more influence in determining
@@ -18,7 +18,7 @@ the more stake you delegate.
 
 To delegate stake, you will need to transfer some tokens into a stake account.
 To create an account, you will need a keypair. Its public key will be used as
-the [stake account address](../staking/stake-accounts.md#account-address).
+the [stake account address](staking/stake-accounts.md#account-address).
 No need for a password or encryption here; this keypair will be discarded right
 after creating the stake account.
 
@@ -67,7 +67,7 @@ Withdraw Authority: EXU95vqs93yPeCeAU7mPPu6HbRUmTFPEiGug9oCdvQ5F
 
 ### Set Stake and Withdraw Authorities
 
-[Stake and withdraw authorities](../staking/stake-accounts.md#understanding-account-authorities)
+[Stake and withdraw authorities](staking/stake-accounts.md#understanding-account-authorities)
 can be set when creating an account via the
 `--stake-authority` and `--withdraw-authority` options, or afterward with the
 `solana stake-authorize` command. For example, to set a new stake authority,
