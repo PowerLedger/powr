@@ -1,14 +1,14 @@
 const math = require("remark-math");
 const katex = require("rehype-katex");
 module.exports = {
-  title: "Solana Docs",
+  title: "Powerledger Blockchain Docs",
   tagline:
-    "Solana is an open source project implementing a new, high-performance, permissionless blockchain.",
-  url: "https://docs.solana.com",
+    "Powerledger blockchain is a high-performance, permissionless blockchain, based on the Solana blockchain project.",
+  url: "https://docs.powerledger.io",
   baseUrl: "/",
   favicon: "img/favicon.ico",
-  organizationName: "solana-labs", // Usually your GitHub org/user name.
-  projectName: "solana", // Usually your repo name.
+  organizationName: "PowerLedger", // Usually your GitHub org/user name.
+  projectName: "powr", // Usually your repo name.
   onBrokenLinks: "throw",
   stylesheets: [
     {
@@ -21,26 +21,12 @@ module.exports = {
   ],
   i18n: {
     defaultLocale: "en",
-    locales: ["en", "de", "es", "ru", "ar"],
+    locales: ["en"],
+    // locales: ["en", "de", "es", "ru", "ar"],
     // localesNotBuilding: ["ko", "pt", "vi", "zh", "ja"],
     localeConfigs: {
       en: {
         label: "English",
-      },
-      ru: {
-        label: "Русский",
-      },
-      es: {
-        label: "Español",
-      },
-      de: {
-        label: "Deutsch",
-      },
-      ar: {
-        label: "العربية",
-      },
-      ko: {
-        label: "한국어",
       },
     },
   },
@@ -53,8 +39,8 @@ module.exports = {
       },
       items: [
         {
-          href: "https://spl.solana.com",
-          label: "Program Library »",
+          href: "https://docs.powerledger.io",
+          label: "Powerledger Blockchain Documentation »",
           position: "left",
         },
         {
@@ -82,12 +68,12 @@ module.exports = {
           position: "right",
         },
         {
-          href: "https://discordapp.com/invite/pquxPsq",
-          label: "Chat",
+          href: "https://t.me/powerledger",
+          label: "Telegram",
           position: "right",
         },
         {
-          href: "https://github.com/solana-labs/solana",
+          href: "https://github.com/PowerLedger/powr",
           label: "GitHub",
           position: "right",
         },
@@ -116,16 +102,12 @@ module.exports = {
           title: "Community",
           items: [
             {
-              label: "Discord",
-              href: "https://discordapp.com/invite/pquxPsq",
+              label: "Telegram",
+              href: "https://t.me/powerledger",
             },
             {
-              label: "Twitter",
-              href: "https://twitter.com/solana",
-            },
-            {
-              label: "Forums",
-              href: "https://forums.solana.com",
+              label: "Twitter/X",
+              href: "https://x.com/PowerLedger_io",
             },
           ],
         },
@@ -134,12 +116,12 @@ module.exports = {
           items: [
             {
               label: "GitHub",
-              href: "https://github.com/solana-labs/solana",
+              href: "https://github.com/PowerLedger/powr",
             },
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Solana Foundation`,
+      copyright: `Copyright © ${new Date().getFullYear()} Powerledger AG`,
     },
   },
   presets: [
