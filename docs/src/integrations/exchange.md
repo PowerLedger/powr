@@ -79,7 +79,7 @@ solana-watchtower --validator-identity <YOUR VALIDATOR IDENTITY>
 
 #### New Software Release Announcements
 
-Our official release announcements will be announced on our [telegram](t.me/powerledger)
+Our official release announcements will be announced on our [telegram](https://t.me/powerledger)
 
 ### Ledger Continuity
 
