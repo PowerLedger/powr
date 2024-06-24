@@ -8,7 +8,8 @@ First, switch to the root user and create a new user account and make them a sup
 ```bash
 # Add user called validator-admin as a super user
 sudo su
-useradd validator-admin
+adduser validator-admin
+# Follow the instructions on screen
 usermod -aG sudo validator-admin
 ```
 
@@ -24,7 +25,7 @@ validator-admin ALL=(ALL) NOPASSWD: ALL
 ### Installing prerequsite software
 ```bash
 # Install build tools
-apt-get update && apt-get install build-essential curl libssl-dev pkg-config
+apt-get update && apt-get install build-essential curl libssl-dev pkg-config cmake libudev-dev libclang-dev
 ```
 
 #### Installing rust
