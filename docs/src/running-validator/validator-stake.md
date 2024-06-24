@@ -74,7 +74,7 @@ fluctuate based on transaction load. You can determine the current fee via the
 [RPC API “getRecentBlockhash”](developing/clients/jsonrpc-api.md#getrecentblockhash)
 before submitting a transaction.
 
-Learn more about [transaction fees here](../implemented-proposals/transaction-fees.md).
+Learn more about [transaction fees here](https://docs.solanalabs.com/implemented-proposals/transaction-fees).
 
 ## Validator Stake Warm-up
 

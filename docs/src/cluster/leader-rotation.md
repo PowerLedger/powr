@@ -42,7 +42,7 @@ After observing the cluster for a sufficient amount of time, the leader schedule
 
 ## Leader Schedule Generation at Genesis
 
-The genesis config declares the first leader for the first epoch. This leader ends up scheduled for the first two epochs because the leader schedule is also generated at slot 0 for the next epoch. The length of the first two epochs can be specified in the genesis config as well. The minimum length of the first epochs must be greater than or equal to the maximum rollback depth as defined in [Tower BFT](../implemented-proposals/tower-bft.md).
+The genesis config declares the first leader for the first epoch. This leader ends up scheduled for the first two epochs because the leader schedule is also generated at slot 0 for the next epoch. The length of the first two epochs can be specified in the genesis config as well. The minimum length of the first epochs must be greater than or equal to the maximum rollback depth as defined in [Tower BFT](https://docs.solanalabs.com/implemented-proposals/tower-bft).
 
 ## Leader Schedule Generation Algorithm
 

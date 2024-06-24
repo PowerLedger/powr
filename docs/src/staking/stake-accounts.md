@@ -23,7 +23,7 @@ any control over the account. In fact, a keypair or private key may not even
 exist for a stake account's address.
 
 The only time a stake account's address has a keypair file is when [creating
-a stake account using the command line tools](../cli/delegate-stake.md#create-a-stake-account).
+a stake account using the command line tools](../delegate-stake.md#create-a-stake-account).
 A new keypair file is created first only to ensure that the stake account's
 address is new and unique.
 
